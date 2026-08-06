@@ -80,10 +80,14 @@ class LogEvent:
     # Diagnostics
     EXCEPTION = "EXCEPTION"
     WARNING = "WARNING"
+    INFO = "INFO"
     PERF_CPU = "PERF_CPU"
     PERF_MEM = "PERF_MEM"
     PERF_NET = "PERF_NET"
     TRADE_LATENCY = "TRADE_LATENCY"
+
+    # Authentication / security
+    OPERATOR_AUTHENTICATED = "OPERATOR_AUTHENTICATED"
 
 
 _LOGGER_NAME = "quantai"
