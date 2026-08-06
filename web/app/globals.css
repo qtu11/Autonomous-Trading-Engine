@@ -74,11 +74,63 @@ tr.table-row-hover:hover {
   50% { opacity: 0.4; }
 }
 
+@keyframes marqueeScroll {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes gradientRotate {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes float3D {
+  0% { transform: translateY(0px) rotateX(0deg); }
+  50% { transform: translateY(-6px) rotateX(2deg); }
+  100% { transform: translateY(0px) rotateX(0deg); }
+}
+
+@keyframes gridPerspective {
+  0% { background-position: 0 0; }
+  100% { background-position: 50px 50px; }
+}
+
+.animate-marquee {
+  display: flex;
+  width: max-content;
+  animation: marqueeScroll 25s linear infinite;
+}
+
+.animate-marquee:hover {
+  animation-play-state: paused;
+}
+
+.glow-border-3d {
+  position: relative;
+  background-clip: padding-box;
+}
+
+.glow-border-3d::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.6), rgba(59, 130, 246, 0.2), rgba(16, 185, 129, 0.4), rgba(212, 175, 55, 0.6));
+  background-size: 300% 300%;
+  animation: gradientRotate 6s ease infinite;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
 /* Hide Next.js DevTools floating "N" button in Dev mode */
 nextjs-portal,
 [data-nextjs-dialog-overlay],
 [data-nextjs-toast],
-div[data-nextjs-toast-wrapper],
+[data-nextjs-toast-wrapper],
 button[aria-label="Next.js DevTools"],
 next-devtools,
 div[data-nextjs-dev-tools-button],

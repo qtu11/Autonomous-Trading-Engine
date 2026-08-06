@@ -1,9 +1,21 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
 const API_ORIGIN = process.env.NEXT_PUBLIC_ATE_API_ORIGIN || process.env.NEXT_PUBLIC_QUANTAI_API_ORIGIN || '';
+
+// Mock Live Market Ticker Data for Institutional Stock/Gold Desk Visuals
+const TICKER_ITEMS = [
+  { symbol: 'XAU/USD', price: '2,845.50', change: '+1.24%', isUp: true },
+  { symbol: 'SPX 500', price: '5,980.20', change: '+0.45%', isUp: true },
+  { symbol: 'NASDAQ 100', price: '21,450.80', change: '+0.82%', isUp: true },
+  { symbol: 'BTC/USD', price: '98,400.00', change: '-0.35%', isUp: false },
+  { symbol: 'EUR/USD', price: '1.0845', change: '+0.12%', isUp: true },
+  { symbol: 'US 10Y YIELD', price: '4.28%', change: '-0.04%', isUp: false },
+  { symbol: 'DXY INDEX', price: '104.15', change: '-0.18%', isUp: false },
+  { symbol: 'BRENT CRUDE', price: '76.40', change: '+0.95%', isUp: true },
+];
 
 export default function LoginPage() {
   const router = useRouter();
@@ -14,6 +26,36 @@ export default function LoginPage() {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [focusedField, setFocusedField] = useState<string | null>(null);
+
+  // 3D Tilt Effect State
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [transformStyle, setTransformStyle] = useState('perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)');
+  const [glareStyle, setGlareStyle] = useState({ opacity: 0, x: 50, y: 50 });
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!cardRef.current) return;
+    const rect = cardRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    
+    // Rotate max +- 8 degrees
+    const rotateX = ((y - centerY) / centerY) * -8;
+    const rotateY = ((x - centerX) / centerX) * 8;
+    
+    setTransformStyle(`perspective(1000px) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg) scale3d(1.02, 1.02, 1.02)`);
+    setGlareStyle({
+      opacity: 0.15,
+      x: (x / rect.width) * 100,
+      y: (y / rect.height) * 100,
+    });
+  };
+
+  const handleMouseLeave = () => {
+    setTransformStyle('perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)');
+    setGlareStyle({ opacity: 0, x: 50, y: 50 });
+  };
 
   useEffect(() => {
     // If already authenticated, redirect to desk
@@ -36,7 +78,8 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch(`${API_ORIGIN}/api/auth/login`, {
+      const endpoint = API_ORIGIN ? `${API_ORIGIN}/api/auth/login` : '/api/auth/login';
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ login: login.trim(), password: password.trim() }),
@@ -45,7 +88,7 @@ export default function LoginPage() {
       const data = await res.json();
 
       if (res.ok && data.status === 'SUCCESS') {
-        setSuccessMsg('Đăng nhập thành công! Đang chuyển hướng tới Trading Desk...');
+        setSuccessMsg('Xác thực quyền thành công! Đang vào sàn giao dịch...');
         localStorage.setItem('quantai_auth_token', data.token || 'operator_authenticated');
         localStorage.setItem('quantai_user_info', JSON.stringify(data.user || {}));
         localStorage.setItem('firebase:authUser:qtusdev', JSON.stringify({ uid: 'qtusdev_admin', email: login.trim(), token: data.token }));
@@ -55,11 +98,11 @@ export default function LoginPage() {
           router.push('/');
         }, 800);
       } else {
-        const msg = data.detail?.message || data.detail?.code || 'Sai thông tin đăng nhập quản trị!';
+        const msg = data.detail?.message || data.detail?.code || 'Không thể xác thực thông tin tài khoản Quản trị!';
         setErrorMsg(msg);
       }
     } catch (err) {
-      setErrorMsg('Không thể kết nối Backend API. Vui lòng kiểm tra dịch vụ backend (port 8005)!');
+      setErrorMsg('Không thể kết nối API Backend. Vui lòng kiểm tra dịch vụ backend (port 8005)!');
     } finally {
       setLoading(false);
     }
@@ -68,59 +111,208 @@ export default function LoginPage() {
   return (
     <div style={{
       minHeight: '100vh',
-      backgroundColor: '#04060a',
+      backgroundColor: '#030508',
       backgroundImage: `
-        radial-gradient(circle at 50% -10%, rgba(212, 175, 55, 0.12) 0%, transparent 60%),
-        radial-gradient(circle at 10% 30%, rgba(59, 130, 246, 0.04) 0%, transparent 40%),
-        radial-gradient(circle at 90% 80%, rgba(212, 175, 55, 0.05) 0%, transparent 40%),
-        linear-gradient(to bottom, #030508 0%, #06090f 100%)
+        radial-gradient(circle at 50% 0%, rgba(212, 175, 55, 0.14) 0%, transparent 65%),
+        radial-gradient(circle at 15% 40%, rgba(16, 185, 129, 0.05) 0%, transparent 45%),
+        radial-gradient(circle at 85% 75%, rgba(59, 130, 246, 0.06) 0%, transparent 50%),
+        linear-gradient(to bottom, #020305 0%, #06090e 100%)
       `,
       display: 'flex',
+      flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
       fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-      padding: '24px',
+      padding: '0 20px',
       position: 'relative',
       overflow: 'hidden',
     }}>
-      {/* Dynamic Background Cyber Grid Lines */}
+      {/* ── TOP FINANCIAL LIVE MARKET TICKER MARQUEE ── */}
+      <div style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: '36px',
+        background: 'rgba(5, 8, 14, 0.85)',
+        borderBottom: '1px solid rgba(212, 175, 55, 0.15)',
+        backdropFilter: 'blur(12px)',
+        zIndex: 100,
+        display: 'flex',
+        alignItems: 'center',
+        overflow: 'hidden',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+      }}>
+        <div style={{
+          background: 'linear-gradient(135deg, #d4af37, #996515)',
+          color: '#000000',
+          padding: '0 12px',
+          height: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          fontWeight: 900,
+          fontSize: '10px',
+          letterSpacing: '1px',
+          fontFamily: "'JetBrains Mono', monospace",
+          zIndex: 10,
+          boxShadow: '4px 0 12px rgba(0,0,0,0.4)',
+        }}>
+          MARKETS LIVE
+        </div>
+
+        <div className="animate-marquee" style={{ gap: '32px', paddingLeft: '20px' }}>
+          {[...TICKER_ITEMS, ...TICKER_ITEMS].map((item, idx) => (
+            <div key={idx} style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              fontSize: '11px',
+              fontFamily: "'JetBrains Mono', monospace",
+            }}>
+              <span style={{ color: '#94a3b8', fontWeight: 600 }}>{item.symbol}</span>
+              <span style={{ color: '#ffffff', fontWeight: 700 }}>{item.price}</span>
+              <span style={{
+                color: item.isUp ? '#10b981' : '#ef4444',
+                fontWeight: 700,
+                fontSize: '10px',
+                background: item.isUp ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                padding: '2px 6px',
+                borderRadius: '4px',
+              }}>
+                {item.change}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── BACKGROUND CANDLESTICK SVG GRAPHICS ── */}
       <div style={{
         position: 'absolute',
         inset: 0,
-        backgroundImage: `
-          linear-gradient(to right, rgba(212, 175, 55, 0.015) 1px, transparent 1px),
-          linear-gradient(to bottom, rgba(212, 175, 55, 0.015) 1px, transparent 1px)
-        `,
-        backgroundSize: '50px 50px',
+        opacity: 0.12,
         pointerEvents: 'none',
-      }} />
-
-      {/* Modern Glassmorphic Container Card */}
-      <div style={{
-        width: '100%',
-        maxWidth: '460px',
-        background: 'rgba(8, 12, 22, 0.65)',
-        backdropFilter: 'blur(30px)',
-        WebkitBackdropFilter: 'blur(30px)',
-        border: '1px solid rgba(212, 175, 55, 0.15)',
-        borderRadius: '24px',
-        boxShadow: '0 25px 80px rgba(0, 0, 0, 0.8), 0 0 50px rgba(212, 175, 55, 0.05), inset 0 1px 1px rgba(255, 255, 255, 0.05)',
-        padding: '44px 40px',
-        position: 'relative',
-        zIndex: 10,
         display: 'flex',
-        flexDirection: 'column',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: '0 5%',
       }}>
-        {/* Top Glow Accent Bar */}
+        {/* Left Side Financial Candlestick Visualizer */}
+        <svg width="320" height="400" viewBox="0 0 320 400" fill="none">
+          <line x1="40" y1="50" x2="40" y2="350" stroke="#10b981" strokeWidth="1" strokeDasharray="3 3" />
+          <line x1="120" y1="50" x2="120" y2="350" stroke="#ef4444" strokeWidth="1" strokeDasharray="3 3" />
+          <line x1="200" y1="50" x2="200" y2="350" stroke="#10b981" strokeWidth="1" strokeDasharray="3 3" />
+          <line x1="280" y1="50" x2="280" y2="350" stroke="#d4af37" strokeWidth="1" strokeDasharray="3 3" />
+
+          {/* Green Bullish Candlestick */}
+          <line x1="60" y1="80" x2="60" y2="280" stroke="#10b981" strokeWidth="2" />
+          <rect x="48" y="120" width="24" height="110" fill="#10b981" rx="2" />
+
+          {/* Red Bearish Candlestick */}
+          <line x1="140" y1="60" x2="140" y2="320" stroke="#ef4444" strokeWidth="2" />
+          <rect x="128" y="100" width="24" height="150" fill="#ef4444" rx="2" />
+
+          {/* Gold Breakout Candlestick */}
+          <line x1="220" y1="40" x2="220" y2="360" stroke="#d4af37" strokeWidth="2" />
+          <rect x="208" y="70" width="24" height="210" fill="url(#goldGrad)" rx="2" />
+          
+          <defs>
+            <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#d4af37" />
+              <stop offset="100%" stopColor="#996515" />
+            </linearGradient>
+          </defs>
+        </svg>
+
+        {/* Right Side Order Depth Graph Visualizer */}
+        <svg width="320" height="400" viewBox="0 0 320 400" fill="none">
+          <path d="M0 350 Q 80 300, 140 220 T 320 50" fill="none" stroke="#10b981" strokeWidth="3" />
+          <path d="M0 350 Q 80 300, 140 220 T 320 50 L 320 400 L 0 400 Z" fill="url(#greenAreaGrad)" opacity="0.15" />
+
+          <path d="M0 50 Q 120 180, 180 260 T 320 380" fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray="4 4" />
+          
+          <defs>
+            <linearGradient id="greenAreaGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#10b981" />
+              <stop offset="100%" stopColor="transparent" />
+            </linearGradient>
+          </defs>
+        </svg>
+      </div>
+
+      {/* ── 3D INTERACTIVE TILT CONTAINER CARD ── */}
+      <div
+        ref={cardRef}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
+        className="glow-border-3d"
+        style={{
+          width: '100%',
+          maxWidth: '480px',
+          background: 'rgba(8, 12, 22, 0.75)',
+          backdropFilter: 'blur(35px)',
+          WebkitBackdropFilter: 'blur(35px)',
+          borderRadius: '24px',
+          boxShadow: '0 30px 100px rgba(0, 0, 0, 0.9), 0 0 60px rgba(212, 175, 55, 0.12), inset 0 1px 1px rgba(255, 255, 255, 0.1)',
+          padding: '44px 40px',
+          position: 'relative',
+          zIndex: 10,
+          transform: transformStyle,
+          transition: 'transform 0.15s ease-out, box-shadow 0.3s ease',
+          transformStyle: 'preserve-3d',
+          marginTop: '36px',
+        }}
+      >
+        {/* Dynamic Light Reflection Glare */}
         <div style={{
           position: 'absolute',
-          top: 0,
-          left: '10%',
-          right: '10%',
-          height: '2px',
-          background: 'linear-gradient(90deg, transparent, #d4af37, transparent)',
-          opacity: 0.8,
+          inset: 0,
+          borderRadius: '24px',
+          background: `radial-gradient(circle at ${glareStyle.x}% ${glareStyle.y}%, rgba(255, 255, 255, ${glareStyle.opacity}), transparent 60%)`,
+          pointerEvents: 'none',
+          transition: 'opacity 0.2s ease',
         }} />
+
+        {/* Top Gold Metallic Badge */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '28px',
+          borderBottom: '1px solid rgba(255,255,255,0.06)',
+          paddingBottom: '16px',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <div style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              backgroundColor: '#10b981',
+              boxShadow: '0 0 10px #10b981',
+            }} />
+            <span style={{
+              fontSize: '10px',
+              fontFamily: "'JetBrains Mono', monospace",
+              color: '#d4af37',
+              fontWeight: 800,
+              letterSpacing: '1px',
+            }}>
+              ATE FINANCIAL DESK
+            </span>
+          </div>
+
+          <div style={{
+            fontSize: '9px',
+            fontFamily: "'JetBrains Mono', monospace",
+            color: '#64748b',
+            background: 'rgba(255, 255, 255, 0.04)',
+            padding: '3px 8px',
+            borderRadius: '6px',
+            border: '1px solid rgba(255, 255, 255, 0.06)',
+          }}>
+            VERCEL SECURE
+          </div>
+        </div>
 
         {/* Brand Header */}
         <div style={{ textAlign: 'center', marginBottom: '32px' }}>
@@ -128,26 +320,27 @@ export default function LoginPage() {
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: '64px',
-            height: '64px',
-            borderRadius: '16px',
-            background: 'linear-gradient(135deg, rgba(212, 175, 55, 0.15) 0%, rgba(212, 175, 55, 0.02) 100%)',
-            border: '1px solid rgba(212, 175, 55, 0.3)',
-            marginBottom: '20px',
-            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5), 0 0 20px rgba(212, 175, 55, 0.15)',
-            position: 'relative',
+            width: '68px',
+            height: '68px',
+            borderRadius: '20px',
+            background: 'linear-gradient(145deg, rgba(212, 175, 55, 0.2) 0%, rgba(10, 15, 28, 0.8) 100%)',
+            border: '1px solid rgba(212, 175, 55, 0.4)',
+            marginBottom: '16px',
+            boxShadow: '0 12px 30px rgba(0, 0, 0, 0.6), 0 0 25px rgba(212, 175, 55, 0.25)',
+            transform: 'translateZ(30px)',
           }}>
-            <span style={{ fontSize: '28px', filter: 'drop-shadow(0 0 4px rgba(212, 175, 55, 0.5))' }}>⚡</span>
+            <span style={{ fontSize: '32px', filter: 'drop-shadow(0 0 6px rgba(212, 175, 55, 0.6))' }}>🏛️</span>
           </div>
 
           <h1 style={{
             color: '#ffffff',
-            fontSize: '17px',
-            fontWeight: 800,
+            fontSize: '18px',
+            fontWeight: 900,
             letterSpacing: '3px',
-            margin: '0 0 8px 0',
+            margin: '0 0 6px 0',
             textTransform: 'uppercase',
             fontFamily: "'JetBrains Mono', monospace",
+            transform: 'translateZ(25px)',
           }}>
             AUTONOMOUS <span style={{ color: '#d4af37' }}>TRADING</span> ENGINE
           </h1>
@@ -155,90 +348,99 @@ export default function LoginPage() {
             color: '#64748b',
             fontSize: '10px',
             margin: 0,
-            letterSpacing: '1.2px',
+            letterSpacing: '1.5px',
             fontWeight: 700,
             textTransform: 'uppercase',
+            transform: 'translateZ(20px)',
           }}>
-            Institutional Desk &mdash; By QTusdev
+            Institutional Stock & Gold Terminal &mdash; By QTusdev
           </p>
         </div>
 
-        {/* Live System Specs Grid for High-Tech Aesthetic */}
+        {/* Financial Metrics Live Telemetry Grid */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: '1fr 1fr 1fr',
           gap: '8px',
-          background: 'rgba(5, 7, 12, 0.6)',
-          border: '1px solid rgba(255, 255, 255, 0.03)',
-          borderRadius: '12px',
-          padding: '10px 14px',
+          background: 'rgba(5, 7, 12, 0.7)',
+          border: '1px solid rgba(212, 175, 55, 0.1)',
+          borderRadius: '14px',
+          padding: '12px',
           marginBottom: '28px',
           fontSize: '9px',
           fontFamily: "'JetBrains Mono', monospace",
-          color: '#475569',
+          transform: 'translateZ(15px)',
         }}>
-          <div>ATE CORE: <span style={{ color: '#10b981', fontWeight: 'bold' }}>ONLINE</span></div>
-          <div>GATEWAY: <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>MULTI_AI</span></div>
-          <div>RISKGATE: <span style={{ color: '#d4af37', fontWeight: 'bold' }}>FAIL_SAFE</span></div>
-          <div>MT5 BRIDGE: <span style={{ color: '#f59e0b', fontWeight: 'bold' }}>ACTIVE</span></div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ color: '#64748b', fontSize: '8px', marginBottom: '2px' }}>GATEWAY</div>
+            <div style={{ color: '#3b82f6', fontWeight: 'bold' }}>MULTI_AI 2026</div>
+          </div>
+          <div style={{ textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.06)', borderRight: '1px solid rgba(255,255,255,0.06)' }}>
+            <div style={{ color: '#64748b', fontSize: '8px', marginBottom: '2px' }}>RISKGATE</div>
+            <div style={{ color: '#d4af37', fontWeight: 'bold' }}>ARMED 1%</div>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ color: '#64748b', fontSize: '8px', marginBottom: '2px' }}>MT5 ENGINE</div>
+            <div style={{ color: '#10b981', fontWeight: 'bold' }}>ONLINE</div>
+          </div>
         </div>
 
-        {/* Alert Notifications */}
+        {/* Status Alerts */}
         {errorMsg && (
           <div style={{
-            background: 'rgba(239, 68, 68, 0.08)',
-            border: '1px solid rgba(239, 68, 68, 0.3)',
+            background: 'rgba(239, 68, 68, 0.1)',
+            border: '1px solid rgba(239, 68, 68, 0.4)',
             borderRadius: '12px',
             padding: '12px 16px',
             color: '#f87171',
             fontSize: '12px',
-            fontWeight: 500,
+            fontWeight: 600,
             marginBottom: '20px',
             display: 'flex',
-            alignItems: 'flex-start',
+            alignItems: 'center',
             gap: '10px',
-            lineHeight: '1.4',
+            transform: 'translateZ(20px)',
           }}>
-            <span style={{ fontSize: '14px' }}>⚠️</span>
+            <span>⚠️</span>
             <span>{errorMsg}</span>
           </div>
         )}
 
         {successMsg && (
           <div style={{
-            background: 'rgba(16, 185, 129, 0.08)',
-            border: '1px solid rgba(16, 185, 129, 0.3)',
+            background: 'rgba(16, 185, 129, 0.1)',
+            border: '1px solid rgba(16, 185, 129, 0.4)',
             borderRadius: '12px',
             padding: '12px 16px',
             color: '#34d399',
             fontSize: '12px',
-            fontWeight: 500,
+            fontWeight: 600,
             marginBottom: '20px',
             display: 'flex',
-            alignItems: 'flex-start',
+            alignItems: 'center',
             gap: '10px',
-            lineHeight: '1.4',
+            transform: 'translateZ(20px)',
           }}>
-            <span style={{ fontSize: '14px' }}>✅</span>
+            <span>✅</span>
             <span>{successMsg}</span>
           </div>
         )}
 
-        {/* Form Container */}
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {/* Input Group: Login */}
+        {/* Input Form */}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '22px', transform: 'translateZ(20px)' }}>
+          {/* Operator Login */}
           <div>
             <label style={{
               display: 'block',
               color: '#94a3b8',
               fontSize: '10px',
-              fontWeight: 700,
+              fontWeight: 800,
               letterSpacing: '1px',
               marginBottom: '8px',
               textTransform: 'uppercase',
               fontFamily: "'JetBrains Mono', monospace",
             }}>
-              Security Operator Email
+              Operator Email / Identity
             </label>
             <div style={{ position: 'relative' }}>
               <input
@@ -247,39 +449,40 @@ export default function LoginPage() {
                 onChange={(e) => setLogin(e.target.value)}
                 onFocus={() => setFocusedField('login')}
                 onBlur={() => setFocusedField(null)}
-                placeholder="operator@trading-engine.ai"
+                placeholder="qtusdev@quanttrading.ai"
                 required
                 style={{
                   width: '100%',
                   padding: '14px 16px',
-                  background: 'rgba(5, 8, 14, 0.75)',
+                  background: 'rgba(5, 8, 14, 0.85)',
                   border: '1px solid',
-                  borderColor: focusedField === 'login' ? '#d4af37' : 'rgba(255, 255, 255, 0.08)',
+                  borderColor: focusedField === 'login' ? '#d4af37' : 'rgba(255, 255, 255, 0.1)',
                   borderRadius: '12px',
                   color: '#ffffff',
                   fontSize: '14px',
                   outline: 'none',
                   transition: 'all 0.25s ease',
                   boxSizing: 'border-box',
-                  boxShadow: focusedField === 'login' ? '0 0 15px rgba(212, 175, 55, 0.15)' : 'none',
+                  boxShadow: focusedField === 'login' ? '0 0 20px rgba(212, 175, 55, 0.25)' : 'none',
+                  fontFamily: "'JetBrains Mono', monospace",
                 }}
               />
             </div>
           </div>
 
-          {/* Input Group: Password */}
+          {/* Operator Password */}
           <div>
             <label style={{
               display: 'block',
               color: '#94a3b8',
               fontSize: '10px',
-              fontWeight: 700,
+              fontWeight: 800,
               letterSpacing: '1px',
               marginBottom: '8px',
               textTransform: 'uppercase',
               fontFamily: "'JetBrains Mono', monospace",
             }}>
-              Operator Password
+              Operator Security Key
             </label>
             <div style={{ position: 'relative' }}>
               <input
@@ -293,16 +496,17 @@ export default function LoginPage() {
                 style={{
                   width: '100%',
                   padding: '14px 46px 14px 16px',
-                  background: 'rgba(5, 8, 14, 0.75)',
+                  background: 'rgba(5, 8, 14, 0.85)',
                   border: '1px solid',
-                  borderColor: focusedField === 'password' ? '#d4af37' : 'rgba(255, 255, 255, 0.08)',
+                  borderColor: focusedField === 'password' ? '#d4af37' : 'rgba(255, 255, 255, 0.1)',
                   borderRadius: '12px',
                   color: '#ffffff',
                   fontSize: '14px',
                   outline: 'none',
                   transition: 'all 0.25s ease',
                   boxSizing: 'border-box',
-                  boxShadow: focusedField === 'password' ? '0 0 15px rgba(212, 175, 55, 0.15)' : 'none',
+                  boxShadow: focusedField === 'password' ? '0 0 20px rgba(212, 175, 55, 0.25)' : 'none',
+                  fontFamily: "'JetBrains Mono', monospace",
                 }}
               />
               <button
@@ -319,9 +523,6 @@ export default function LoginPage() {
                   cursor: 'pointer',
                   fontSize: '15px',
                   padding: 0,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
                   outline: 'none',
                 }}
               >
@@ -330,49 +531,49 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Action Trigger Button */}
+          {/* Metallic 3D Action Button */}
           <button
             type="submit"
             disabled={loading}
             style={{
               width: '100%',
-              padding: '15px',
+              padding: '16px',
               background: loading
                 ? 'rgba(212, 175, 55, 0.3)'
-                : 'linear-gradient(135deg, #d4af37 0%, #b8860b 100%)',
-              border: 'none',
+                : 'linear-gradient(135deg, #f39c12 0%, #d4af37 50%, #996515 100%)',
+              border: '1px solid rgba(255, 255, 255, 0.2)',
               borderRadius: '12px',
               color: '#000000',
               fontSize: '13px',
-              fontWeight: 800,
-              letterSpacing: '1.5px',
+              fontWeight: 900,
+              letterSpacing: '2px',
               cursor: loading ? 'wait' : 'pointer',
-              boxShadow: loading ? 'none' : '0 6px 24px rgba(212, 175, 55, 0.25)',
+              boxShadow: loading ? 'none' : '0 8px 30px rgba(212, 175, 55, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.4)',
               transition: 'all 0.25s ease',
               textTransform: 'uppercase',
               fontFamily: "'JetBrains Mono', monospace",
-              marginTop: '8px',
+              marginTop: '6px',
             }}
           >
-            {loading ? 'SECURING NETWORK...' : 'INITIALIZE TRADING SESSION'}
+            {loading ? 'AUTHENTICATING ENCRYPTED SESSION...' : 'ACCESS TRADING DESK'}
           </button>
         </form>
 
-        {/* Premium footer specs */}
+        {/* Footer info */}
         <div style={{
-          marginTop: '36px',
+          marginTop: '32px',
           textAlign: 'center',
-          borderTop: '1px solid rgba(255, 255, 255, 0.05)',
-          paddingTop: '20px',
+          borderTop: '1px solid rgba(255, 255, 255, 0.06)',
+          paddingTop: '18px',
+          transform: 'translateZ(15px)',
         }}>
           <p style={{
             color: '#475569',
             fontSize: '9px',
             margin: '0 0 6px 0',
             fontFamily: "'JetBrains Mono', monospace",
-            letterSpacing: '0.5px',
           }}>
-            SECURITY LEVEL: PROTOCOL_30_MARG_ARMED
+            SECURITY CLEARANCE: LEVEL_30_OBSIDIAN
           </p>
           <a
             href="https://github.com/qtu11/Autonomous-Trading-Engine"
@@ -382,18 +583,16 @@ export default function LoginPage() {
               color: '#d4af37',
               fontSize: '11px',
               textDecoration: 'none',
-              fontWeight: 600,
+              fontWeight: 700,
               fontFamily: "'JetBrains Mono', monospace",
-              transition: 'opacity 0.2s',
             }}
-            onMouseOver={(e) => (e.currentTarget.style.opacity = '0.8')}
-            onMouseOut={(e) => (e.currentTarget.style.opacity = '1')}
           >
-            github.com/qtu11/ATE
+            github.com/qtu11/Autonomous-Trading-Engine
           </a>
         </div>
       </div>
     </div>
   );
 }
+
 
