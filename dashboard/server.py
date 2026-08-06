@@ -1530,13 +1530,21 @@ async def analyze_news_event(req: NewsAnalysisRequest):
     )
 
     try:
-        res_text, provider, model, _ = call_multi_ai_completion(system_prompt, user_msg)
+        res_text, provider, model, _ = call_multi_ai_completion(system_prompt, user_msg, max_tokens=4096)
 
         cleaned_text = extract_json_object(res_text)
         cleaned_text = re.sub(r',\s*([\]}])', r'\1', cleaned_text)
         cleaned_text = cleaned_text.strip()
 
-        result = json.loads(cleaned_text)
+        try:
+            result = json.loads(cleaned_text)
+        except Exception as parse_err:
+            log_event(LogEvent.WARNING, component="news-analysis", message=f"AI JSON parse failed ({parse_err}), retrying with larger budget...")
+            res_text, provider, model, _ = call_multi_ai_completion(system_prompt, user_msg, max_tokens=8192)
+            cleaned_text = extract_json_object(res_text)
+            cleaned_text = re.sub(r',\s*([\]}])', r'\1', cleaned_text).strip()
+            result = json.loads(cleaned_text)
+
         analysis_text = result.get("analysis", "")
         recommendation = result.get("recommendation", "BUY").upper()
         if recommendation not in ("BUY", "SELL"):
@@ -3631,6 +3639,14 @@ SUPPORTED_AI_MODELS = [
 ]
 
 USER_CUSTOM_MODEL_ID = ""
+
+# Gemini quota handling: rotate between default models every couple hours to
+# dodge per-model 429 rate limits, and cool down any model that just returned 429.
+GEMINI_ROTATION_POOL = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3-flash"]
+GEMINI_ROTATION_IDX = 0
+AI_MODEL_COOLDOWN: Dict[str, float] = {}
+AI_COOLDOWN_SECONDS = max(120, int(os.getenv("QUANTAI_AI_COOLDOWN_SECONDS", "7200")))
+
 USER_GROK_KEY = ""
 USER_QWEN_KEY = ""
 USER_GATEWAY_URL = ""
@@ -3718,6 +3734,7 @@ async def get_control_center_ai_config():
 
 
 def get_ai_endpoints_queue(preferred_model: str = "auto") -> List[Dict[str, Any]]:
+    global GEMINI_ROTATION_IDX
     target_model = USER_CUSTOM_MODEL_ID or (preferred_model if preferred_model and preferred_model != "auto" else ACTIVE_AI_MODEL)
     queue = []
 
@@ -3759,6 +3776,34 @@ def get_ai_endpoints_queue(preferred_model: str = "auto") -> List[Dict[str, Any]
             "api_key": USER_GATEWAY_KEY,
             "is_user_custom": True,
         })
+
+    # 1.5 Gemini rotation pool: rotate models to avoid quota (429) exhaustion.
+    # Models on cooldown (rate-limited recently) are skipped this round.
+    gemini_pool_key = custom_keys.get("gemini") or default_keys.get("gemini")
+    if gemini_pool_key:
+        now = time.time()
+        rotated = []
+        for offset in range(len(GEMINI_ROTATION_POOL)):
+            mid = GEMINI_ROTATION_POOL[(GEMINI_ROTATION_IDX + offset) % len(GEMINI_ROTATION_POOL)]
+            if now < AI_MODEL_COOLDOWN.get(mid, 0):
+                continue
+            rotated.append(mid)
+        if not rotated:
+            rotated = list(GEMINI_ROTATION_POOL)
+        for mid in rotated:
+            if any(q["id"] == mid for q in queue):
+                continue
+            queue.append({
+                "id": mid,
+                "name": f"Rotation {mid}",
+                "model": mid,
+                "provider": "Gemini",
+                "key_type": "gemini",
+                "url": base_urls["gemini"],
+                "api_key": gemini_pool_key,
+                "is_user_custom": True,
+            })
+        GEMINI_ROTATION_IDX = (GEMINI_ROTATION_IDX + 1) % len(GEMINI_ROTATION_POOL)
 
     # 2. Selected Target Model
     matched_info = next((m for m in SUPPORTED_AI_MODELS if m["id"] == target_model), None)
@@ -3814,7 +3859,7 @@ def get_ai_endpoints_queue(preferred_model: str = "auto") -> List[Dict[str, Any]
     return queue
 
 
-def call_multi_ai_completion(system_prompt: str, user_msg: str, preferred_model: str = "auto", max_tokens: int = 1500) -> tuple[str, str, str, bool]:
+def call_multi_ai_completion(system_prompt: str, user_msg: str, preferred_model: str = "auto", max_tokens: int = 4096) -> tuple[str, str, str, bool]:
     """Execute AI completion with automatic model prioritization & token exhaustion fallback across providers."""
     providers = get_ai_endpoints_queue(preferred_model)
     fallback_occurred = False
@@ -3865,7 +3910,11 @@ def call_multi_ai_completion(system_prompt: str, user_msg: str, preferred_model:
                             log_event(LogEvent.WARNING, component="ai-provider", message=f"Fallback triggered! Switched to {p['name']} ({p['model']})")
                         return text, p["name"], p["model"], fallback_occurred
         except Exception as exc:
-            log_event(LogEvent.WARNING, component="ai-provider", message=f"Provider {p['name']} ({p['model']}) at {url[:30]}... failed: {exc}. Trying fallback...")
+            if getattr(exc, "code", None) == 429:
+                AI_MODEL_COOLDOWN[p["model"]] = time.time() + AI_COOLDOWN_SECONDS
+                log_event(LogEvent.WARNING, component="ai-provider", message=f"Provider {p['name']} ({p['model']}) rate-limited (429). Cooling down {AI_COOLDOWN_SECONDS // 60} min, trying next...")
+            else:
+                log_event(LogEvent.WARNING, component="ai-provider", message=f"Provider {p['name']} ({p['model']}) at {url[:30]}... failed: {exc}. Trying fallback...")
             continue
 
     return "", "System Fallback Engine", "deterministic", True
@@ -3917,7 +3966,7 @@ async def copilot_chat(req: CopilotChatRequest):
     raw_ai_text, provider_name, model_used, fallback_used = call_multi_ai_completion(
         system_prompt=system_prompt,
         user_msg=msg,
-        preferred_model=req.model_id
+        preferred_model=getattr(req, "model_id", "auto")
     )
 
     if raw_ai_text:
@@ -3961,12 +4010,23 @@ async def copilot_chat(req: CopilotChatRequest):
                 f"• Khuyến nghị: Giữ nguyên lệnh BUY và cài trailing stop theo EMA20 ({indicators.get('ema20')})."
             )
         elif "score" in msg_lower or "điểm" in msg_lower or "tín hiệu" in msg_lower:
+            rsi_v = float(indicators.get("rsi") or 50.0)
+            atr_v = float(indicators.get("atr") or 0.0)
+            macd_v = float(indicators.get("macd") or 0.0)
+            ema20_v = float(indicators.get("ema20") or 0.0)
+            ema50_v = float(indicators.get("ema50") or 0.0)
+            ema200_v = float(indicators.get("ema200") or 0.0)
+            trend_score = 40 if (ema20_v > ema50_v > ema200_v and ema200_v > 0) else (20 if ema20_v > ema200_v else 0)
+            mom_score = 23 if rsi_v >= 55 else (12 if rsi_v >= 45 else 4)
+            vol_score = 15 if atr_v > 0 else 0
+            total_score = trend_score + mom_score + vol_score
+            trend_state = "tăng (EMA20 > EMA50 > EMA200)" if ema20_v > ema50_v > ema200_v else ("giảm (EMA20 < EMA50 < EMA200)" if ema20_v < ema50_v < ema200_v else "đi ngang (EMA đan xen)")
             ai_response = (
                 f"[AI COPILOT - SCORE BREAKDOWN]\n"
-                f"Báo cáo anh Tú: AI Confidence Score đạt {ai_signal.get('confidence')} (78/100).\n"
-                f"• Trend Score: 40/40 (EMA20 > EMA50 > EMA200)\n"
-                f"• Momentum Score: 23/30 (RSI 58.4, MACD +2.52)\n"
-                f"• Volatility Score: 15/30 (ATR 6.25)\n"
+                f"Báo cáo anh Tú: AI Confidence Score đạt {total_score}/85 (realtime).\n"
+                f"• Trend Score: {trend_score}/40 ({trend_state} - EMA20=${ema20_v:.2f}, EMA50=${ema50_v:.2f}, EMA200=${ema200_v:.2f})\n"
+                f"• Momentum Score: {mom_score}/30 (RSI {rsi_v:.1f}, MACD {macd_v:+.2f})\n"
+                f"• Volatility Score: {vol_score}/15 (ATR {atr_v:.2f})\n"
                 f"• Kết luận: Khả năng thắng (Win Prob): {ai_signal.get('win_prob')} với tỷ lệ RR 1:2.0."
             )
         else:

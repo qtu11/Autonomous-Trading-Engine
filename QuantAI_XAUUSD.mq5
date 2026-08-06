@@ -20,8 +20,6 @@ input string   InpBridgeToken      = "20022007@Tu";                    // Requir
 input string   InpExecutorId       = "ate-ea-local";        // Unique executor identity for command leases
 input bool     InpVerifyAccount    = true;                  // Strict Account Verification (DEMO + LIVE allowlist)
 input string   InpExpectedCompany   = "Exness Technologies Ltd"; // Broker company allowlist
-input long     InpExpectedLogin    = 0;              // DEMO account allowlist
-input string   InpExpectedServer   = "";     // DEMO server allowlist
 input long     InpExpectedLiveLogin = 0;                    // LIVE account allowlist (0 = not configured -> LIVE refused)
 input string   InpExpectedLiveServer= "";                   // LIVE server allowlist (empty = not configured)
 input double   InpMaxSpread        = 0.50;                   // XAUUSDm raw-price spread cap
@@ -132,9 +130,7 @@ bool IsAuthorizedEnvironment()
 
    if(accountMode == ACCOUNT_TRADE_MODE_DEMO)
    {
-      if(login != InpExpectedLogin)  return false;
-      if(server != InpExpectedServer) return false;
-      if(company != InpExpectedCompany) return false;
+      if(company != InpExpectedCompany)  return false;
       return true;
    }
    if(accountMode == ACCOUNT_TRADE_MODE_REAL)
@@ -501,7 +497,7 @@ void PollAndExecuteAISignals()
    // MODIFY_SLTP are still claimable while a position is open.
    if(!IsAuthorizedEnvironment())
    {
-      QuantAILogThrottled("UNAUTH", StringFormat("Blocked poll: trade_allowed=%d mql_trade_allowed=%d account=#%I64d@%s company=%s mode=%s (allowlist: login=%I64d server=%s company=%s)", TerminalInfoInteger(TERMINAL_TRADE_ALLOWED), MQLInfoInteger(MQL_TRADE_ALLOWED), AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountInfoString(ACCOUNT_COMPANY), AccountModeLabel(), InpExpectedLogin, InpExpectedServer, InpExpectedCompany));
+      QuantAILogThrottled("UNAUTH", StringFormat("Blocked poll: trade_allowed=%d mql_trade_allowed=%d account=#%I64d@%s company=%s mode=%s (allowlist: company=%s)", TerminalInfoInteger(TERMINAL_TRADE_ALLOWED), MQLInfoInteger(MQL_TRADE_ALLOWED), AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountInfoString(ACCOUNT_COMPANY), AccountModeLabel(), InpExpectedCompany));
       return;
    }
 
