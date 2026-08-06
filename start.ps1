@@ -119,13 +119,79 @@ if ($terminal) {
 }
 
 # 4. Start backend
-Write-Step "[4/6] Starting FastAPI backend (port $BackendPort)"
+Write-Step "[4/7] Starting FastAPI backend (port $BackendPort)"
 $backendCmd = "cd /d `"$Root`" && set QUANTAI_DASHBOARD_PORT=$BackendPort&& set QUANTAI_DASHBOARD_HOST=0.0.0.0&& python dashboard\server.py"
 Start-Process -FilePath "cmd.exe" -ArgumentList "/k", $backendCmd -WindowStyle Minimized
+Start-Sleep -Seconds 2
 Write-Ok "Backend process launched"
 
-# 5. Start frontend
-Write-Step "[5/6] Starting Next.js dashboard (port $FrontendPort)"
+# 5. Start Ngrok Tunnel
+Write-Step "[5/7] Starting Ngrok Tunnel (Port $BackendPort)"
+$ngrokExe = Join-Path $Root "ngrok.exe"
+if (-not (Test-Path $ngrokExe)) {
+    Write-Host "    [INFO] Downloading Ngrok v3 Stable..." -ForegroundColor Yellow
+    $zipPath = Join-Path $Root "ngrok.zip"
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip" -OutFile $zipPath -ErrorAction Stop
+        Write-Host "    [INFO] Extracting Ngrok..." -ForegroundColor Yellow
+        Expand-Archive -Path $zipPath -DestinationPath $Root -Force
+        Remove-Item $zipPath -Force
+        Write-Ok "Ngrok downloaded and installed"
+    } catch {
+        Write-Warn "Could not download Ngrok automatically: $($_.Exception.Message)"
+    }
+}
+
+$global:NgrokActiveUrl = $null
+if (Test-Path $ngrokExe) {
+    # Check if NGROK_AUTHTOKEN is in .env
+    $envFile = Join-Path $Root ".env"
+    if (Test-Path $envFile) {
+        $tokenLine = Get-Content $envFile | Where-Object { $_ -like "NGROK_AUTHTOKEN=*" }
+        if ($tokenLine) {
+            $token = $tokenLine.Split("=", 2)[1].Trim()
+            if ($token) {
+                Write-Host "    [INFO] Setting up Ngrok Auth Token..." -ForegroundColor Yellow
+                Start-Process -FilePath $ngrokExe -ArgumentList "config", "add-authtoken", $token -Wait -NoNewWindow
+                Write-Ok "Auth Token registered"
+            }
+        }
+    }
+
+    # Stop any existing ngrok process
+    Stop-Process -Name "ngrok" -Force -ErrorAction SilentlyContinue
+
+    # Launch ngrok and redirect stdout to logs\ngrok.log
+    $logDir = Join-Path $Root "logs"
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+    $ngrokLog = Join-Path $logDir "ngrok.log"
+    Start-Process -FilePath $ngrokExe -ArgumentList "http", "$BackendPort", "--log=stdout" -NoNewWindow -RedirectStandardOutput $ngrokLog
+    Write-Ok "Ngrok tunnel initiated"
+
+    # Query Ngrok local API to extract the public URL
+    Write-Host "    [INFO] Waiting for Ngrok tunnel URL..." -ForegroundColor Yellow
+    for ($i = 0; $i -lt 15; $i++) {
+        Start-Sleep -Seconds 1
+        try {
+            $tunnels = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels" -ErrorAction Stop
+            $url = $tunnels.tunnels[0].public_url
+            if ($url) {
+                $global:NgrokActiveUrl = $url
+                break
+            }
+        } catch {}
+    }
+    
+    if ($global:NgrokActiveUrl) {
+        Write-Ok "Ngrok Tunnel active: $($global:NgrokActiveUrl)"
+    } else {
+        Write-Warn "Ngrok started but public URL could not be resolved from local agent API."
+    }
+}
+
+# 6. Start frontend
+Write-Step "[6/7] Starting Next.js dashboard (port $FrontendPort)"
 $webDir = Join-Path $Root "web"
 if (-not (Test-Path (Join-Path $webDir "node_modules"))) {
     Write-Host "    Installing Next.js dependencies..." -ForegroundColor Yellow
@@ -137,8 +203,8 @@ $frontendCmd = "cd /d `"$webDir`" && npm run dev"
 Start-Process -FilePath "cmd.exe" -ArgumentList "/k", $frontendCmd -WindowStyle Minimized
 Write-Ok "Frontend process launched"
 
-# 6. Health verification
-Write-Step "[6/6] Verifying system health"
+# 7. Health verification
+Write-Step "[7/7] Verifying system health"
 $deadline = (Get-Date).AddSeconds(45)
 $healthy = $false
 $status = $null
@@ -163,10 +229,16 @@ if ($healthy) {
 } else {
     Write-Warn "Backend did not respond within 45s. Check the backend console window."
 }
+if ($null -ne $global:NgrokActiveUrl) {
+    Write-Host ("    PUBLIC TUNNEL:  " + $global:NgrokActiveUrl) -ForegroundColor Yellow
+}
 Write-Host "----------------------------------------------------------------" -ForegroundColor DarkGray
 
 Write-Host "`n[SUCCESS] Full stack services:" -ForegroundColor Green
 Write-Host "  Backend FastAPI:  $BackendUrl" -ForegroundColor Gray
+if ($null -ne $global:NgrokActiveUrl) {
+    Write-Host "  Public Endpoint:  $($global:NgrokActiveUrl)/api/v1/" -ForegroundColor Yellow
+}
 Write-Host "  Web Dashboard:    $FrontendUrl" -ForegroundColor Gray
 Write-Host "  Realtime stream:  ws://127.0.0.1:$BackendPort/ws/stream" -ForegroundColor Gray
 

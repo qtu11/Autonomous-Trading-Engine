@@ -579,7 +579,7 @@ WS_TICK_INTERVAL = float(os.getenv("QUANTAI_WS_TICK_INTERVAL", "1.0"))
 WS_FULL_INTERVAL = float(os.getenv("QUANTAI_WS_FULL_INTERVAL", "3.0"))
 ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv("QUANTAI_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    for origin in (os.getenv("ATE_ALLOWED_ORIGINS") or os.getenv("QUANTAI_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")).split(",")
     if origin.strip()
 ]
 
@@ -4098,7 +4098,7 @@ if __name__ == "__main__":
     import uvicorn
     # Bind 0.0.0.0 so the MT5 EA can reach the bridge via hostname/IP
     # (e.g. http://QtusDev:8005 -> 192.168.1.4). MT5 blocks loopback (127.0.0.1).
-    host = os.getenv("QUANTAI_DASHBOARD_HOST", "0.0.0.0")
-    port = int(os.getenv("QUANTAI_DASHBOARD_PORT", "8005"))
+    host = os.getenv("ATE_DASHBOARD_HOST") or os.getenv("QUANTAI_DASHBOARD_HOST") or "0.0.0.0"
+    port = int(os.getenv("ATE_DASHBOARD_PORT") or os.getenv("QUANTAI_DASHBOARD_PORT") or "8005")
     uvicorn.run(app, host=host, port=port)
 

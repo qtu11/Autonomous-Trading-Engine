@@ -604,6 +604,23 @@ Sau đó restart backend nếu biến được load khi process khởi động, 
 
 ---
 
+## 🌐 Đường truyền Tunnel & Định tuyến Vercel Cloud (Unified Cloud Routing)
+
+Để kết nối Next.js Website trên Vercel với phần mềm MT5 local mà không cần mở port router, hệ thống tích hợp sẵn trình cài đặt tự động **Ngrok Tunnel**:
+
+### 1. Cách thức hoạt động
+- Khi khởi chạy hệ thống bằng `start.ps1`, script sẽ tự động kiểm tra, tải và giải nén `ngrok.exe` nếu chưa có.
+- Ngrok sẽ mở một cổng tunnel bảo mật kết nối từ Internet về cổng FastAPI backend (`8005`) của chủ tịch.
+- URL Tunnel công khai của Ngrok (ví dụ: `https://xxxx.ngrok-free.app`) sẽ được hiển thị trên console.
+
+### 2. Cấu hình biến môi trường
+- **Cấu hình Local (`.env`)**: Điền authtoken của ngrok vào biến `NGROK_AUTHTOKEN` để tunnel hoạt động ổn định và lâu dài.
+- **Cấu hình trên Vercel Settings**:
+  - Đặt biến môi trường `ATE_BACKEND_URL` thành địa chỉ URL Tunnel công khai của Ngrok (ví dụ: `https://xxxx.ngrok-free.app`).
+  - Next.js trên Vercel sẽ tự động rewrite toàn bộ request `/api/v1/:path*` sang `${ATE_BACKEND_URL}/api/v1/:path*`, cho phép website gửi tín hiệu trực tiếp về MT5 của chủ tịch mà không bị lỗi vòng lặp.
+
+---
+
 ## Bảo mật
 
 - Backend chỉ bind localhost (`127.0.0.1`). Không expose port 8005 ra Internet.
