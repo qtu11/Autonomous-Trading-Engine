@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
-const API_ORIGIN = process.env.NEXT_PUBLIC_ATE_API_ORIGIN || process.env.NEXT_PUBLIC_QUANTAI_API_ORIGIN || '';
+const rawOrigin = process.env.NEXT_PUBLIC_ATE_API_ORIGIN || process.env.NEXT_PUBLIC_QUANTAI_API_ORIGIN || '';
+const API_ORIGIN = rawOrigin.replace(/\/api\/?$/, '').replace(/\/$/, '');
 
 // Mock Live Market Ticker Data for Institutional Stock/Gold Desk Visuals
 const TICKER_ITEMS = [
@@ -12,7 +13,7 @@ const TICKER_ITEMS = [
   { symbol: 'NASDAQ 100', price: '21,450.80', change: '+0.82%', isUp: true },
   { symbol: 'BTC/USD', price: '98,400.00', change: '-0.35%', isUp: false },
   { symbol: 'EUR/USD', price: '1.0845', change: '+0.12%', isUp: true },
-  { symbol: 'US 10Y YIELD', price: '4.28%', change: '-0.04%', isUp: false },
+  { symbol: '10Y YIELD', price: '4.28%', change: '-0.04%', isUp: false },
   { symbol: 'DXY INDEX', price: '104.15', change: '-0.18%', isUp: false },
   { symbol: 'BRENT CRUDE', price: '76.40', change: '+0.95%', isUp: true },
 ];
@@ -39,11 +40,11 @@ export default function LoginPage() {
     const y = e.clientY - rect.top;
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
-    
+
     // Rotate max +- 8 degrees
     const rotateX = ((y - centerY) / centerY) * -8;
     const rotateY = ((x - centerX) / centerX) * 8;
-    
+
     setTransformStyle(`perspective(1000px) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg) scale3d(1.02, 1.02, 1.02)`);
     setGlareStyle({
       opacity: 0.15,
@@ -215,7 +216,7 @@ export default function LoginPage() {
           {/* Gold Breakout Candlestick */}
           <line x1="220" y1="40" x2="220" y2="360" stroke="#d4af37" strokeWidth="2" />
           <rect x="208" y="70" width="24" height="210" fill="url(#goldGrad)" rx="2" />
-          
+
           <defs>
             <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#d4af37" />
@@ -230,7 +231,7 @@ export default function LoginPage() {
           <path d="M0 350 Q 80 300, 140 220 T 320 50 L 320 400 L 0 400 Z" fill="url(#greenAreaGrad)" opacity="0.15" />
 
           <path d="M0 50 Q 120 180, 180 260 T 320 380" fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray="4 4" />
-          
+
           <defs>
             <linearGradient id="greenAreaGrad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor="#10b981" />
