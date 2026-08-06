@@ -176,7 +176,7 @@ export interface ControlCenterStatus {
   telegram?: { bot_token: string; chat_id: string; enabled: boolean };
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_ATE_API_ORIGIN || process.env.NEXT_PUBLIC_QUANTAI_API_ORIGIN || 'http://127.0.0.1:8005';
+const API_BASE = process.env.NEXT_PUBLIC_ATE_API_ORIGIN || process.env.NEXT_PUBLIC_QUANTAI_API_ORIGIN || '';
 
 export type RequestOptions = { signal?: AbortSignal };
 
