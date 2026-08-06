@@ -13,6 +13,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+  const [focusedField, setFocusedField] = useState<string | null>(null);
 
   useEffect(() => {
     // If already authenticated, redirect to desk
@@ -67,212 +68,261 @@ export default function LoginPage() {
   return (
     <div style={{
       minHeight: '100vh',
-      backgroundColor: '#05070a',
+      backgroundColor: '#04060a',
       backgroundImage: `
-        radial-gradient(circle at 50% 20%, rgba(212, 175, 55, 0.15) 0%, transparent 60%),
-        radial-gradient(circle at 80% 80%, rgba(59, 130, 246, 0.08) 0%, transparent 50%),
-        linear-gradient(to bottom, #05070a 0%, #080c14 100%)
+        radial-gradient(circle at 50% -10%, rgba(212, 175, 55, 0.12) 0%, transparent 60%),
+        radial-gradient(circle at 10% 30%, rgba(59, 130, 246, 0.04) 0%, transparent 40%),
+        radial-gradient(circle at 90% 80%, rgba(212, 175, 55, 0.05) 0%, transparent 40%),
+        linear-gradient(to bottom, #030508 0%, #06090f 100%)
       `,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace',
-      padding: '20px',
+      fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+      padding: '24px',
       position: 'relative',
       overflow: 'hidden',
     }}>
-      {/* Background Cyber Grid Lines */}
+      {/* Dynamic Background Cyber Grid Lines */}
       <div style={{
         position: 'absolute',
         inset: 0,
         backgroundImage: `
-          linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-          linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px)
+          linear-gradient(to right, rgba(212, 175, 55, 0.015) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(212, 175, 55, 0.015) 1px, transparent 1px)
         `,
-        backgroundSize: '40px 40px',
+        backgroundSize: '50px 50px',
         pointerEvents: 'none',
       }} />
 
-      {/* Glassmorphism Card */}
+      {/* Modern Glassmorphic Container Card */}
       <div style={{
         width: '100%',
-        maxWidth: '440px',
-        background: 'rgba(12, 17, 26, 0.85)',
-        backdropFilter: 'blur(20px)',
-        WebkitBackdropFilter: 'blur(20px)',
-        border: '1px solid rgba(212, 175, 55, 0.3)',
-        borderRadius: '16px',
-        boxShadow: '0 20px 60px rgba(0, 0, 0, 0.7), 0 0 40px rgba(212, 175, 55, 0.15)',
-        padding: '36px 32px',
+        maxWidth: '460px',
+        background: 'rgba(8, 12, 22, 0.65)',
+        backdropFilter: 'blur(30px)',
+        WebkitBackdropFilter: 'blur(30px)',
+        border: '1px solid rgba(212, 175, 55, 0.15)',
+        borderRadius: '24px',
+        boxShadow: '0 25px 80px rgba(0, 0, 0, 0.8), 0 0 50px rgba(212, 175, 55, 0.05), inset 0 1px 1px rgba(255, 255, 255, 0.05)',
+        padding: '44px 40px',
         position: 'relative',
         zIndex: 10,
+        display: 'flex',
+        flexDirection: 'column',
       }}>
-        {/* Header Branding */}
-        <div style={{ textAlign: 'center', marginBottom: '28px' }}>
+        {/* Top Glow Accent Bar */}
+        <div style={{
+          position: 'absolute',
+          top: 0,
+          left: '10%',
+          right: '10%',
+          height: '2px',
+          background: 'linear-gradient(90deg, transparent, #d4af37, transparent)',
+          opacity: 0.8,
+        }} />
+
+        {/* Brand Header */}
+        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: '56px',
-            height: '56px',
-            borderRadius: '12px',
-            background: 'linear-gradient(135deg, rgba(212, 175, 55, 0.25) 0%, rgba(212, 175, 55, 0.05) 100%)',
-            border: '1px solid rgba(212, 175, 55, 0.5)',
-            marginBottom: '14px',
-            boxShadow: '0 0 20px rgba(212, 175, 55, 0.3)',
+            width: '64px',
+            height: '64px',
+            borderRadius: '16px',
+            background: 'linear-gradient(135deg, rgba(212, 175, 55, 0.15) 0%, rgba(212, 175, 55, 0.02) 100%)',
+            border: '1px solid rgba(212, 175, 55, 0.3)',
+            marginBottom: '20px',
+            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5), 0 0 20px rgba(212, 175, 55, 0.15)',
+            position: 'relative',
           }}>
-            <span style={{ fontSize: '26px' }}>🤖</span>
+            <span style={{ fontSize: '28px', filter: 'drop-shadow(0 0 4px rgba(212, 175, 55, 0.5))' }}>⚡</span>
           </div>
 
           <h1 style={{
             color: '#ffffff',
-            fontSize: '22px',
+            fontSize: '17px',
             fontWeight: 800,
-            letterSpacing: '1.5px',
-            margin: '0 0 6px 0',
+            letterSpacing: '3px',
+            margin: '0 0 8px 0',
             textTransform: 'uppercase',
+            fontFamily: "'JetBrains Mono', monospace",
           }}>
-            GOLDQUANT <span style={{ color: '#d4af37' }}>AI</span>
+            AUTONOMOUS <span style={{ color: '#d4af37' }}>TRADING</span> ENGINE
           </h1>
           <p style={{
-            color: '#8b9bb4',
-            fontSize: '11px',
+            color: '#64748b',
+            fontSize: '10px',
             margin: 0,
-            letterSpacing: '0.8px',
-            fontWeight: 600,
+            letterSpacing: '1.2px',
+            fontWeight: 700,
+            textTransform: 'uppercase',
           }}>
-            BLOOMBERG TRADING DESK &mdash; BY QTUSDEV (NGUYỄN QUANG TÚ)
+            Institutional Desk &mdash; By QTusdev
           </p>
         </div>
 
-        {/* Status Alerts */}
+        {/* Live System Specs Grid for High-Tech Aesthetic */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '8px',
+          background: 'rgba(5, 7, 12, 0.6)',
+          border: '1px solid rgba(255, 255, 255, 0.03)',
+          borderRadius: '12px',
+          padding: '10px 14px',
+          marginBottom: '28px',
+          fontSize: '9px',
+          fontFamily: "'JetBrains Mono', monospace",
+          color: '#475569',
+        }}>
+          <div>ATE CORE: <span style={{ color: '#10b981', fontWeight: 'bold' }}>ONLINE</span></div>
+          <div>GATEWAY: <span style={{ color: '#3b82f6', fontWeight: 'bold' }}>MULTI_AI</span></div>
+          <div>RISKGATE: <span style={{ color: '#d4af37', fontWeight: 'bold' }}>FAIL_SAFE</span></div>
+          <div>MT5 BRIDGE: <span style={{ color: '#f59e0b', fontWeight: 'bold' }}>ACTIVE</span></div>
+        </div>
+
+        {/* Alert Notifications */}
         {errorMsg && (
           <div style={{
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid rgba(239, 68, 68, 0.5)',
-            borderRadius: '8px',
-            padding: '10px 14px',
-            color: '#ef4444',
+            background: 'rgba(239, 68, 68, 0.08)',
+            border: '1px solid rgba(239, 68, 68, 0.3)',
+            borderRadius: '12px',
+            padding: '12px 16px',
+            color: '#f87171',
             fontSize: '12px',
-            fontWeight: 600,
-            marginBottom: '18px',
+            fontWeight: 500,
+            marginBottom: '20px',
             display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
+            alignItems: 'flex-start',
+            gap: '10px',
+            lineHeight: '1.4',
           }}>
-            <span>⚠️</span>
+            <span style={{ fontSize: '14px' }}>⚠️</span>
             <span>{errorMsg}</span>
           </div>
         )}
 
         {successMsg && (
           <div style={{
-            background: 'rgba(16, 185, 129, 0.15)',
-            border: '1px solid rgba(16, 185, 129, 0.5)',
-            borderRadius: '8px',
-            padding: '10px 14px',
-            color: '#10b981',
+            background: 'rgba(16, 185, 129, 0.08)',
+            border: '1px solid rgba(16, 185, 129, 0.3)',
+            borderRadius: '12px',
+            padding: '12px 16px',
+            color: '#34d399',
             fontSize: '12px',
-            fontWeight: 600,
-            marginBottom: '18px',
+            fontWeight: 500,
+            marginBottom: '20px',
             display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
+            alignItems: 'flex-start',
+            gap: '10px',
+            lineHeight: '1.4',
           }}>
-            <span>✅</span>
+            <span style={{ fontSize: '14px' }}>✅</span>
             <span>{successMsg}</span>
           </div>
         )}
 
-        {/* Form */}
-        <form onSubmit={handleSubmit}>
-          {/* Admin Login Input */}
-          <div style={{ marginBottom: '18px' }}>
+        {/* Form Container */}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          {/* Input Group: Login */}
+          <div>
             <label style={{
               display: 'block',
-              color: '#d1d5db',
-              fontSize: '11px',
+              color: '#94a3b8',
+              fontSize: '10px',
               fontWeight: 700,
-              letterSpacing: '0.5px',
-              marginBottom: '6px',
+              letterSpacing: '1px',
+              marginBottom: '8px',
               textTransform: 'uppercase',
+              fontFamily: "'JetBrains Mono', monospace",
             }}>
-              ADMIN EMAIL / LOGIN
+              Security Operator Email
             </label>
             <div style={{ position: 'relative' }}>
               <input
                 type="text"
                 value={login}
                 onChange={(e) => setLogin(e.target.value)}
-                placeholder="Nhập email quản trị (từ file .env)..."
+                onFocus={() => setFocusedField('login')}
+                onBlur={() => setFocusedField(null)}
+                placeholder="operator@trading-engine.ai"
                 required
                 style={{
                   width: '100%',
-                  padding: '12px 14px',
-                  background: 'rgba(5, 8, 14, 0.85)',
-                  border: '1px solid rgba(212, 175, 55, 0.3)',
-                  borderRadius: '8px',
+                  padding: '14px 16px',
+                  background: 'rgba(5, 8, 14, 0.75)',
+                  border: '1px solid',
+                  borderColor: focusedField === 'login' ? '#d4af37' : 'rgba(255, 255, 255, 0.08)',
+                  borderRadius: '12px',
                   color: '#ffffff',
-                  fontSize: '13px',
+                  fontSize: '14px',
                   outline: 'none',
-                  transition: 'all 0.2s ease',
+                  transition: 'all 0.25s ease',
                   boxSizing: 'border-box',
+                  boxShadow: focusedField === 'login' ? '0 0 15px rgba(212, 175, 55, 0.15)' : 'none',
                 }}
-                onFocus={(e) => (e.target.style.borderColor = '#d4af37')}
-                onBlur={(e) => (e.target.style.borderColor = 'rgba(212, 175, 55, 0.3)')}
               />
             </div>
           </div>
 
-          {/* Admin Password Input */}
-          <div style={{ marginBottom: '24px' }}>
+          {/* Input Group: Password */}
+          <div>
             <label style={{
               display: 'block',
-              color: '#d1d5db',
-              fontSize: '11px',
+              color: '#94a3b8',
+              fontSize: '10px',
               fontWeight: 700,
-              letterSpacing: '0.5px',
-              marginBottom: '6px',
+              letterSpacing: '1px',
+              marginBottom: '8px',
               textTransform: 'uppercase',
+              fontFamily: "'JetBrains Mono', monospace",
             }}>
-              ADMIN PASSWORD
+              Operator Password
             </label>
             <div style={{ position: 'relative' }}>
               <input
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="Nhập mật khẩu quản trị (từ file .env)..."
+                onFocus={() => setFocusedField('password')}
+                onBlur={() => setFocusedField(null)}
+                placeholder="••••••••••••"
                 required
                 style={{
                   width: '100%',
-                  padding: '12px 40px 12px 14px',
-                  background: 'rgba(5, 8, 14, 0.85)',
-                  border: '1px solid rgba(212, 175, 55, 0.3)',
-                  borderRadius: '8px',
+                  padding: '14px 46px 14px 16px',
+                  background: 'rgba(5, 8, 14, 0.75)',
+                  border: '1px solid',
+                  borderColor: focusedField === 'password' ? '#d4af37' : 'rgba(255, 255, 255, 0.08)',
+                  borderRadius: '12px',
                   color: '#ffffff',
-                  fontSize: '13px',
+                  fontSize: '14px',
                   outline: 'none',
-                  transition: 'all 0.2s ease',
+                  transition: 'all 0.25s ease',
                   boxSizing: 'border-box',
+                  boxShadow: focusedField === 'password' ? '0 0 15px rgba(212, 175, 55, 0.15)' : 'none',
                 }}
-                onFocus={(e) => (e.target.style.borderColor = '#d4af37')}
-                onBlur={(e) => (e.target.style.borderColor = 'rgba(212, 175, 55, 0.3)')}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 style={{
                   position: 'absolute',
-                  right: '12px',
+                  right: '16px',
                   top: '50%',
                   transform: 'translateY(-50%)',
                   background: 'none',
                   border: 'none',
-                  color: '#8b9bb4',
+                  color: '#64748b',
                   cursor: 'pointer',
-                  fontSize: '13px',
+                  fontSize: '15px',
                   padding: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  outline: 'none',
                 }}
               >
                 {showPassword ? '🙈' : '👁️'}
@@ -280,52 +330,70 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Submit Button */}
+          {/* Action Trigger Button */}
           <button
             type="submit"
             disabled={loading}
             style={{
               width: '100%',
-              padding: '13px',
+              padding: '15px',
               background: loading
-                ? 'rgba(212, 175, 55, 0.4)'
+                ? 'rgba(212, 175, 55, 0.3)'
                 : 'linear-gradient(135deg, #d4af37 0%, #b8860b 100%)',
               border: 'none',
-              borderRadius: '8px',
+              borderRadius: '12px',
               color: '#000000',
               fontSize: '13px',
               fontWeight: 800,
-              letterSpacing: '1px',
+              letterSpacing: '1.5px',
               cursor: loading ? 'wait' : 'pointer',
-              boxShadow: loading ? 'none' : '0 4px 20px rgba(212, 175, 55, 0.35)',
-              transition: 'all 0.2s ease',
+              boxShadow: loading ? 'none' : '0 6px 24px rgba(212, 175, 55, 0.25)',
+              transition: 'all 0.25s ease',
               textTransform: 'uppercase',
+              fontFamily: "'JetBrains Mono', monospace",
+              marginTop: '8px',
             }}
           >
-            {loading ? 'ĐANG XÁC THỰC AI...' : 'ĐĂNG NHẬP HỆ THỐNG TRADING'}
+            {loading ? 'SECURING NETWORK...' : 'INITIALIZE TRADING SESSION'}
           </button>
         </form>
 
-        {/* Footer info */}
+        {/* Premium footer specs */}
         <div style={{
-          marginTop: '24px',
+          marginTop: '36px',
           textAlign: 'center',
-          borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-          paddingTop: '16px',
+          borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+          paddingTop: '20px',
         }}>
-          <p style={{ color: '#6b7280', fontSize: '10px', margin: '0 0 4px 0' }}>
-            Hệ thống Quản trị AI & Chốt chặn Rủi ro Margin 30%
+          <p style={{
+            color: '#475569',
+            fontSize: '9px',
+            margin: '0 0 6px 0',
+            fontFamily: "'JetBrains Mono', monospace",
+            letterSpacing: '0.5px',
+          }}>
+            SECURITY LEVEL: PROTOCOL_30_MARG_ARMED
           </p>
           <a
-            href="https://github.com/qtu11"
+            href="https://github.com/qtu11/Autonomous-Trading-Engine"
             target="_blank"
             rel="noreferrer"
-            style={{ color: '#d4af37', fontSize: '11px', textDecoration: 'none', fontWeight: 600 }}
+            style={{
+              color: '#d4af37',
+              fontSize: '11px',
+              textDecoration: 'none',
+              fontWeight: 600,
+              fontFamily: "'JetBrains Mono', monospace",
+              transition: 'opacity 0.2s',
+            }}
+            onMouseOver={(e) => (e.currentTarget.style.opacity = '0.8')}
+            onMouseOut={(e) => (e.currentTarget.style.opacity = '1')}
           >
-            https://github.com/qtu11
+            github.com/qtu11/ATE
           </a>
         </div>
       </div>
     </div>
   );
 }
+
