@@ -34,7 +34,7 @@ Autonomous Trading Engine (ATE) là một nền tảng giao dịch định lư�
 - Bảng điều khiển Control Center (`[CFG]`) tập trung quản lý tài khoản MT5, cấu hình rủi ro, kết nối Telegram bot realtime alert và thiết lập AI Engine.
 
 ### 4. Realtime Stream & Command Ledger
-- **WebSocket Hub**: Truyền dữ liệu telemetry ~1s thời gian thực đến giao diện web client qua `ws://127.0.0.1:8005/ws/stream`.
+- **WebSocket Hub**: Truyền dữ liệu telemetry ~1s thời gian thực đến giao diện web client qua `ws://localhost:8080/ws/stream` (bản local) hoặc `<public>:8848/ws/stream` (bản cloud).
 - **SQLite WAL Command Ledger**: Đảm bảo tính chống lặp lệnh (Idempotency), ghi lại toàn bộ nhật ký giao dịch và lệnh điều phối.
 
 ### 5. Pure MQL5 EA Execution Bridge (`ATE_XAUUSD.mq5`)
@@ -196,10 +196,10 @@ Script thực hiện tuần tự:
 ### 7. Nạp EA vào MT5 (một lần)
 
 1. Mở MT5 terminal → chart `XAUUSDm`.
-2. Kéo `QuantAI_XAUUSD` từ Navigator (Experts) vào chart.
+2. Kéo `QuantAI_XAUUSD` (hoặc `ATE_XAUUSD`) từ Navigator (Experts) vào chart.
 3. Trong tab **Common**: bật **Allow Algo Trading**.
-4. Trong **Inputs**: điền `InpApiUrl=http://127.0.0.1:8005`, `InpBridgeToken=<QUANTAI_BRIDGE_TOKEN trong .env>`, giữ `InpExecutionEnabled=false` cho tới khi sẵn sàng arm demo.
-5. Vào **Tools → Options → Expert Advisors**: thêm `http://127.0.0.1:8005` vào danh sách **Allow WebRequest for listed URL**.
+4. Trong **Inputs**: điền `InpApiUrl=https://autonomous-trading-engine.vercel.app/api/v1/`, `InpBridgeToken=<QUANTAI_BRIDGE_TOKEN trong .env>`, giữ `InpExecutionEnabled=false` cho tới khi sẵn sàng arm demo.
+5. Vào **Tools → Options → Expert Advisors**: thêm `https://autonomous-trading-engine.vercel.app` vào danh sách **Allow WebRequest for listed URL**.
 
 ---
 
@@ -454,14 +454,14 @@ File EA: `QuantAI_XAUUSD.mq5`.
 2. Mở file `QuantAI_XAUUSD.mq5` trong thư mục Experts tương ứng.
 3. Compile và xử lý **toàn bộ** compiler errors trước khi attach EA.
 4. Attach EA vào chart **XAUUSDm** trên đúng tài khoản demo allowlisted.
-5. Trong MT5, thêm `http://127.0.0.1:8005` vào **Tools → Options → Expert Advisors → Allow WebRequest for listed URL**.
+5. Trong MT5, thêm `https://autonomous-trading-engine.vercel.app` vào **Tools → Options → Expert Advisors → Allow WebRequest for listed URL**.
 6. Giữ `InpExecutionEnabled=false` cho đến khi quy trình demo canary được phê duyệt.
 
 ### EA inputs quan trọng
 
 | Input | Mặc định | Vai trò |
-|---|---:|---|
-| `InpApiUrl` | localhost:8005 | Bridge API local. |
+|---|---|---:|
+| `InpApiUrl` | `https://autonomous-trading-engine.vercel.app/api/v1/` | Bridge API qua Vercel proxy → public IP. |
 | `InpMagicNumber` | `888999` | Isolation magic number. |
 | `InpSymbol` | `XAUUSDm` | Symbol allowlist. |
 | `InpExecutionEnabled` | `false` | Interlock quan trọng nhất tại EA. |
@@ -609,15 +609,16 @@ Sau đó restart backend nếu biến được load khi process khởi động, 
 Kết nối Next.js Website trên Vercel với phần mềm MT5 local **không dùng ngrok/Cloudflare Tunnel** — chỉ dùng IP công khai + port-forward cổng 80 vào nginx Docker (cloudlocal):
 
 ### 1. Cách thức hoạt động
-- `Cloudlocal/docker-compose.yml` dựng nginx (:80) → FastAPI backend (8005), ai-engine (8006), python-bridge (8007), postgres, redis trên host network.
-- Router của chủ tịch forward cổng `80` về máy; Windows firewall mở cổng 80 (xem `Cloudlocal/scripts/setup-firewall-portforward.ps1`).
+- `Cloudlocal/docker-compose.yml` dựng nginx (:80/8080 local, :8848 public) → FastAPI backend (8005), ai-engine (8006), python-bridge (8007), postgres, redis.
+- Backend FastAPI (`dashboard/server.py`) chạy **native trên Windows host** (có package `MetaTrader5` → `HAS_MT5=true`); nginx proxy `host.docker.internal:8005` về host. `cloudlocal-fastapi` container bị stop để tránh xung đột port.
+- Router của chủ tịch forward cổng `8848` về máy (port 80/443 bị modem VNPT chiếm cho admin portal, UPnP tắt nên forward thủ công trên router); Windows firewall mở cổng 8848.
 - Vercel rewrite `/api/:path*` sang `${ATE_BACKEND_URL}/api/:path*` (không tạo vòng lặp vì `ATE_BACKEND_URL` trỏ về IP công khai, không trỏ về chính vercel.app).
 
 ### 2. Cấu hình biến môi trường
-- **Cấu hình Local (`Cloudlocal/.env`)**: `PUBLIC_IP=<IP/DDNS công khai>`, `ATE_BACKEND_URL=http://127.0.0.1:8005` (cho dev local) hoặc `http://<PUBLIC_IP>:80` (cho Vercel/MT5).
+- **Cấu hình Local (`Cloudlocal/.env`)**: `PUBLIC_IP=<IP/DDNS công khai>`, `ATE_BACKEND_URL=http://<PUBLIC_IP>:8848` (cổng 8848 vì 80/443 bị modem VNPT chiếm làm admin portal).
 - **Cấu hình trên Vercel Settings**:
-  - `ATE_BACKEND_URL` = `http://<PUBLIC_IP>:80` (KHÔNG kèm `/api/v1`).
-  - `NEXT_PUBLIC_ATE_API_ORIGIN`, `NEXT_PUBLIC_QUANTAI_API_ORIGIN` = (trống) → browser gọi same-origin `/api/*`, Next rewrite về backend.
+  - `ATE_BACKEND_URL` = `http://<PUBLIC_IP>:8848` (KHÔNG kèm `/api/v1`, KHÔNG có khoảng trắng đầu).
+  - `NEXT_PUBLIC_ATE_API_ORIGIN`, `NEXT_PUBLIC_QUANTAI_API_ORIGIN` = `https://autonomous-trading-engine.vercel.app`.
   - MT5 EA dùng trực tiếp `https://autonomous-trading-engine.vercel.app/api/v1/`.
 
 ---

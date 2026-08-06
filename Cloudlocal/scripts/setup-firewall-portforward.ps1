@@ -8,7 +8,7 @@
 #>
 
 param(
-    [string[]]$Ports = @(80, 443, 3000, 8005, 8006, 8007, 8080, 5432, 6379),
+    [string[]]$Ports = @(8848, 80, 443, 3000, 8005, 8006, 8007, 8080, 5432, 6379),
     [switch]$EnableUPnP = $true,
     [switch]$ShowOnly = $false
 )
@@ -173,21 +173,21 @@ Write-Host "Public IP: $PublicIP" -ForegroundColor White
 Write-Host "Local IP:  $LocalIP" -ForegroundColor White
 Write-Host ""
 Write-Host "External URLs (configure ATE_BACKEND_URL in Vercel):" -ForegroundColor Cyan
-Write-Host "  Website:     http://$PublicIP:80" -ForegroundColor White
-Write-Host "  API (Main):  http://$PublicIP:80/api/v1" -ForegroundColor White
+Write-Host "  Website:     http://$PublicIP:8848" -ForegroundColor White
+Write-Host "  API (Main):  http://$PublicIP:8848/api/v1" -ForegroundColor White
 Write-Host "  API (Direct): http://$PublicIP:8005" -ForegroundColor White
-Write-Host "  Bridge:      http://$PublicIP:80/bridge" -ForegroundColor White
-Write-Host "  WebSocket:   ws://$PublicIP:80/ws" -ForegroundColor White
-Write-Host "  AI Engine:   http://$PublicIP:80/ai" -ForegroundColor White
+Write-Host "  Bridge:      http://$PublicIP:8848/bridge" -ForegroundColor White
+Write-Host "  WebSocket:   ws://$PublicIP:8848/ws" -ForegroundColor White
+Write-Host "  AI Engine:   http://$PublicIP:8848/ai" -ForegroundColor White
 Write-Host ""
 Write-Host "Vercel Environment Variable:" -ForegroundColor Yellow
-Write-Host "  ATE_BACKEND_URL=http://$PublicIP:80" -ForegroundColor White
+Write-Host "  ATE_BACKEND_URL=http://$PublicIP:8848" -ForegroundColor White
 Write-Host ""
 Write-Host "Router Manual Forwarding (if UPnP failed):" -ForegroundColor Yellow
-foreach ($Port in @(80, 443, 8005, 8006, 8007, 8080)) {
+foreach ($Port in @(8848, 80, 443, 8005, 8006, 8007, 8080)) {
     Write-Host "  $Port (TCP) -> $LocalIP:$Port" -ForegroundColor White
 }
 Write-Host ""
 Write-Host "Test external access:" -ForegroundColor Cyan
-Write-Host "  curl http://$PublicIP:80/health" -ForegroundColor White
-Write-Host "  curl http://$PublicIP:80/api/v1/health" -ForegroundColor White
+Write-Host "  curl http://$PublicIP:8848/health" -ForegroundColor White
+Write-Host "  curl http://$PublicIP:8848/api/v1/health" -ForegroundColor White

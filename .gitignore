@@ -21,3 +21,6 @@ logs/
 web/.next/
 web/node_modules/
 Cloudlocal/volumes/
+
+.vercel
+.env*
