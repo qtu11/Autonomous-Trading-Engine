@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python -m compileall -q python_engine scripts tests; if \\($LASTEXITCODE -eq 0\\) { 'PY_COMPILE_OK' } else { exit $LASTEXITCODE })",
+      "PowerShell(python -m pytest -q)",
+      "PowerShell(python --version; python -m compileall -q \"C:\\\\Users\\\\KIMPC\\\\AppData\\\\Roaming\\\\MetaQuotes\\\\Terminal\\\\C3DCCD4DFDD81FF8F00FFC310CAC0FD8\\\\MQL5\\\\Experts\\\\QuantAI_XAUUSD\\\\python_engine\"; if \\($LASTEXITCODE -ne 0\\) { exit $LASTEXITCODE }; python -m pytest \"C:\\\\Users\\\\KIMPC\\\\AppData\\\\Roaming\\\\MetaQuotes\\\\Terminal\\\\C3DCCD4DFDD81FF8F00FFC310CAC0FD8\\\\MQL5\\\\Experts\\\\QuantAI_XAUUSD\\\\tests\" -q)",
+      "PowerShell(python -m pip show ruff; python -m pip show pyright; python -m pip show mypy)",
+      "PowerShell(python -m compileall -q python_engine scripts tests dashboard)",
+      "Bash(cmd.exe *)",
+      "PowerShell(python -m unittest discover -s tests -v)",
+      "Bash(Get-ChildItem -Force \"C:\\\\Users\\\\KIMPC\\\\AppData\\\\Roaming\\\\MetaQuotes\\\\Terminal\\\\C3DCCD4DFDD81FF8F00FFC310CAC0FD8\\\\MQL5\\\\Experts\\\\QuantAI_XAUUSD\\\\web\")",
+      "Bash(Select-Object Name,Mode,Length)",
+      "Bash(python *)",
+      "PowerShell(python -c \"from fastapi.testclient import TestClient; import dashboard.server as s; c=TestClient\\(s.app\\); r=c.post\\('/api/accounts/exness_trial_7/commands/reconcile',headers={'Idempotency-Key':'retry_key_123456789'}\\); print\\(r.status_code,r.json\\(\\)\\)\")",
+      "Skill(loop)",
+      "PowerShell($api='http://127.0.0.1:8000'; foreach\\($p in @\\('/','/api/status','/api/portfolio','/api/accounts','/api/market/symbols','/api/autotrader/status','/api/risk_config'\\)\\) { try { $r=Invoke-WebRequest -Uri \\($api+$p\\) -UseBasicParsing -TimeoutSec 5; \"$p $\\($r.StatusCode\\) $\\($r.Content.Substring\\(0,[Math]::Min\\(180,$r.Content.Length\\)\\)\\)\" } catch { \"$p ERROR $\\($_.Exception.Message\\)\" } })",
+      "PowerShell(npm *)",
+      "PowerShell(python -c \"from fastapi.testclient import TestClient; import dashboard.server as s; c=TestClient\\(s.app\\); r=c.options\\('/api/accounts/exness_trial_7/commands/reconcile',headers={'Origin':'http://localhost:3000','Access-Control-Request-Method':'POST','Access-Control-Request-Headers':'authorization,content-type,idempotency-key'}\\); print\\(r.status_code,r.headers.get\\('access-control-allow-methods'\\),r.headers.get\\('access-control-allow-headers'\\)\\)\"; python -m unittest discover -s tests -p 'test*.py' -q)",
+      "PowerShell(python -m unittest tests.test_decision_gate)",
+      "Read(//c/Users/KIMPC/AppData/Roaming/MetaQuotes/Terminal/C3DCCD4DFDD81FF8F00FFC310CAC0FD8/**)",
+      "Read(//c/Users/KIMPC/AppData/Roaming/MetaQuotes/Terminal/C3DCCD4DFDD81FF8F00FFC310CAC0FD8/MQL5/**)",
+      "Bash(tasklist //FI \"IMAGENAME eq terminal64.exe\")",
+      "Bash(where metaeditor64.exe)",
+      "Read(//c/Program Files/MetaTrader 5/**)",
+      "Read(//c/Program Files \\\\\\(x86\\\\\\)/MetaTrader 5/**)",
+      "Read(//c/Program Files/**)"
+    ]
+  }
+}

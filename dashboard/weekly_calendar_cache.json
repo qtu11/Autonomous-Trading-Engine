@@ -1,0 +1,61 @@
+{
+    "week_monday": "2026-08-03",
+    "generated_at": "2026-08-06T09:15:13.952530",
+    "events": [
+        {
+            "id": "evt-20260803-1",
+            "day": "Mon",
+            "date": "03/08",
+            "time": "19:30",
+            "title": "US Core Durable Goods Orders (MoM)",
+            "impact": "MED",
+            "actual": "",
+            "forecast": "0.2%",
+            "previous": "0.1%"
+        },
+        {
+            "id": "evt-20260803-2",
+            "day": "Tue",
+            "date": "04/08",
+            "time": "19:30",
+            "title": "US Core CPI Inflation Rate (MoM)",
+            "impact": "HIGH",
+            "actual": "",
+            "forecast": "0.3%",
+            "previous": "0.4%"
+        },
+        {
+            "id": "evt-20260803-3",
+            "day": "Wed",
+            "date": "05/08",
+            "time": "21:00",
+            "title": "FOMC Interest Rate Decision",
+            "impact": "HIGH",
+            "actual": "",
+            "forecast": "5.50%",
+            "previous": "5.50%"
+        },
+        {
+            "id": "evt-20260803-4",
+            "day": "Thu",
+            "date": "06/08",
+            "time": "19:30",
+            "title": "US Initial Jobless Claims",
+            "impact": "MED",
+            "actual": "",
+            "forecast": "218K",
+            "previous": "212K"
+        },
+        {
+            "id": "evt-20260803-5",
+            "day": "Fri",
+            "date": "07/08",
+            "time": "19:30",
+            "title": "US Non-Farm Payrolls (NFP)",
+            "impact": "HIGH",
+            "actual": "",
+            "forecast": "190K",
+            "previous": "229K"
+        }
+    ]
+}

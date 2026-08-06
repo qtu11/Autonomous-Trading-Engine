@@ -1,0 +1,22 @@
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Runtime ledgers, logs and generated reports
+dashboard/*.sqlite3
+dashboard/user_control_config.json
+backtest/reports/
+logs/
+*.log
+*.bak
+
+# Frontend
+web/.next/
+web/node_modules/
