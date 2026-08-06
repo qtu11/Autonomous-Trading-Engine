@@ -20,8 +20,8 @@ input string   InpBridgeToken      = "20022007@Tu";                    // Requir
 input string   InpExecutorId       = "ate-ea-local";        // Unique executor identity for command leases
 input bool     InpVerifyAccount    = true;                  // Strict Account Verification (DEMO + LIVE allowlist)
 input string   InpExpectedCompany   = "Exness Technologies Ltd"; // Broker company allowlist
-input long     InpExpectedLogin    = ;              // DEMO account allowlist
-input string   InpExpectedServer   = ;     // DEMO server allowlist
+input long     InpExpectedLogin    = 0;              // DEMO account allowlist
+input string   InpExpectedServer   = "";     // DEMO server allowlist
 input long     InpExpectedLiveLogin = 0;                    // LIVE account allowlist (0 = not configured -> LIVE refused)
 input string   InpExpectedLiveServer= "";                   // LIVE server allowlist (empty = not configured)
 input double   InpMaxSpread        = 0.50;                   // XAUUSDm raw-price spread cap
@@ -48,12 +48,17 @@ int            g_protection_live_seconds = 0;
 string         g_protection_event = "";
 bool           g_protection_comment_shown = false;
 
-//--- Returns InpApiUrl with trailing slashes trimmed (avoid "//api/..." double-slash 404)
+//--- Returns InpApiUrl with trailing slashes trimmed and trims "/api" if present (since path appends `/api/` explicitly)
 string QuantAIApiBase()
 {
    string u = InpApiUrl;
    while(StringLen(u) > 0 && StringGetCharacter(u, StringLen(u) - 1) == '/')
       u = StringSubstr(u, 0, StringLen(u) - 1);
+   
+   int len = StringLen(u);
+   if(len >= 4 && StringSubstr(u, len - 4) == "/api")
+      u = StringSubstr(u, 0, len - 4);
+      
    return u;
 }
 
