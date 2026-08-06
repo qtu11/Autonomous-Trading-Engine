@@ -11,7 +11,7 @@
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
-input string   InpApiUrl           = "https://autonomous-trading-engine.vercel.app/api/v1/"; // AI FastAPI Server URL (use hostname/IP, NOT 127.0.0.1 - MT5 blocks loopback)
+input string   InpApiUrl           = "http://192.168.1.4:80/api/v1/"; // AI FastAPI Server URL (LAN IP of the Docker Cloudlocal nginx - do NOT use 127.0.0.1, MT5 blocks loopback)
 input ulong    InpMagicNumber      = 888999;                 // EA Magic Number
 input string   InpSymbol           = "XAUUSDm";              // Trading Symbol (Blank for auto-detect chart)
 input int      InpPollIntervalSec  = 1;                      // AI Protocol Poll Interval (seconds)
@@ -276,8 +276,11 @@ void SendTelemetry()
    }
    string headers = BridgeHeaders();
    string payload = StringFormat(
-      "{\"symbol\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"margin_free\":%.2f,\"profit\":%.2f,\"positions\":%d,\"ask\":%.2f,\"bid\":%.2f}",
+      "{\"symbol\":\"%s\",\"account_id\":%I64d,\"server\":\"%s\",\"broker\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"margin_free\":%.2f,\"profit\":%.2f,\"positions\":%d,\"ask\":%.2f,\"bid\":%.2f}",
       g_symbol,
+      AccountInfoInteger(ACCOUNT_LOGIN),
+      AccountInfoString(ACCOUNT_SERVER),
+      AccountInfoString(ACCOUNT_COMPANY),
       AccountInfoDouble(ACCOUNT_BALANCE),
       AccountInfoDouble(ACCOUNT_EQUITY),
       AccountInfoDouble(ACCOUNT_MARGIN),

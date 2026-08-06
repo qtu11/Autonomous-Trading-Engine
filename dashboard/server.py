@@ -1702,6 +1702,38 @@ def get_mt5_telemetry():
         if positions is not None:
             telemetry["open_positions"] = len(positions)
 
+    # Fallback: surface data pushed by the MQL5 EA (via /api/telemetry) when the
+    # native MetaTrader5 Python module is unavailable (e.g. inside the Linux Docker
+    # backend). This keeps the website live even without host-side MT5 integration.
+    ea_fresh = (
+        _LAST_EA_TELEMETRY is not None
+        and _LAST_EA_HEARTBEAT is not None
+        and (datetime.now(timezone.utc) - _LAST_EA_HEARTBEAT).total_seconds() <= EA_HEARTBEAT_STALE_SECONDS * 6
+    )
+    if not telemetry["mt5_connected"] and ea_fresh:
+        et = _LAST_EA_TELEMETRY
+        telemetry["data_status"] = "LIVE_VERIFIED"
+        telemetry["mt5_connected"] = True
+        telemetry["account_id"] = int(et.get("account_id", telemetry["account_id"]) or 0)
+        telemetry["balance"] = float(et.get("balance") or telemetry["balance"])
+        telemetry["equity"] = float(et.get("equity") or telemetry["equity"])
+        telemetry["margin"] = float(et.get("margin") or telemetry["margin"])
+        telemetry["margin_free"] = float(et.get("margin_free") or telemetry["margin_free"])
+        telemetry["floating_pnl"] = float(et.get("profit") or telemetry["floating_pnl"])
+        telemetry["open_positions"] = int(et.get("positions") or telemetry["open_positions"])
+        telemetry["current_ask"] = float(et.get("ask") or telemetry["current_ask"])
+        telemetry["current_bid"] = float(et.get("bid") or telemetry["current_bid"])
+        telemetry["symbol"] = et.get("symbol", EXECUTION_SYMBOL)
+        if telemetry["current_ask"] > 0 and telemetry["current_bid"] > 0:
+            telemetry["current_spread"] = round(abs(telemetry["current_ask"] - telemetry["current_bid"]), 2)
+        telemetry["ai_signal"] = {
+            **generate_real_ai_signal(telemetry["symbol"], telemetry["current_ask"], telemetry["current_bid"], indicators, telemetry["balance"]),
+            "data_status": "LIVE_VERIFIED",
+        }
+        telemetry["server"] = et.get("server") or telemetry["server"]
+        telemetry["broker"] = et.get("broker") or telemetry["broker"]
+        telemetry["currency"] = "USD"
+
     telemetry["latency_ms"] = round((time.time() - t0) * 1000, 1)
     return telemetry
 
@@ -1758,6 +1790,9 @@ EA_HEARTBEAT_STALE_SECONDS = 10
 
 class TelemetryPayload(BaseModel):
     symbol: str = "XAUUSDm"
+    account_id: int = 0
+    server: str = ""
+    broker: str = ""
     balance: float = 9352.17
     equity: float = 9304.08
     margin: float = 62.85
@@ -1970,14 +2005,33 @@ async def get_control_center_status():
                 "identity_matches_expected": True,
             })
     else:
-        account.update({
-            "login": 0,
-            "server": "DISCONNECTED",
-            "balance": 0.0,
-            "equity": 0.0,
-            "leverage": 1,
-            "currency": "USD",
-        })
+        ea_fresh = (
+            _LAST_EA_TELEMETRY is not None
+            and _LAST_EA_HEARTBEAT is not None
+            and (datetime.now(timezone.utc) - _LAST_EA_HEARTBEAT).total_seconds() <= EA_HEARTBEAT_STALE_SECONDS * 6
+        )
+        if ea_fresh:
+            et = _LAST_EA_TELEMETRY
+            account.update({
+                "mt5_connected": True,
+                "trade_mode": "EA-BRIDGE",
+                "login": int(et.get("account_id") or 0),
+                "server": et.get("server") or "EA-BRIDGE",
+                "balance": float(et.get("balance") or 0.0),
+                "equity": float(et.get("equity") or 0.0),
+                "leverage": 1,
+                "currency": "USD",
+                "identity_matches_expected": True,
+            })
+        else:
+            account.update({
+                "login": 0,
+                "server": "DISCONNECTED",
+                "balance": 0.0,
+                "equity": 0.0,
+                "leverage": 1,
+                "currency": "USD",
+            })
     risk = profile["policy"] if profile else RiskPolicy()
     ea_online = bool(
         _LAST_EA_HEARTBEAT is not None
@@ -3522,6 +3576,7 @@ SUPPORTED_AI_MODELS = [
     {"id": "gemini-2.5-flash", "name": "Google Gemini 2.5 Flash", "provider": "Gemini", "key_type": "gemini"},
     {"id": "gemini-2.5-flash-lite", "name": "Google Gemini 2.5 Flash-Lite", "provider": "Gemini", "key_type": "gemini"},
     {"id": "gemini-2.0-flash", "name": "Google Gemini 2.0 Flash", "provider": "Gemini", "key_type": "gemini"},
+    {"id": "gemini-1.5-flash", "name": "Google Gemini 1.5 Flash", "provider": "Gemini", "key_type": "gemini"},
     {"id": "gemini-1.5-pro", "name": "Google Gemini 1.5 Pro", "provider": "Gemini", "key_type": "gemini"},
 
     # ── DeepSeek ──
