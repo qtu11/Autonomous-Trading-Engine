@@ -11,7 +11,7 @@
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
-input string   InpApiUrl           = "https://autonomous-trading-engine.vercel.app/api/"; // AI FastAPI Server URL (use hostname/IP, NOT 127.0.0.1 - MT5 blocks loopback)
+input string   InpApiUrl           = "https://autonomous-trading-engine.vercel.app/api/v1/"; // AI FastAPI Server URL (use hostname/IP, NOT 127.0.0.1 - MT5 blocks loopback)
 input ulong    InpMagicNumber      = 888999;                 // EA Magic Number
 input string   InpSymbol           = "XAUUSDm";              // Trading Symbol (Blank for auto-detect chart)
 input int      InpPollIntervalSec  = 1;                      // AI Protocol Poll Interval (seconds)
@@ -48,7 +48,7 @@ int            g_protection_live_seconds = 0;
 string         g_protection_event = "";
 bool           g_protection_comment_shown = false;
 
-//--- Returns InpApiUrl with trailing slashes trimmed and trims "/api" if present (since path appends `/api/` explicitly)
+//--- Returns InpApiUrl with trailing slashes, /api/v1 and /api trimmed to construct endpoints cleanly
 string QuantAIApiBase()
 {
    string u = InpApiUrl;
@@ -56,7 +56,9 @@ string QuantAIApiBase()
       u = StringSubstr(u, 0, StringLen(u) - 1);
    
    int len = StringLen(u);
-   if(len >= 4 && StringSubstr(u, len - 4) == "/api")
+   if(len >= 7 && StringSubstr(u, len - 7) == "/api/v1")
+      u = StringSubstr(u, 0, len - 7);
+   else if(len >= 4 && StringSubstr(u, len - 4) == "/api")
       u = StringSubstr(u, 0, len - 4);
       
    return u;
