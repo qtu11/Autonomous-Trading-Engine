@@ -11,7 +11,7 @@
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
-input string   InpApiUrl           = "http://192.168.1.4:80/api/v1/"; // AI FastAPI Server URL (LAN IP of the Docker Cloudlocal nginx - do NOT use 127.0.0.1, MT5 blocks loopback)
+input string   InpApiUrl           = "https://autonomous-trading-engine.vercel.app/api/v1/"; // AI FastAPI Server URL via Vercel (public cloud proxy to backend)
 input ulong    InpMagicNumber      = 888999;                 // EA Magic Number
 input string   InpSymbol           = "XAUUSDm";              // Trading Symbol (Blank for auto-detect chart)
 input int      InpPollIntervalSec  = 1;                      // AI Protocol Poll Interval (seconds)
