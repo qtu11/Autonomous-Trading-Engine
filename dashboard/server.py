@@ -2437,7 +2437,19 @@ def issue_demo_command() -> dict[str, Any]:
     )
     log_event(LogEvent.BRAIN_DECISION_RECORDED, component="ai-brain", action=proposal.action.value, confidence=proposal.confidence, command_id=command.get("command_id"))
     log_event(LogEvent.ORDER_SENT, component="order", action=proposal.action.value, volume=decision.volume, command_id=command.get("command_id"))
-    return {"status": "ISSUED", "reason_codes": decision.reason_codes, "command": command}
+    return {
+        "status": "ISSUED",
+        "reason_codes": decision.reason_codes,
+        "command": command,
+        "indicators": indicators,
+        "proposal": {
+            "action": proposal.action.value,
+            "entry": proposal.entry,
+            "stop_loss": proposal.stop_loss,
+            "take_profit": proposal.take_profit,
+            "confidence": proposal.confidence,
+        }
+    }
 
 
 @app.post("/api/v1/demo/scan", dependencies=[Depends(require_operator_token)])
@@ -2967,7 +2979,6 @@ async def _ai_decision_loop() -> None:
             if AI_AUTO_LOOP:
                 ready, reason = execution_readiness(EXECUTION_MODE)
                 if ready:
-                    append_chat_message("ai", f"[AUTO TRADE] Báo cáo anh Tú: Đang tự động quét thị trường {EXECUTION_SYMBOL} (chu kỳ 2 phút)...")
                     log_event(LogEvent.AI_REQUEST, component="ai-loop", symbol=EXECUTION_SYMBOL)
                     result = await asyncio.to_thread(issue_demo_command)
                     status_str = result.get("status")
@@ -2989,53 +3000,56 @@ async def _ai_decision_loop() -> None:
 
                     if status_str == "ISSUED":
                         cmd_info = result.get("command") or {}
+                        ind_info = result.get("indicators") or {}
+                        prop_info = result.get("proposal") or {}
                         raw_positions = (mt5.positions_get(symbol=EXECUTION_SYMBOL) or mt5.positions_get() or [])
                         active_cnt = len(raw_positions)
+
+                        ema20 = float(ind_info.get("ema20") or 0.0)
+                        ema50 = float(ind_info.get("ema50") or 0.0)
+                        ema200 = float(ind_info.get("ema200") or 0.0)
+                        rsi = float(ind_info.get("rsi") or 50.0)
+                        atr = float(ind_info.get("atr") or 0.0)
+                        macd = ind_info.get("macd") or "N/A"
+                        confidence = prop_info.get("confidence", "N/A")
+
+                        trend_str = "TĂNG (EMA20 > EMA50 > EMA200)" if (ema20 > ema50 > ema200) else (
+                            "GIẢM (EMA20 < EMA50 < EMA200)" if (ema20 < ema50 < ema200) else "TÍCH LŨY / SIDEWAY"
+                        )
+
+                        analysis_str = (
+                            f"\n📊 BẢNG PHÂN TÍCH CHỈ BÁO KỸ THUẬT (M15)\n"
+                            f"├─ Xu hướng: {trend_str}\n"
+                            f"│  └─ EMA20: {ema20:.2f} | EMA50: {ema50:.2f} | EMA200: {ema200:.2f}\n"
+                            f"├─ Động lượng:\n"
+                            f"│  └─ RSI(14): {rsi:.1f} | MACD: {macd} | ATR: {atr:.2f}\n"
+                            f"├─ Độ tin cậy AI: {confidence}\n"
+                            f"└─ Lý do kích hoạt: " + ", ".join(reason_codes)
+                        )
+
                         if active_cnt <= 1:
                             append_chat_message("ai", (
-                                f"[AUTO TRADE] Phát hiện cơ hội bứt phá! Đặt lệnh đầu tiên "
-                                f"{cmd_info.get('action')} {cmd_info.get('volume')} lot (Vị thế #1). "
-                                f"SL: {cmd_info.get('stop_loss')}, TP: {cmd_info.get('take_profit')}. "
-                                f"Lệnh đã được đẩy lên MT5 Ledger."
+                                f"[AUTO TRADE] Báo cáo anh Tú: Phát hiện cơ hội bứt phá! Đặt lệnh đầu tiên "
+                                f"{cmd_info.get('action')} {cmd_info.get('volume')} lot (Vị thế #1).\n"
+                                f"SL: {cmd_info.get('stop_loss')} | TP: {cmd_info.get('take_profit')}.\n"
+                                f"Lệnh đã được đẩy lên MT5 Ledger.\n"
+                                f"{analysis_str}"
                             ))
                         else:
                             append_chat_message("ai", (
-                                f"[AUTO TRADE] 🔥 PYRAMIDING SCALE-IN! Vị thế trước đã an toàn (Risk-Free). "
-                                f"Đặt thêm lệnh nhồi {cmd_info.get('action')} {cmd_info.get('volume')} lot (Vị thế #{active_cnt}). "
-                                f"SL: {cmd_info.get('stop_loss')}, TP: {cmd_info.get('take_profit')}. "
-                                f"Lệnh đã được đẩy lên MT5 Ledger."
+                                f"[AUTO TRADE] PYRAMIDING SCALE-IN! Vị thế trước đã an toàn (Risk-Free).\n"
+                                f"Đặt thêm lệnh nhồi {cmd_info.get('action')} {cmd_info.get('volume')} lot (Vị thế #{active_cnt}).\n"
+                                f"SL: {cmd_info.get('stop_loss')} | TP: {cmd_info.get('take_profit')}.\n"
+                                f"Lệnh đã được đẩy lên MT5 Ledger.\n"
+                                f"{analysis_str}"
                             ))
-                    elif "HOLD_OBSERVING_MARKET_UNPROTECTED" in reason_codes:
-                        append_chat_message("ai", (
-                            f"[AUTO TRADE] Báo cáo anh Tú: Đang có {pos_cnt} vị thế {EXECUTION_SYMBOL} đang chạy (PnL: ${pnl_val:+.2f}). "
-                            f"Lệnh chưa dời hòa vốn, AI đang xem phản ứng nến & giữ nguyên vị thế theo dõi..."
-                        ))
-                    elif "HOLD_OBSERVING_MARKET_CONSOLIDATING" in reason_codes:
-                        append_chat_message("ai", (
-                            f"[AUTO TRADE] Báo cáo anh Tú: Đang có {pos_cnt} vị thế {EXECUTION_SYMBOL} đang chạy (PnL: ${pnl_val:+.2f}). "
-                            f"Vị thế đã an toàn hòa vốn, thị trường đang đi ngang tích lũy nến, chưa đủ điều kiện Breakout để nhồi lệnh..."
-                        ))
-                    elif "REJECT_POSITION_LIMIT" in reason_codes:
-                        append_chat_message("ai", (
-                            f"[AUTO TRADE] Báo cáo anh Tú: Đã mở đủ tối đa {pos_cnt} vị thế Pyramiding trên {EXECUTION_SYMBOL} (PnL: ${pnl_val:+.2f}). "
-                            f"Đang tự động theo dõi Trailing Stop & khóa lợi nhuận..."
-                        ))
-                    else:
-                        reasons_str = ", ".join(reason_codes)
-                        append_chat_message("ai", (
-                            f"[AUTO TRADE] Quét hoàn tất. Tín hiệu: NO_TRADE. "
-                            f"Lý do bỏ qua: {reasons_str}."
-                        ))
                 else:
                     log_event(LogEvent.AI_RESPONSE, component="ai-loop", result="SKIPPED", reason=reason)
-                    append_chat_message("ai", f"[AUTO TRADE] Bỏ qua lượt quét: Hệ thống chưa sẵn sàng ({reason}).")
         except Exception as exc:
             log_event(LogEvent.EXCEPTION, component="ai-loop", exc=exc)
-            append_chat_message("ai", f"[AUTO TRADE] Gặp lỗi trong chu kỳ quét: {exc}")
+            append_chat_message("ai", f"[AUTO TRADE] Gap loi nghiem trong trong chu ky quet: {exc}")
         await asyncio.sleep(AI_LOOP_SECONDS)
 
-
-# ── AI Central Brain: self-evaluation + strategy auto-adjust ─────────────────
 
 def _brain_lesson(outcome: str, r_multiple: float, exit_reason: str) -> str:
     if outcome == "WIN" and exit_reason == "TAKE_PROFIT":
@@ -3062,14 +3076,43 @@ def _brain_exit_reason(exit_price: float, decision: Dict[str, Any]) -> str:
     return "MANUAL_OR_TRAIL"
 
 
+_PREV_POSITIONS_CACHE = {}
+
 async def _brain_evaluation_loop() -> None:
     """Match executed AI decisions to closed MT5 positions and record self-evaluations."""
-    global BRAIN_LOOP_HEARTBEAT
+    global BRAIN_LOOP_HEARTBEAT, _PREV_POSITIONS_CACHE
     while True:
         try:
             BRAIN_LOOP_HEARTBEAT["last_run"] = datetime.now(timezone.utc).isoformat()
             BRAIN_LOOP_HEARTBEAT["cycles"] += 1
             if ensure_mt5_connected():
+                # 1. Phat hien doi SL/TP
+                try:
+                    current_positions = mt5.positions_get(symbol=EXECUTION_SYMBOL) or []
+                    curr_map = {pos.ticket: pos for pos in current_positions}
+                    if _PREV_POSITIONS_CACHE:
+                        for ticket, new_pos in curr_map.items():
+                            if ticket in _PREV_POSITIONS_CACHE:
+                                old_pos = _PREV_POSITIONS_CACHE[ticket]
+                                new_sl = float(new_pos.sl)
+                                old_sl = float(old_pos.sl)
+                                new_tp = float(new_pos.tp)
+                                old_tp = float(old_pos.tp)
+                                if abs(new_sl - old_sl) > 0.001 or abs(new_tp - old_tp) > 0.001:
+                                    sl_change = f"SL: {old_sl:.2f} -> {new_sl:.2f}" if abs(new_sl - old_sl) > 0.001 else ""
+                                    tp_change = f"TP: {old_tp:.2f} -> {new_tp:.2f}" if abs(new_tp - old_tp) > 0.001 else ""
+                                    changes = " | ".join(filter(None, [sl_change, tp_change]))
+                                    action_str = "BUY" if new_pos.type == 0 else "SELL"
+                                    msg = (
+                                        f"[AUTO TRADE] Báo cáo anh Tú: Phát hiện dời Stop Loss/Take Profit cho vị thế "
+                                        f"{action_str} #{ticket} ({new_pos.volume} lot): {changes} thành công."
+                                    )
+                                    append_chat_message("ai", msg)
+                                    send_telegram_alert(f"<b>[SL/TP UPDATE]</b>\n{msg}")
+                    _PREV_POSITIONS_CACHE = curr_map
+                except Exception as pos_err:
+                    logger.error(f"Error checking position adjustments: {pos_err}")
+
                 pending = BRAIN.pending_executed_decisions()
                 if pending:
                     open_tickets = {int(position.ticket) for position in (mt5.positions_get() or [])}
