@@ -235,17 +235,12 @@ Chọn đúng environment: **Production** phải có giá trị; Preview/Develop
 - Nếu đặt `NEXT_PUBLIC_ATE_API_ORIGIN=http://<PUBLIC_IP>:80`, browser gọi **trực tiếp** IP công khai từ trang HTTPS: phải có **HTTPS** và CORS trên FastAPI mới được (rủi ro hơn).
 - Nếu đặt `NEXT_PUBLIC_ATE_API_ORIGIN=https://...vercel.app/api/v1` → **Sai double-prefix**: trở thành `/api/v1/api/status` → 404 (đã test 404).
 
-### 6.3 Frontend "backend" via `/backend` (nếu boss muốn)
+### 6.3 Định tuyến Backend qua `/backend`
 
-Muốn dịch vụ backend hiện dưới path `/backend` thay vì `/api`, thêm `vercel.json` và/dùng rewrite thứ 2:
-```json
-{
-  "rewrites": [
-    { "source": "/backend/:path*", "destination": "/api/:path*" }
-  ]
-}
-```
-(không bắt buộc; mặc định chuẩn là namespace `/api`).
+Next.js đã được cấu hình rewrite trực tiếp trong [next.config.ts](file:///c:/Users/KIMPC/AppData/Roaming/MetaQuotes/Terminal/C3DCCD4DFDD81FF8F00FFC310CAC0FD8/MQL5/Experts/tradeAI/web/next.config.ts) để chuyển tiếp `/backend/:path*` sang `${backendUrl}/api/:path*`. 
+Nhờ vậy:
+- Mọi request từ trình duyệt tới `https://autonomous-trading-engine.vercel.app/backend/...` sẽ tự động chuyển tiếp tới backend cục bộ của chủ tịch (thay thế cho `/api/...` nếu muốn).
+- Chủ tịch không cần tạo file `vercel.json` thủ công, tất cả đã được cấu hình sẵn trong project.
 
 ---
 
