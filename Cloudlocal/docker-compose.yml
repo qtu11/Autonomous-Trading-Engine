@@ -12,6 +12,8 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./volumes/logs/nginx:/var/log/nginx
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       - nextjs
       - fastapi
