@@ -1752,6 +1752,7 @@ BRAIN_LOOP_HEARTBEAT = {"last_run": None, "cycles": 0, "last_error": None}
 
 # Tracks the most recent EA telemetry push so the dashboard can show EA liveness.
 _LAST_EA_HEARTBEAT: Optional[datetime] = None
+_LAST_EA_TELEMETRY: Optional[dict] = None
 EA_HEARTBEAT_STALE_SECONDS = 10
 
 
@@ -1768,8 +1769,9 @@ class TelemetryPayload(BaseModel):
 
 @app.post("/api/telemetry", dependencies=[Depends(require_bridge_token)])
 async def receive_telemetry(payload: TelemetryPayload):
-    global _LAST_EA_HEARTBEAT
+    global _LAST_EA_HEARTBEAT, _LAST_EA_TELEMETRY
     _LAST_EA_HEARTBEAT = datetime.now(timezone.utc)
+    _LAST_EA_TELEMETRY = payload.model_dump()
     log_event(
         LogEvent.EA_HEARTBEAT,
         component="ea-bridge",

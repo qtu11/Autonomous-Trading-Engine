@@ -1,6 +1,6 @@
 # PHÂN TÍCH KỸ THUẬT VÀ MA TRẬN TÍN HIỆU ĐỊNH LƯỢNG (TECHNICAL ANALYSIS & SIGNAL CONFLUENCE MATRIX)
 
-Dành cho **Bộ não GPT-5.6 Copilot** & **Chủ tịch anh Tú**.
+Dành cho **Bộ não AI** & **Chủ tịch anh Tú**.
 
 ---
 

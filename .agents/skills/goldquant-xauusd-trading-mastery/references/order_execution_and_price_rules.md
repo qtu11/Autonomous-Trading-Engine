@@ -1,6 +1,6 @@
 # QUY TẮC ĐẶT LỆNH VÀ THỰC THI GIÁ (ORDER PLACEMENT & PRICE EXECUTION PROTOCOL)
 
-Dành cho **Bộ não GPT-5.6 Copilot** & **Chủ tịch anh Tú**.
+Dành cho **Bộ não AI** & **Chủ tịch anh Tú**.
 
 ---
 
