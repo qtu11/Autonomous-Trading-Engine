@@ -1,0 +1,261 @@
+version: '3.8'
+
+services:
+  # Reverse Proxy - Nginx (binds to host network for public IP access)
+  nginx:
+    image: nginx:alpine
+    container_name: cloudlocal-nginx
+    network_mode: host
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./volumes/logs/nginx:/var/log/nginx
+    depends_on:
+      - nextjs
+      - fastapi
+      - ai-engine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # Next.js Frontend
+  nextjs:
+    build:
+      context: ../web
+      dockerfile: ../Cloudlocal/nextjs/Dockerfile
+    container_name: cloudlocal-nextjs
+    network_mode: host
+    environment:
+      - NODE_ENV=production
+      # API base WITHOUT /api/v1 suffix - the frontend appends /api/... itself.
+      # http://localhost:8080 -> nginx /api/ -> FastAPI 8005
+      - NEXT_PUBLIC_ATE_API_ORIGIN=http://localhost:8080
+      - NEXT_PUBLIC_QUANTAI_API_ORIGIN=http://localhost:8080
+      - ATE_BACKEND_URL=http://localhost:8080
+    volumes:
+      - ../web:/app
+      - /app/node_modules
+      - ./volumes/logs/nextjs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # FastAPI Backend (Main API Server) - binds to 0.0.0.0:8005
+  fastapi:
+    build:
+      context: ../dashboard
+      dockerfile: ../Cloudlocal/fastapi/Dockerfile
+    container_name: cloudlocal-fastapi
+    network_mode: host
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ATE_EXECUTION_MODE=DEMO
+      - QUANTAI_DASHBOARD_PORT=8005
+      - QUANTAI_DASHBOARD_HOST=0.0.0.0
+      - ATE_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://autonomous-trading-engine.vercel.app,http://${PUBLIC_IP}:8080
+      - QUANTAI_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://autonomous-trading-engine.vercel.app,http://${PUBLIC_IP}:8080
+      - POSTGRES_HOST=localhost
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=quantai
+      - POSTGRES_USER=quantai
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-quantai_secure_2024}
+      - REDIS_HOST=localhost
+      - REDIS_PORT=6379
+      - MT5_LOGIN=${MT5_LOGIN}
+      - MT5_PASSWORD=${MT5_PASSWORD}
+      - MT5_SERVER=${MT5_SERVER}
+      - MT5_PATH=${MT5_PATH}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - QUANTAI_AI_MODEL=${QUANTAI_AI_MODEL:-kimi-k3}
+      - PUBLIC_IP=${PUBLIC_IP}
+      - ATE_BACKEND_URL=http://${PUBLIC_IP}:8080
+      - QUANTAI_LOG_DIR=/app/logs
+    volumes:
+      - ../dashboard:/app
+      - ./volumes/logs/fastapi:/app/logs
+      - ./volumes/models:/app/models
+      - ./volumes/history:/app/history
+      - ./volumes/config:/app/config
+      - /mnt/c/Users/KIMPC/AppData/Roaming/MetaQuotes/Terminal/C3DCCD4DFDD81FF8F00FFC310CAC0FD8/MQL5/Experts:/mnt/mt5:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
+
+  # AI Engine Service
+  ai-engine:
+    build:
+      context: ../dashboard
+      dockerfile: ../Cloudlocal/ai-engine/Dockerfile
+    container_name: cloudlocal-ai-engine
+    network_mode: host
+    environment:
+      - PYTHONUNBUFFERED=1
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ZPLAY_API_KEY=${ZPLAY_API_KEY}
+      - QUANTAI_AI_MODEL=${QUANTAI_AI_MODEL:-kimi-k3}
+      - AI_ENGINE_PORT=8006
+      - REDIS_HOST=localhost
+      - REDIS_PORT=6379
+    volumes:
+      - ../dashboard:/app
+      - ./ai-engine/app:/app/ai_engine:ro
+      - ./volumes/models:/app/models
+      - ./volumes/logs/ai-engine:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # Python Bridge to MT5 (Windows Host) - Direct connection to MT5
+  # NOTE: MT5 pip package on Linux cannot talk to a Windows-native terminal.
+  # This container is an API/docs/health gateway; the real MT5 execution is
+  # done by the MQL5 EA (QuantAI_XAUUSD.mq5) via WebRequest, or by running
+  # python-bridge/app/main.py natively on the Windows host.
+  python-bridge:
+    build:
+      context: ../dashboard
+      dockerfile: ../Cloudlocal/python-bridge/Dockerfile
+    container_name: cloudlocal-python-bridge
+    network_mode: host
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MT5_LOGIN=${MT5_LOGIN}
+      - MT5_PASSWORD=${MT5_PASSWORD}
+      - MT5_SERVER=${MT5_SERVER}
+      - MT5_PATH=C:/Program Files/MetaTrader 5/terminal64.exe
+      - BRIDGE_PORT=8007
+      - FASTAPI_URL=http://localhost:8005
+      - QUANTAI_BRIDGE_TOKEN=${QUANTAI_BRIDGE_TOKEN}
+      - PUBLIC_IP=${PUBLIC_IP}
+    volumes:
+      - ../dashboard:/app
+      - ./python-bridge/app:/app/bridge:ro
+      - ./volumes/logs/python-bridge:/app/logs
+      - ./volumes/config:/app/config
+    depends_on:
+      - fastapi
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8007/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: cloudlocal-postgres
+    network_mode: host
+    environment:
+      - POSTGRES_DB=quantai
+      - POSTGRES_USER=quantai
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-quantai_secure_2024}
+      - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+    volumes:
+      - ./volumes/postgres:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quantai -d quantai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 512M
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: cloudlocal-redis
+    network_mode: host
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru --bind 0.0.0.0
+    volumes:
+      - ./volumes/redis:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  # Port mapping helper - exposes internal ports to public IP
+  port-exposer:
+    image: alpine/socat
+    container_name: cloudlocal-port-exposer
+    network_mode: host
+    command: >
+      sh -c "
+        socat TCP-LISTEN:8080,fork,reuseaddr TCP:localhost:80 &
+        socat TCP-LISTEN:8005,fork,reuseaddr TCP:localhost:8005 &
+        socat TCP-LISTEN:8006,fork,reuseaddr TCP:localhost:8006 &
+        socat TCP-LISTEN:8007,fork,reuseaddr TCP:localhost:8007 &
+        wait
+      "
+    depends_on:
+      - nginx
+      - fastapi
+      - ai-engine
+      - python-bridge
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+
+networks:
+  default:
+    external: true
+    name: host

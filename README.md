@@ -604,20 +604,21 @@ Sau đó restart backend nếu biến được load khi process khởi động, 
 
 ---
 
-## 🌐 Đường truyền Tunnel & Định tuyến Vercel Cloud (Unified Cloud Routing)
+## 🌐 Định tuyến Vercel Cloud → Backend Cloudlocal (Unified Cloud Routing)
 
-Để kết nối Next.js Website trên Vercel với phần mềm MT5 local mà không cần mở port router, hệ thống tích hợp sẵn trình cài đặt tự động **Ngrok Tunnel**:
+Kết nối Next.js Website trên Vercel với phần mềm MT5 local **không dùng ngrok/Cloudflare Tunnel** — chỉ dùng IP công khai + port-forward cổng 80 vào nginx Docker (cloudlocal):
 
 ### 1. Cách thức hoạt động
-- Khi khởi chạy hệ thống bằng `start.ps1`, script sẽ tự động kiểm tra, tải và giải nén `ngrok.exe` nếu chưa có.
-- Ngrok sẽ mở một cổng tunnel bảo mật kết nối từ Internet về cổng FastAPI backend (`8005`) của chủ tịch.
-- URL Tunnel công khai của Ngrok (ví dụ: `https://xxxx.ngrok-free.app`) sẽ được hiển thị trên console.
+- `Cloudlocal/docker-compose.yml` dựng nginx (:80) → FastAPI backend (8005), ai-engine (8006), python-bridge (8007), postgres, redis trên host network.
+- Router của chủ tịch forward cổng `80` về máy; Windows firewall mở cổng 80 (xem `Cloudlocal/scripts/setup-firewall-portforward.ps1`).
+- Vercel rewrite `/api/:path*` sang `${ATE_BACKEND_URL}/api/:path*` (không tạo vòng lặp vì `ATE_BACKEND_URL` trỏ về IP công khai, không trỏ về chính vercel.app).
 
 ### 2. Cấu hình biến môi trường
-- **Cấu hình Local (`.env`)**: Điền authtoken của ngrok vào biến `NGROK_AUTHTOKEN` để tunnel hoạt động ổn định và lâu dài.
+- **Cấu hình Local (`Cloudlocal/.env`)**: `PUBLIC_IP=<IP/DDNS công khai>`, `ATE_BACKEND_URL=http://127.0.0.1:8005` (cho dev local) hoặc `http://<PUBLIC_IP>:80` (cho Vercel/MT5).
 - **Cấu hình trên Vercel Settings**:
-  - Đặt biến môi trường `ATE_BACKEND_URL` thành địa chỉ URL Tunnel công khai của Ngrok (ví dụ: `https://xxxx.ngrok-free.app`).
-  - Next.js trên Vercel sẽ tự động rewrite toàn bộ request `/api/v1/:path*` sang `${ATE_BACKEND_URL}/api/v1/:path*`, cho phép website gửi tín hiệu trực tiếp về MT5 của chủ tịch mà không bị lỗi vòng lặp.
+  - `ATE_BACKEND_URL` = `http://<PUBLIC_IP>:80` (KHÔNG kèm `/api/v1`).
+  - `NEXT_PUBLIC_ATE_API_ORIGIN`, `NEXT_PUBLIC_QUANTAI_API_ORIGIN` = (trống) → browser gọi same-origin `/api/*`, Next rewrite về backend.
+  - MT5 EA dùng trực tiếp `https://autonomous-trading-engine.vercel.app/api/v1/`.
 
 ---
 
