@@ -435,14 +435,14 @@ export default function LoginPage() {
             <label style={{
               display: 'block',
               color: '#94a3b8',
-              fontSize: '10px',
+              fontSize: '11px',
               fontWeight: 800,
               letterSpacing: '1px',
               marginBottom: '8px',
               textTransform: 'uppercase',
               fontFamily: "'JetBrains Mono', monospace",
             }}>
-              Operator Email / Identity
+              Tên Đăng Nhập / Email Quản Trị
             </label>
             <div style={{ position: 'relative' }}>
               <input
@@ -451,7 +451,7 @@ export default function LoginPage() {
                 onChange={(e) => setLogin(e.target.value)}
                 onFocus={() => setFocusedField('login')}
                 onBlur={() => setFocusedField(null)}
-                placeholder="qtusdev@quanttrading.ai"
+                placeholder="Nhập tài khoản của bạn..."
                 required
                 style={{
                   width: '100%',
@@ -477,14 +477,14 @@ export default function LoginPage() {
             <label style={{
               display: 'block',
               color: '#94a3b8',
-              fontSize: '10px',
+              fontSize: '11px',
               fontWeight: 800,
               letterSpacing: '1px',
               marginBottom: '8px',
               textTransform: 'uppercase',
               fontFamily: "'JetBrains Mono', monospace",
             }}>
-              Operator Security Key
+              Mật Khẩu Quản Trị
             </label>
             <div style={{ position: 'relative' }}>
               <input
@@ -493,7 +493,7 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 onFocus={() => setFocusedField('password')}
                 onBlur={() => setFocusedField(null)}
-                placeholder="••••••••••••"
+                placeholder="Nhập mật khẩu của bạn..."
                 required
                 style={{
                   width: '100%',
