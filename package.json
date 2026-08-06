@@ -1,0 +1,16 @@
+{
+  "name": "autonomous-trading-engine-root",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "web"
+  ],
+  "scripts": {
+    "build": "npm --prefix web run build",
+    "dev": "npm --prefix web run dev",
+    "start": "npm --prefix web run start"
+  },
+  "dependencies": {
+    "next": "^15.0.0"
+  }
+}
