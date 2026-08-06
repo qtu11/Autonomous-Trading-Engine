@@ -1,136 +1,105 @@
 # Autonomous Trading Engine (ATE) - By QTusdev (Nguyễn Quang Tú)
 
 > **Tác giả / Lead Developer**: Nguyễn Quang Tú (QTusdev)  
-> **GitHub**: [https://github.com/qtu11](https://github.com/qtu11)  
-> **Trạng thái an toàn mặc định: `DISABLED`.** Đây là hệ thống nghiên cứu định lượng, quan sát thị trường XAUUSD, đánh giá chiến lược và điều phối lệnh **demo có kiểm soát** cho MetaTrader 5.
+> **GitHub**: [https://github.com/qtu11/Autonomous-Trading-Engine](https://github.com/qtu11/Autonomous-Trading-Engine)  
+> **Trạng thái an toàn mặc định: `DISABLED`.** Hệ thống giao dịch tự động định lượng đa mô hình AI (Multi-AI Quantitative Trading Engine) & MT5 Execution Bridge dành riêng cho XAUUSD (Gold).
 
-Autonomous Trading Engine (ATE) gồm dashboard Next.js, backend FastAPI, chiến lược deterministic, RiskGate fail-closed, SQLite command ledger và MQL5 EA bridge. Thiết kế tập trung vào: dữ liệu có nguồn gốc rõ ràng, phân tách quyết định–rủi ro–thực thi, idempotency và khả năng audit.
-
----
-
-## Mục lục
-
-- [Phạm vi và nguyên tắc an toàn](#phạm-vi-và-nguyên-tắc-an-toàn)
-- [Kiến trúc](#kiến-trúc)
-- [Cấu trúc dự án](#cấu-trúc-dự-án)
-- [Yêu cầu môi trường](#yêu-cầu-môi-trường)
-- [Cài đặt và khởi động](#cài-đặt-và-khởi-động)
-- [Cấu hình](#cấu-hình)
-- [Chế độ vận hành](#chế-độ-vận-hành)
-- [Quy trình quyết định và thực thi](#quy-trình-quyết-định-và-thực-thi)
-- [RiskGate](#riskgate)
-- [API](#api)
-- [EA MQL5](#ea-mql5)
-- [Backtest và KPI](#backtest-và-kpi)
-- [Kiểm thử](#kiểm-thử)
-- [Vận hành demo có kiểm soát](#vận-hành-demo-có-kiểm-soát)
-- [Bảo mật](#bảo-mật)
-- [Khắc phục sự cố](#khắc-phục-sự-cố)
-- [Giới hạn hiện tại](#giới-hạn-hiện-tại)
+Autonomous Trading Engine (ATE) là một nền tảng giao dịch định lượng cao cấp tích hợp **Multi-AI Engine (OpenAI GPT-5.6 / o-series, Anthropic Claude 5, Google Gemini 3.6, DeepSeek V4 Pro, xAI Grok 4.5, Kimi K3, Qwen3.8 Max)**, **Deterministic Confluence Strategy Core**, **Multi-layer Fail-Closed RiskGate**, **SQLite Audit Command Ledger** và **Pure MQL5 EA Execution Bridge (`ATE_XAUUSD.mq5`)** trên MetaTrader 5 (MT5).
 
 ---
 
-## Phạm vi và nguyên tắc an toàn
+## ⚡ Tính năng nổi bật & Kiến trúc lõi
 
-### Điều hệ thống làm
+### 1. Multi-AI Provider & Model Engine (2026 Ready)
+- **Đa dạng họ mô hình AI hàng đầu**:
+  - **OpenAI**: `GPT-5.6 Sol ⭐ (Flagship 07/2026)`, `GPT-5.6 Terra`, `GPT-5.6 Luna`, `GPT-5.5`, `GPT-5.4`, `o3`, `o3-pro`, `o4-mini`, `GPT-4.1`, `GPT-4o`, `GPT-4o Mini`.
+  - **Anthropic**: `Claude Fable 5 ⭐ (Flagship)`, `Claude Mythos 5`, `Claude Opus 5`, `Claude Sonnet 5`, `Claude 4.8`, `Claude 3.7 Sonnet`, `Claude 3.5 Sonnet`.
+  - **Google DeepMind**: `Gemini 3.6 Flash ⭐ (Mới nhất)`, `Gemini 3.5 Flash`, `Gemini 3.1 Pro`, `Gemini 3 Pro`, `Gemini 2.5 Pro`, `Gemini 2.0 Flash`, `Gemini 1.5 Pro`.
+  - **DeepSeek**: `DeepSeek V4 Pro ⭐`, `DeepSeek V4 Flash (0731)`, `DeepSeek V3.2`, `DeepSeek V3.1`, `DeepSeek V3`, `DeepSeek R1 (Thinking Mode)`.
+  - **xAI (Grok)**: `Grok 4.5 ⭐ (Flagship)`, `Grok 4`, `Grok 4.3`, `Grok 4.20`, `Grok 4 Fast`, `Grok 3`.
+  - **Moonshot AI & Alibaba Qwen**: `Kimi K3 ⭐`, `Kimi K2.6`, `Kimi K2 Thinking`, `Qwen3.8 Max ⭐`, `Qwen3 Thinking/Coder/VL/235B`.
+  - **Zhipu GLM, MiniMax, Meta Llama, Mistral, Open Source**: `GLM-5.2 ⭐`, `MiniMax M3 ⭐`, `Llama 4 Maverick ⭐`, `Mistral Magistral Medium ⭐`, `Codestral`, `Microsoft Phi-4`, `Cohere Command A`, `AI21 Jamba Large`, `NVIDIA Nemotron Ultra`, `IBM Granite 4`, `Gemma 3`.
+- **Tùy Chọn Custom Model Name**: Cho phép gõ bất kỳ chuỗi model ID tùy chỉnh nào.
+- **Tích Hợp API Gateway Router**: Kết nối trực tiếp đến các router trung gian (`OpenRouter`, `Together AI`, `SiliconFlow`, `Groq`, `Fireworks AI`, `Cerebras`, `Cloudflare Workers AI`, `GitHub Models`, `DeepInfra`, v.v.).
+- **Auto Token Failover (Tự Động Đổi Key Khi Hết Token)**: Khi mô hình ưu tiên gặp lỗi `429 Too Many Requests` / hết quota / timeout, hệ thống tự động xoay vòng sang key/provider tiếp theo trong hàng đợi không gián đoạn luồng xử lý (`User Custom Gateway` → `User Custom Model` → `Gemini` → `OpenAI` → `FlatKey`).
 
-- Hiển thị telemetry, candles, vị thế và lịch sử từ MT5 khi dữ liệu có sẵn.
-- Tạo proposal chiến lược `BUY`, `SELL` hoặc `NO_TRADE`.
-- Đánh giá proposal qua RiskGate trước khi bất kỳ command nào được tạo.
-- Lưu lifecycle command/receipt trong SQLite WAL để chống lệnh trùng.
-- Cho phép một luồng **demo-only, operator-only** tạo command sau nhiều điều kiện xác nhận.
-- Để EA MQL5 là thành phần duy nhất có quyền gọi `CTrade`.
+### 2. RiskGate & Bảo Vệ Tài Khoản Lớp Kép (Defense-in-Depth Fail-Closed)
+- **Kiểm soát rủi ro nghiêm ngặt**:
+  - Công thức tính khối lượng lệnh chuẩn 1% Risk / Account Lot formula.
+  - Khóa chế độ `DISABLED`, `DEMO`, `LIVE` bằng nhiều lớp kiểm tra độc lập (`ATE_LIVE_ARMED=true`, kill switch, account allowlist).
+  - Tự động dừng giao dịch khi phát hiện nến sụt giảm peak-to-trough (Max Drawdown Limit), dãn spread (Max Spread Cap), hoặc chuỗi thua liên tiếp (Consecutive Loss Mitigation).
 
-### Tính năng realtime & vận hành (cập nhật mới)
+### 3. Giao Diện Bloomberg Trading Terminal Modern Web UI
+- Giao diện Next.js App Router, Bloomberg Terminal dark theme, glassmorphism hiệu ứng mượt mà.
+- Bảng điều khiển Control Center (`[CFG]`) tập trung quản lý tài khoản MT5, cấu hình rủi ro, kết nối Telegram bot realtime alert và thiết lập AI Engine.
 
-- **WebSocket realtime** tại `ws://127.0.0.1:8005/ws/stream`: dashboard nhận telemetry ~1s qua socket (thay polling HTTP), tự reconnect với backoff; HTTP vẫn là bootstrap + fallback.
-- **Structured logging** JSON-per-line tại `logs/quantai_YYYYMMDD.log`: ghi đầy đủ sự kiện `APP_STARTED, MT5_CONNECTED/RECONNECT, WS_CONNECTED, AI_REQUEST/RESPONSE, SIGNAL_GENERATED, RISK_APPROVED/REJECTED, ORDER_SENT/FILLED/FAILED, SL_MODIFIED, TP_MODIFIED, POSITION_CLOSED, TRADE_LATENCY, EXCEPTION`. Đọc qua `GET /api/logs` (operator token).
-- **Economic Calendar thật** từ MT5 built-in (`CalendarValueHistory`): EA đẩy lên `POST /api/v1/bridge/calendar`, backend phục vụ từ cache — không còn dữ liệu hard-code. Khi chưa có push, trạng thái là `CALENDAR_UNAVAILABLE` (không bịa).
-- **Full trade actions**: ngoài `BUY/SELL/CLOSE_ALL`, hỗ trợ `MODIFY_SLTP` (sửa SL/TP), `CLOSE_POSITION` (đóng lệnh lẻ theo ticket), `CANCEL_PENDING` (hủy pending order) — tất cả qua command ledger + EA.
-- **EA auto-reconnect**: watchdog phát hiện mất kết nối terminal, backoff tự động, heartbeat trong telemetry để dashboard hiển thị trạng thái EA online/stale.
-- **AI Auto-Loop** (mặc định OFF): vòng lặp `AI → RiskGate → Execution` tự động mỗi `QUANTAI_AI_LOOP_SECONDS` (mặc định 120s), chỉ chạy khi readiness READY; bật/tắt từ Control Center.
-- **LIVE mode safety path**: LIVE bị khóa nhiều lớp độc lập (`QUANTAI_LIVE_ARMED=true` tường minh + `QUANTAI_ENABLE_TRADING=true` + kill-switch OFF + account `trade_mode=REAL`). Một biến `=ENABLE` lỏng lẻo **không** arm được LIVE.
+### 4. Realtime Stream & Command Ledger
+- **WebSocket Hub**: Truyền dữ liệu telemetry ~1s thời gian thực đến giao diện web client qua `ws://127.0.0.1:8005/ws/stream`.
+- **SQLite WAL Command Ledger**: Đảm bảo tính chống lặp lệnh (Idempotency), ghi lại toàn bộ nhật ký giao dịch và lệnh điều phối.
 
-### Điều hệ thống không làm
-
-- Không tự động bật giao dịch khi cài đặt mới.
-- Không cho browser/dashboard gọi broker trực tiếp.
-- Không để Python backend gọi `mt5.order_send()`.
-- Không trả ticket, P/L, KPI hoặc kết quả “thành công” giả khi MT5/API không khả dụng.
-- Không xem AI/copilot là execution authority.
-- Không cam kết xác suất thắng hoặc lợi nhuận.
-
-### Nguyên tắc fail-closed
-
-Khi token thiếu, MT5 mất kết nối, market data stale/không hợp lệ, RiskGate từ chối, account sai identity, kill switch bật, command hết hạn hoặc EA validation thất bại, hệ thống **không mở lệnh**.
+### 5. Pure MQL5 EA Execution Bridge (`ATE_XAUUSD.mq5`)
+- EA MQL5 là thành phần duy nhất có quyền thực thi lệnh `CTrade` trên MT5.
+- Tự động re-validate thông số broker, kiểm tra spread, nến bão tin tức trước khi khớp lệnh.
 
 ---
 
-## Kiến trúc
+## 📐 Kiến trúc dòng dữ liệu (Data Architecture)
 
 ```text
-┌──────────────────────────────┐
-│ Next.js dashboard (web/)     │
-│ - Read-only browser actions  │
-│ - Truthful data states       │
-└──────────────┬───────────────┘
-               │ HTTP localhost
-┌──────────────▼────────────────────────────────────────────────────┐
-│ FastAPI backend (dashboard/server.py)                              │
-│                                                                    │
-│  MT5 read gateway → Strategy Core → RiskGate → CommandStore        │
-│                        │              │             │              │
-│                        │              │             └─ SQLite WAL  │
-│                        │              └─ reject / approval reasons │
-│                        └─ BUY | SELL | NO_TRADE                    │
-└──────────────┬────────────────────────────────────────────────────┘
-               │ authenticated local bridge API
-┌──────────────▼────────────────────────────────────────────────────┐
-│ QuantAI_XAUUSD.mq5                                                 │
-│ - Claim one leased command                                         │
-│ - Revalidate broker/account/symbol/volume/stops                    │
-│ - Execute only after all local guards pass                         │
-│ - Post an idempotent receipt                                       │
-└───────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────┐
+│ Next.js Web Terminal (web/)                            │
+│ - Bloomberg Dark UI & Control Center [CFG]             │
+│ - Multi-AI Model & API Gateway Configurator            │
+└───────────────────────────┬────────────────────────────┘
+                            │ WebSocket / REST API
+┌───────────────────────────▼────────────────────────────┐
+│ FastAPI Backend Engine (dashboard/server.py)           │
+│                                                        │
+│ Multi-AI Router → Strategy Core → RiskGate → CommandStore
+│     │                 │              │            │    │
+│ (Failover)      (Proposals)     (Fail-Closed) SQLite WAL
+└───────────────────────────┬────────────────────────────┘
+                            │ Bearer Auth Local Bridge API
+┌───────────────────────────▼────────────────────────────┐
+│ ATE_XAUUSD.mq5 (MQL5 EA Bridge)                        │
+│ - Pure broker execution authority via CTrade           │
+│ - Re-validates account, symbol, spread & news caps     │
+└────────────────────────────────────────────────────────┘
 ```
 
-> Lưu ý: ký tự `n` sau đường khung backend trong sơ đồ trên không mang ý nghĩa cấu hình; sơ đồ minh hoạ dòng dữ liệu logic.
-
-### Authority boundaries
-
-| Thành phần | Quyền hạn | Không được phép |
-|---|---|---|
-| Browser dashboard | Hiển thị, refresh, copilot analysis | Không tạo broker order trực tiếp |
-| FastAPI | Đọc MT5, tạo proposal, đánh giá risk, lưu command | Không gọi `mt5.order_send()` |
-| RiskGate | Duy nhất approve/reject proposal thành command intent | Không giao dịch trực tiếp |
-| CommandStore | Lưu/audit/lease command và receipt | Không ra quyết định trading |
-| MQL5 EA | Broker execution authority | Không tin command nếu validation local thất bại |
-
 ---
 
-## Cấu trúc dự án
+## 📁 Cấu trúc dự án
 
 ```text
-tradeAI/
-├── QuantAI_XAUUSD.mq5       # EA MQL5: authenticated command bridge
+Autonomous-Trading-Engine/
+├── ATE_XAUUSD.mq5            # MQL5 EA Bridge mới nhất cho MetaTrader 5
+├── QuantAI_XAUUSD.mq5        # MQL5 EA Legacy Bridge
 ├── dashboard/
-│   ├── server.py            # FastAPI, MT5 read path, protected bridge routes
-│   ├── command_store.py     # SQLite WAL idempotent command ledger
-│   ├── strategy_core.py     # Pure deterministic BUY/SELL/NO_TRADE proposals
-│   ├── risk_gate.py         # Fail-closed policy evaluation & position sizing
-│   ├── risk_profiles.py     # Profile risk theo từng symbol/cặp
-│   └── performance.py       # KPI từ closed trades đã lọc
-├── backtest.py              # Offline deterministic bar-close backtest
+│   ├── server.py             # FastAPI backend API, WebSocket Hub, Multi-AI Engine
+│   ├── command_store.py      # SQLite WAL command ledger
+│   ├── strategy_core.py      # Deterministic strategy proposals (BUY/SELL/NO_TRADE)
+│   ├── risk_gate.py          # Multi-layer fail-closed policy evaluation
+│   ├── risk_profiles.py      # Risk profiles per symbol/instrument
+│   ├── logging_config.py     # JSON-per-line structured logging system
+│   ├── performance.py        # Win-rate, drawdown & KPI calculator
+│   └── brain.py              # AI decision evaluation engine
+├── backtest/                 # Backtest scripts & evaluation metrics
 ├── tests/
-│   ├── test_quantai_core.py # Unit/regression tests
-│   └── fixtures/            # Dữ liệu test CSV
-├── web/
-│   ├── app/page.tsx         # Dashboard
-│   ├── lib/api.ts           # Typed API contracts
-│   └── package.json         # Next.js scripts/dependencies
-├── .env.example             # Mẫu biến môi trường, không chứa secret
-├── .gitignore
-├── start.bat                # Tiện ích chạy backend + dashboard local
+│   ├── test_quantai_core.py  # ATE core unit & integration test suite (ATECoreTests)
+│   ├── test_new_modules.py   # Unit tests for logging, WebSocket, calendar, modes
+│   └── fixtures/             # Sample CSV historical bar data
+├── web/                      # Next.js Web Terminal Frontend
+│   ├── app/
+│   │   ├── page.tsx          # Main Bloomberg Trading Desk dashboard
+│   │   ├── login/page.tsx    # Admin login & Firebase Auth persistent session
+│   │   └── components/       # ControlCenter, EconomicCalendar, etc.
+│   ├── lib/api.ts            # Typed API client contracts
+│   └── package.json          # Next.js frontend dependencies
+├── .env.example              # Template cho tệp cấu hình môi trường (.env)
+├── .gitignore                # Quản lý git exclude an toàn (không chứa secret)
+├── start.ps1                 # Single-command full-stack launcher script (PowerShell)
+├── start.bat                 # Single-command launcher script (Batch)
 └── README.md
 ```
 
