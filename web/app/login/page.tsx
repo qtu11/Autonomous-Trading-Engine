@@ -3,8 +3,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
-// Backend URL - dùng biến môi trường hoặc IP WAN của máy
-const BACKEND_URL = process.env.NEXT_PUBLIC_ATE_BACKEND_URL || 'http://113.173.192.226:8848';
+// Sử dụng Next.js API routes - proxy đến backend
+const API_BASE = '';
 
 // Mock Live Market Ticker Data for Institutional Stock/Gold Desk Visuals
 const TICKER_ITEMS = [
@@ -79,7 +79,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const endpoint = `${BACKEND_URL}/api/auth/login`;
+      const endpoint = `${API_BASE}/api/auth/login`;
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

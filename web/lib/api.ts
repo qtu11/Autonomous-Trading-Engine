@@ -199,8 +199,8 @@ export interface ControlCenterStatus {
   telegram?: { bot_token: string; chat_id: string; enabled: boolean };
 }
 
-const rawOrigin = process.env.NEXT_PUBLIC_ATE_API_ORIGIN || process.env.NEXT_PUBLIC_QUANTAI_API_ORIGIN || '';
-const API_BASE = rawOrigin.replace(/\/api\/?$/, '').replace(/\/$/, '');
+// Sử dụng relative path - Next.js API routes sẽ proxy đến backend
+const API_BASE = '';
 
 export function adminAuthHeaders(): Record<string, string> {
   try {
