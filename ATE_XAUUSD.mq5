@@ -15,15 +15,15 @@ input string   InpApiUrl           = "https://autonomous-trading-engine.vercel.a
 input ulong    InpMagicNumber      = 888999;                 // EA Magic Number
 input string   InpSymbol           = "XAUUSDm";              // Trading Symbol (Blank for auto-detect chart)
 input int      InpPollIntervalSec  = 1;                      // AI Protocol Poll Interval (seconds)
-input bool     InpExecutionEnabled = true;                 // Fail closed until the command protocol is upgraded
-input string   InpBridgeToken      = "20022007@Tu";                    // Required Bearer token for protected bridge endpoints
+input bool     InpExecutionEnabled = false;                // Fail closed: execution starts DISABLED unless explicitly enabled
+input string   InpBridgeToken      = "";                   // Required Bearer token for protected bridge endpoints (set in terminal/input params)
 input string   InpExecutorId       = "ate-ea-local";        // Unique executor identity for command leases
 input bool     InpVerifyAccount    = true;                  // Strict Account Verification (DEMO + LIVE allowlist)
 input string   InpExpectedCompany   = "Exness Technologies Ltd"; // Broker company allowlist
 input long     InpExpectedLiveLogin = 0;                    // LIVE account allowlist (0 = not configured -> LIVE refused)
 input string   InpExpectedLiveServer= "";                   // LIVE server allowlist (empty = not configured)
 input double   InpMaxSpread        = 0.50;                   // XAUUSDm raw-price spread cap
-input int      InpMaxPositions     = 1;                      // Matching symbol/magic position cap
+input int      InpMaxPositions     = 5;                     // Matching symbol/magic position cap (kept in sync with backend risk policy)
 input int      InpMaxDeviationPts  = 50;                     // Broker request deviation cap
 input int      InpCalendarIntervalSec = 300;                 // Economic calendar push interval (seconds)
 input int      InpMaxConsecutiveFailures = 5;                // Backoff threshold before slowing poll
@@ -31,6 +31,10 @@ input int      InpTelemetryIntervalSec = 5;                  // Telemetry/heartb
 input int      InpClaimIntervalSec   = 3;                    // Claim poll interval (seconds, >=1, < command TTL)
 input bool     InpNewsProtectionEnabled = true;             // Block new BUY/SELL entries around High impact USD news
 input int      InpProtectionIntervalSec = 30;               // News protection state poll interval (seconds)
+input bool     InpChartMarkupEnabled = true;               // Render AI chart markup (OB, FVG, BOS/CHoCH, swing, trendline...) on chart
+input int      InpMarkupReRenderSec  = 5;                  // Chart markup re-render interval (seconds)
+input int      InpMarkupMaxObjects   = 120;                // Markup object cap drawn per refresh
+input int      InpCandlesIntervalSec = 30;                 // Real-time live candles push interval (seconds)
 
 //--- Global Variables
 CTrade         m_trade;
@@ -39,7 +43,10 @@ datetime       m_last_calendar_push = 0;
 datetime       m_last_telemetry_sent = 0;
 datetime       m_last_claim_attempt = 0;
 datetime       m_last_protection_check = 0;
+datetime       m_last_markup_fetch = 0;
+int            m_markup_payload_md5 = 0;
 int            m_consecutive_failures = 0;
+datetime       m_last_candles_push = 0;
 string         g_symbol;
 string         g_protection_level = "none";
 int            g_protection_live_seconds = 0;
@@ -77,10 +84,10 @@ int OnInit()
    m_trade.SetDeviationInPoints(InpMaxDeviationPts);
    m_trade.SetAsyncMode(false);
    
-   if(InpPollIntervalSec < 1 || InpMagicNumber != 888999)
+   if(InpPollIntervalSec < 1)
    {
-      QuantAILog("INIT_FAILED: poll interval or magic is invalid.");
-      Print("QuantAI configuration rejected: poll interval or magic is invalid.");
+      QuantAILog("INIT_FAILED: poll interval is invalid.");
+      Print("QuantAI configuration rejected: poll interval is invalid.");
       return(INIT_PARAMETERS_INCORRECT);
    }
    if(!SymbolSelect(g_symbol, true))
@@ -173,7 +180,6 @@ bool IsValidCommand(double volume, double stopLoss, double takeProfit, string ac
    double minVolume = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
    double maxVolume = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MAX);
    double step = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_STEP);
-   int digits = (int)SymbolInfoInteger(g_symbol, SYMBOL_DIGITS);
    double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
    int stopsLevel = (int)SymbolInfoInteger(g_symbol, SYMBOL_TRADE_STOPS_LEVEL);
    int freezeLevel = (int)SymbolInfoInteger(g_symbol, SYMBOL_TRADE_FREEZE_LEVEL);
@@ -208,17 +214,39 @@ void OnTimer()
    if(!TerminalInfoInteger(TERMINAL_CONNECTED))
    {
       m_consecutive_failures++;
-      if(m_consecutive_failures >= InpMaxConsecutiveFailures)
-         PrintFormat("QuantAI reconnect watchdog: terminal offline (failures=%d). Backing off.", m_consecutive_failures);
+      if(m_consecutive_failures == 1)
+      {
+         Print("QuantAI reconnect watchdog: Terminal disconnected from broker. Attempting to reconnect...");
+      }
+      else if(m_consecutive_failures == InpMaxConsecutiveFailures)
+      {
+         PrintFormat("QuantAI reconnect watchdog: Terminal offline for %d seconds. Backing off check interval to 10 seconds.", m_consecutive_failures);
+         EventSetTimer(10);
+      }
       return; // Skip this cycle; timer fires again and retries automatically.
    }
 
-   // 1. Send Telemetry to AI Engine (also acts as the EA heartbeat) at its own cadence.
-   if(TimeLocal() - m_last_telemetry_sent >= InpTelemetryIntervalSec)
+   // Restore normal polling if connection recovered
+   if(m_consecutive_failures > 0)
    {
-      SendTelemetry();
-      m_last_telemetry_sent = TimeLocal();
+      PrintFormat("QuantAI reconnect watchdog: Terminal reconnected successfully. Restoring poll interval to %d seconds.", InpPollIntervalSec);
+      m_consecutive_failures = 0;
+      EventSetTimer(InpPollIntervalSec);
    }
+
+   // 1. Send Telemetry to AI Engine (also acts as the EA heartbeat) at its own cadence.
+    if(TimeLocal() - m_last_telemetry_sent >= InpTelemetryIntervalSec)
+    {
+       SendTelemetry();
+       m_last_telemetry_sent = TimeLocal();
+    }
+
+    // 1b. Send Live Candles to API at its own cadence.
+    if(TimeLocal() - m_last_candles_push >= InpCandlesIntervalSec)
+    {
+       SendLiveCandles();
+       m_last_candles_push = TimeLocal();
+    }
 
    // 2. Push the broker's real economic calendar on its own cadence.
    if(TimeLocal() - m_last_calendar_push >= InpCalendarIntervalSec)
@@ -241,6 +269,13 @@ void OnTimer()
    {
       PollAndExecuteAISignals();
       m_last_claim_attempt = TimeLocal();
+   }
+
+   // 4. Fetch AI Chart Markup (ICT/SMC/Price Action structures) and draw them.
+   if(InpChartMarkupEnabled && TimeLocal() - m_last_markup_fetch >= MathMax(1, InpMarkupReRenderSec))
+   {
+      FetchAndRenderChartMarkup();
+      m_last_markup_fetch = TimeLocal();
    }
 }
 
@@ -292,7 +327,7 @@ void SendTelemetry()
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
    
-   int res = WebRequest("POST", QuantAIApiBase() + "/api/telemetry", headers, 3000, data, result, result_headers);
+   int res = WebRequest("POST", QuantAIApiBase() + "/api/v1/telemetry", headers, 3000, data, result, result_headers);
    if(res != 200)
    {
       int err = GetLastError();
@@ -704,8 +739,243 @@ void SendCommandReceipt(string commandId, string receiptStatus, ulong orderTicke
 }
 
 //+------------------------------------------------------------------+
-//| Helper JSON Double Extractor                                     |
+//| AI Chart Markup Rendering (AI Engine decides; EA only draws)      |
 //+------------------------------------------------------------------+
+void FetchAndRenderChartMarkup()
+{
+   if(StringLen(InpBridgeToken) == 0 || StringLen(InpApiUrl) == 0)
+      return;
+
+   string headers = BridgeHeaders();
+   string payload = StringFormat("{\"executor_id\":\"%s\",\"symbol\":\"%s\",\"account_login\":%I64d,\"account_server\":\"%s\",\"broker_company\":\"%s\",\"trade_mode\":\"%s\"}", EscapeJson(InpExecutorId), EscapeJson(g_symbol), AccountInfoInteger(ACCOUNT_LOGIN), EscapeJson(AccountInfoString(ACCOUNT_SERVER)), EscapeJson(AccountInfoString(ACCOUNT_COMPANY)), AccountModeLabel());
+   char data[];
+   char result[];
+   string result_headers;
+   StringToCharArray(payload, data, 0, StringLen(payload));
+
+   int res = WebRequest("POST", QuantAIApiBase() + "/api/v1/bridge/markup", headers, 4000, data, result, result_headers);
+   if(res != 200 || ArraySize(result) == 0)
+      return; // Retry next tick; no chart paint this cycle.
+
+   string response = CharArrayToString(result);
+   if(StringFind(response, "\"objects\"") < 0)
+      return;
+
+   // Cheap change detection so we only repaint when the AI structure changed.
+   int newHash = _MarkupHash(response);
+   if(newHash == m_markup_payload_md5)
+      return;
+   m_markup_payload_md5 = newHash;
+
+   RenderMarkupObjects(response);
+}
+
+// Parse a quoted "key":"value" token from a JSON fragment after `key`.
+string _jxString(string json, string key)
+{
+   int start = StringFind(json, key);
+   if(start < 0)
+      return "";
+   start += StringLen(key);
+   while(start < StringLen(json) && (StringGetCharacter(json, start) == ' ' || StringGetCharacter(json, start) == ':' || StringGetCharacter(json, start) == '"'))
+      start++;
+   int end = StringFind(json, "\"", start);
+   if(end <= start)
+      return "";
+   return StringSubstr(json, start, end - start);
+}
+
+// Cheap stable hash for change detection (MQL5 has no built-in StringHash).
+int _MarkupHash(string s)
+{
+   int h = 5381;
+   int len = StringLen(s);
+   for(int i = 0; i < len; i++)
+      h = ((h << 5) + h + (int)StringGetCharacter(s, i)) & 0x7FFFFFFF;
+   return h;
+}
+
+// MQL5 StringToTime expects "yyyy.mm.dd hh:mm:ss"; normalize ISO/dash/UTC input.
+datetime _jxTime(string s)
+{
+   StringReplace(s, "-", ".");
+   StringReplace(s, "T", " ");
+   int plus = StringFind(s, "+");
+   if(plus > 10)
+      s = StringSubstr(s, 0, plus);
+   else
+   {
+      StringReplace(s, "Z", " ");
+      StringReplace(s, "z", " ");
+   }
+   return StringToTime(s);
+}
+
+// Zone rectangle colors — bullish/bearish directional default, specialty types override.
+color _MarkupZoneColor(string type, string dirStr)
+{
+   if(type == "SR")
+      return (dirStr == "BULLISH") ? clrDodgerBlue : ((dirStr == "BEARISH") ? clrOrangeRed : clrGray);
+   if(type == "CHANNEL" || type == "RANGE")
+      return clrSilver;
+   if(type == "DEALING_RANGE")
+      return clrSteelBlue;
+   if(type == "LIQUIDITY_POOL")
+      return (dirStr == "BULLISH") ? clrGold : clrKhaki;
+   if(type == "VOLUME_IMBALANCE" || type == "INDUCEMENT")
+      return clrPurple;
+   if(type == "BPR")
+      return clrDarkOrange;
+   if(type == "UNICORN")
+      return clrGold;
+   if(type == "PDH_PDL" || type == "WEEKLY_MONTHLY_HL")
+      return (dirStr == "BULLISH") ? clrChocolate : clrSienna;
+   if(type == "SESSION_HL")
+      return clrSeaGreen;
+   if(type == "VOID")
+      return clrMagenta;
+   return (dirStr == "BULLISH") ? clrDodgerBlue : ((dirStr == "BEARISH") ? clrOrangeRed : clrGray);
+}
+
+// Arrow/label colors for event types.
+color _MarkupArrowColor(string type, string dirStr)
+{
+   if(type == "PATTERN")
+      return clrWhite;
+   if(type == "BREAKOUT")
+      return clrLime;
+   if(type == "PULLBACK" || type == "RETEST")
+      return clrAqua;
+   if(type == "FAKE_BREAKOUT")
+      return clrRed;
+   if(type == "MSS" || type == "CHoCH" || type == "BOS")
+      return clrFuchsia;
+   if(type == "TURTLE_SOUP")
+      return clrOrange;
+   if(type == "JUDAS_SWING")
+      return clrCrimson;
+   if(type == "SMT_DIVERGENCE")
+      return clrDodgerBlue;
+   if(type == "SILVER_BULLET")
+      return clrWhite;
+   if(type == "AMD")
+      return clrGold;
+   return (dirStr == "BULLISH") ? clrYellow : clrFuchsia;
+}
+
+void RenderMarkupObjects(string response)
+{
+   int drawn = 0;
+
+   int pos = 0;
+   while(drawn < InpMarkupMaxObjects)
+   {
+      int objStart = StringFind(response, "\"type\":", pos);
+      if(objStart < 0)
+         break;
+      // Locate the object braces { ... } that enclose this "type" token.
+      int braceStart = StringFind(response, "{", objStart);
+      if(braceStart < 0)
+         break;
+      int braceEnd = StringFind(response, "}", objStart);
+      if(braceEnd < 0 || braceEnd < braceStart)
+         break;
+      string block = StringSubstr(response, braceStart, braceEnd - braceStart + 1);
+
+      string type = _jxString(block, "\"type\"");
+      string dirStr = _jxString(block, "\"direction\"");
+      string label = _jxString(block, "\"label\"");
+      double top = ExtractDouble(block, "\"top\":", 0.0);
+      double bottom = ExtractDouble(block, "\"bottom\":", 0.0);
+      double price = ExtractDouble(block, "\"price\":", 0.0);
+      datetime t1 = _jxTime(_jxString(block, "\"time_start\""));
+      datetime t2 = _jxTime(_jxString(block, "\"time_end\""));
+
+      string oid = StringFormat("ATE_MK_%d", drawn);
+
+      // Zone types: price-level rectangles (structural + advanced).
+      if(type == "OB" || type == "FVG" || type == "BREAKER" || type == "MITIGATION" || type == "REJECTION" || type == "iFVG" || type == "OTE" || type == "PD" || type == "ASIAN" ||
+         type == "SR" || type == "CHANNEL" || type == "RANGE" || type == "DEALING_RANGE" || type == "LIQUIDITY_POOL" || type == "SUPPLY_DEMAND" || type == "VOLUME_IMBALANCE" || type == "VOID" ||
+         type == "BPR" || type == "UNICORN" || type == "PDH_PDL" || type == "WEEKLY_MONTHLY_HL" || type == "SESSION_HL" || type == "AMD")
+      {
+         datetime from = t1;
+         datetime to = (t2 > 0) ? t2 : (datetime)TimeCurrent();
+         if(from <= 0)
+            from = to - 86400;
+         ObjectDelete(0, oid);
+         if(!ObjectCreate(0, oid, OBJ_RECTANGLE, 0, from, top, to, bottom))
+            continue;
+         ObjectSetInteger(0, oid, OBJPROP_FILL, true);
+         ObjectSetInteger(0, oid, OBJPROP_COLOR, _MarkupZoneColor(type, dirStr));
+         ObjectSetInteger(0, oid, OBJPROP_STYLE, STYLE_DOT);
+         ObjectSetInteger(0, oid, OBJPROP_WIDTH, 1);
+         ObjectSetInteger(0, oid, OBJPROP_BACK, true);
+         ObjectSetInteger(0, oid, OBJPROP_ZORDER, 5);
+         ObjectSetInteger(0, oid, OBJPROP_SELECTABLE, false);
+      }
+      else if(type == "TRENDLINE" || type == "DEALING_CURVE")
+      {
+         ObjectDelete(0, oid);
+         if(!ObjectCreate(0, oid, OBJ_TREND, 0, t1, top, t2, bottom))
+            continue;
+         ObjectSetInteger(0, oid, OBJPROP_COLOR, (type == "DEALING_CURVE") ? clrSteelBlue : clrLimeGreen);
+         ObjectSetInteger(0, oid, OBJPROP_STYLE, (type == "DEALING_CURVE") ? STYLE_SOLID : STYLE_DASH);
+         ObjectSetInteger(0, oid, OBJPROP_WIDTH, 2);
+         ObjectSetInteger(0, oid, OBJPROP_RAY_RIGHT, false);
+         ObjectSetInteger(0, oid, OBJPROP_SELECTABLE, false);
+      }
+      else if(type == "SWING" || type == "BOS" || type == "CHoCH" || type == "LIQUIDITY" || type == "KILLZONE" ||
+              type == "PATTERN" || type == "BREAKOUT" || type == "PULLBACK" || type == "RETEST" || type == "FAKE_BREAKOUT" || type == "MSS" ||
+              type == "INDUCEMENT" || type == "TURTLE_SOUP" || type == "JUDAS_SWING" || type == "SMT_DIVERGENCE" || type == "SILVER_BULLET")
+      {
+         datetime tk = (t1 > 0) ? t1 : (datetime)TimeCurrent();
+         double anchorPrice = price;
+         if(anchorPrice <= 0)
+            anchorPrice = top + bottom;
+         if(anchorPrice <= 0)
+            anchorPrice = SymbolInfoDouble(g_symbol, SYMBOL_BID);
+         ObjectDelete(0, oid);
+         if(!ObjectCreate(0, oid, OBJ_ARROW, 0, tk, anchorPrice, 0, 0))
+            continue;
+         color ac = _MarkupArrowColor(type, dirStr);
+         ObjectSetInteger(0, oid, OBJPROP_COLOR, ac);
+         if(type == "SWING" || type == "PATTERN" || type == "BREAKOUT" || type == "PULLBACK" || type == "RETEST" || type == "FAKE_BREAKOUT")
+            ObjectSetInteger(0, oid, OBJPROP_ARROWCODE, (dirStr == "BULLISH") ? 233 : 234); // 233 up, 234 down
+         else
+            ObjectSetInteger(0, oid, OBJPROP_ARROWCODE, 241); // right
+         ObjectSetInteger(0, oid, OBJPROP_WIDTH, 2);
+         ObjectSetInteger(0, oid, OBJPROP_SELECTABLE, false);
+         if(StringLen(label) > 0)
+         {
+            string toText = "ATE_MK_T" + oid;
+            ObjectDelete(0, toText);
+            if(ObjectCreate(0, toText, OBJ_TEXT, 0, tk, anchorPrice))
+            {
+               ObjectSetString(0, toText, OBJPROP_TEXT, label);
+               ObjectSetInteger(0, toText, OBJPROP_COLOR, ac);
+               ObjectSetInteger(0, toText, OBJPROP_FONTSIZE, 8);
+               ObjectSetInteger(0, toText, OBJPROP_SELECTABLE, false);
+            }
+         }
+      }
+
+      drawn++;
+      pos = braceEnd + 1;
+      if(drawn >= InpMarkupMaxObjects)
+         break;
+   }
+
+   // Remove stale objects from previous renders (keep newest cap).
+   for(int i = InpMarkupMaxObjects; i < InpMarkupMaxObjects * 2; i++)
+   {
+      string stale = StringFormat("ATE_MK_%d", i);
+      if(ObjectFind(0, stale) >= 0)
+         ObjectDelete(0, stale);
+   }
+
+   QuantAILog(StringFormat("MARKUP_RENDER objects=%d", drawn));
+}
+
 double ExtractDouble(string json, string key, double defaultValue)
 {
    int pos = StringFind(json, key);
@@ -719,6 +989,82 @@ double ExtractDouble(string json, string key, double defaultValue)
    if(endPos > 0) sub = StringSubstr(sub, 0, endPos);
    
    double val = StringToDouble(sub);
-   return (val > 0) ? val : defaultValue;
+   return (val != 0) ? val : defaultValue;
+}
+
+//+------------------------------------------------------------------+
+//| Get Timeframe string label                                       |
+//+------------------------------------------------------------------+
+string TimeframeLabel(ENUM_TIMEFRAMES tf)
+{
+   switch(tf)
+   {
+      case PERIOD_M1:  return "M1";
+      case PERIOD_M5:  return "M5";
+      case PERIOD_M15: return "M15";
+      case PERIOD_M30: return "M30";
+      case PERIOD_H1:  return "H1";
+      case PERIOD_H4:  return "H4";
+      case PERIOD_D1:  return "D1";
+      default:         return "M15";
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Send live candles from MT5 to the API                            |
+//+------------------------------------------------------------------+
+void SendLiveCandles()
+{
+   if(StringLen(InpBridgeToken) == 0 || StringLen(InpApiUrl) == 0)
+      return;
+
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false); // Oldest first, newest last
+   int copied = CopyRates(g_symbol, _Period, 0, 100, rates);
+   if(copied <= 0)
+   {
+      PrintFormat("Failed to copy rates for %s, err=%d", g_symbol, GetLastError());
+      return;
+   }
+
+   string candlesJson = "";
+   for(int i = 0; i < copied; i++)
+   {
+      string ts = TimeToString(rates[i].time, TIME_DATE|TIME_MINUTES|TIME_SECONDS);
+      // Format as ISO 8601: YYYY.MM.DD HH:MM:SS -> YYYY-MM-DDTHH:MM:SS
+      StringReplace(ts, ".", "-");
+      StringReplace(ts, " ", "T");
+      
+      string item = StringFormat(
+         "{\"t\":\"%s\",\"ts\":\"%s\",\"o\":%.2f,\"h\":%.2f,\"l\":%.2f,\"c\":%.2f,\"v\":%.1f}",
+         TimeToString(rates[i].time, TIME_MINUTES),
+         ts,
+         rates[i].open,
+         rates[i].high,
+         rates[i].low,
+         rates[i].close,
+         (double)rates[i].tick_volume
+      );
+      
+      if(i > 0)
+         candlesJson += ",";
+      candlesJson += item;
+   }
+
+   string tfLabel = TimeframeLabel(_Period);
+   string payload = StringFormat("{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"candles\":[%s]}", EscapeJson(g_symbol), tfLabel, candlesJson);
+   
+   char data[];
+   char result[];
+   string result_headers;
+   StringToCharArray(payload, data, 0, StringLen(payload));
+   
+   string headers = BridgeHeaders();
+   int res = WebRequest("POST", QuantAIApiBase() + "/api/v1/bridge/candles", headers, 4000, data, result, result_headers);
+   if(res != 200)
+   {
+      int err = GetLastError();
+      QuantAILogThrottled("CANDLES_HTTP_" + string(res), StringFormat("Candles push failed (HTTP %d, err=%d)", res, err));
+   }
 }
 //+------------------------------------------------------------------+

@@ -17,6 +17,14 @@ COPY . .
 
 # Disable telemetry
 ENV NEXT_TELEMETRY_DISABLED=1
+# Force standalone output even if a stray VERCEL env exists in context
+ENV VERCEL=""
+
+# Client bundle API origins (passed as build args; .env* files are excluded from context)
+ARG NEXT_PUBLIC_ATE_API_ORIGIN
+ARG NEXT_PUBLIC_QUANTAI_API_ORIGIN
+ENV NEXT_PUBLIC_ATE_API_ORIGIN=$NEXT_PUBLIC_ATE_API_ORIGIN
+ENV NEXT_PUBLIC_QUANTAI_API_ORIGIN=$NEXT_PUBLIC_QUANTAI_API_ORIGIN
 
 RUN npm run build
 

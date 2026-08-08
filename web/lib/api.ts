@@ -1,10 +1,33 @@
 export interface Candle {
   t: string;
+  ts?: string;
   o: number;
   h: number;
   l: number;
   c: number;
   v: number;
+}
+
+export interface MarkupItem {
+  type: string;
+  direction?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  top?: number;
+  bottom?: number;
+  price?: number;
+  time_start?: string;
+  time_end?: string;
+  index?: number;
+  label?: string;
+  status?: string;
+  strength?: number;
+}
+
+export interface MarkupResponse {
+  symbol?: string;
+  method?: string;
+  generated_at?: string;
+  objects: MarkupItem[];
+  advanced_counts?: Record<string, number>;
 }
 
 export interface TechnicalIndicators {
@@ -165,7 +188,7 @@ export interface ControlCenterStatus {
   generated_at: string;
   status: 'READY' | 'BLOCKED';
   execution: { mode: string; browser_execution_enabled: boolean; execution_locked: boolean; symbol: string; magic: number; command_ttl_seconds: number };
-  safeguards: { kill_switch_active: boolean; demo_armed: boolean; live_armed?: boolean; trading_enabled?: boolean; ai_auto_loop?: boolean; bridge_auth_configured: boolean; operator_auth_configured: boolean; risk_policy_execution_enabled: boolean };
+  safeguards: { kill_switch_active: boolean; demo_armed: boolean; live_armed?: boolean; trading_enabled?: boolean; ai_auto_loop?: boolean; bridge_auth_configured: boolean; operator_auth_configured: boolean; risk_policy_execution_enabled: boolean; trading_method?: string };
   readiness: { ready: boolean; reason_code: string };
   account: { mt5_connected: boolean; trade_mode: string; identity_matches_expected: boolean; login?: number; server?: string; balance?: number; equity?: number; leverage?: number; currency?: string };
   bridge: { status: string; mt5_connected: boolean };
@@ -178,6 +201,15 @@ export interface ControlCenterStatus {
 
 const rawOrigin = process.env.NEXT_PUBLIC_ATE_API_ORIGIN || process.env.NEXT_PUBLIC_QUANTAI_API_ORIGIN || '';
 const API_BASE = rawOrigin.replace(/\/api\/?$/, '').replace(/\/$/, '');
+
+export function adminAuthHeaders(): Record<string, string> {
+  try {
+    const token = localStorage.getItem('quantai_auth_token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
 
 export type RequestOptions = { signal?: AbortSignal };
 
@@ -199,13 +231,13 @@ export function fetchControlCenterStatus(options?: RequestOptions): Promise<Cont
   return readJson<ControlCenterStatus>(`${API_BASE}/api/control-center/status`, options);
 }
 
-export async function fetchMarket(symbol = 'XAUUSD', tf = 'M15', options?: RequestOptions): Promise<{ candles: Candle[]; indicators?: TechnicalIndicators } | null> {
-  const data = await readJson<{ candles?: Candle[]; indicators?: TechnicalIndicators }>(
+export async function fetchMarket(symbol = 'XAUUSD', tf = 'M15', options?: RequestOptions): Promise<{ candles: Candle[]; indicators?: TechnicalIndicators; markup?: MarkupResponse } | null> {
+  const data = await readJson<{ candles?: Candle[]; indicators?: TechnicalIndicators; markup?: MarkupResponse }>(
     `${API_BASE}/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}`,
     options,
   );
   if (!data || !Array.isArray(data.candles)) return null;
-  return { candles: data.candles, indicators: data.indicators };
+  return { candles: data.candles, indicators: data.indicators, markup: data.markup };
 }
 
 export async function fetchPositions(options?: RequestOptions): Promise<Position[] | null> {
@@ -339,7 +371,7 @@ export async function sendCopilotChat(message: string, symbol = 'XAUUSD', timefr
   try {
     const res = await fetch(`${API_BASE}/api/copilot/chat`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: JSON.stringify({ message, symbol, timeframe, model_id: modelId }),
     });
     if (!res.ok) return null;
@@ -364,7 +396,7 @@ async function executeOrder(path: string, body?: Record<string, unknown>): Promi
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await res.json().catch(() => null);
@@ -385,7 +417,7 @@ async function patchJson<T>(path: string, body?: Record<string, unknown>, option
   try {
     const res = await fetch(`${API_BASE}${path}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: body ? JSON.stringify(body) : undefined,
       signal: options?.signal,
     });
@@ -408,6 +440,10 @@ export function executeOrderCloseAll(): Promise<ExecutionResponse> {
   return executeOrder('/api/order/close_all');
 }
 
+export function executeResetAll(): Promise<ExecutionResponse> {
+  return executeOrder('/api/reset_all');
+}
+
 export function executeOrderModifyTPSL(): Promise<ExecutionResponse> {
   return executeOrder('/api/order/modify_tpsl');
 }
@@ -425,7 +461,7 @@ export async function updateControlMode(mode: string): Promise<{ status: string;
   try {
     const res = await fetch(`${API_BASE}/api/control-center/mode`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: JSON.stringify({ mode }),
     });
     if (!res.ok) return null;
@@ -439,7 +475,7 @@ export async function updateControlKillSwitch(active: boolean): Promise<{ status
   try {
     const res = await fetch(`${API_BASE}/api/control-center/kill-switch`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: JSON.stringify({ active }),
     });
     if (!res.ok) return null;
@@ -453,7 +489,7 @@ export async function updateControlDemoArm(armed: boolean): Promise<{ status: st
   try {
     const res = await fetch(`${API_BASE}/api/control-center/demo-arm`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: JSON.stringify({ armed }),
     });
     if (!res.ok) return null;
@@ -463,12 +499,17 @@ export async function updateControlDemoArm(armed: boolean): Promise<{ status: st
   }
 }
 
-export async function loginMT5Account(login: number, password: string, server: string): Promise<{ status: string; message?: string; account?: any; detail?: any }> {
+export async function loginMT5Account(
+  login: number,
+  password: string,
+  server: string,
+  extra?: { terminal_path?: string; symbol?: string; timeframe?: string; auto_deploy?: boolean },
+): Promise<{ status: string; message?: string; account?: any; symbol?: any; timeframe?: string; deploy?: any; detail?: any }> {
   try {
     const res = await fetch(`${API_BASE}/api/control-center/login-mt5`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ login, password, server }),
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
+      body: JSON.stringify({ login, password, server, ...(extra || {}) }),
     });
     const data = await res.json().catch(() => null);
     if (!res.ok) {
@@ -484,7 +525,7 @@ export async function updateControlRisk(risk_per_trade_fraction: number, max_ope
   try {
     const res = await fetch(`${API_BASE}/api/control-center/risk`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: JSON.stringify({ risk_per_trade_fraction, max_open_positions, max_spread }),
     });
     if (!res.ok) return null;
@@ -511,7 +552,7 @@ export async function updateAiAutoLoop(armed: boolean): Promise<{ status: string
   try {
     const res = await fetch(`${API_BASE}/api/control-center/ai-loop`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: JSON.stringify({ armed }),
     });
     if (!res.ok) return null;
@@ -536,6 +577,7 @@ export type StreamEvent =
   | { type: 'telemetry'; data: SystemStatus }
   | { type: 'command_update'; data: { command_id: string; action: string; state: string; retcode: number | null; order_ticket: number | null } }
   | { type: 'ai_signal'; data: { status: string; reason_codes?: string[]; command: boolean } }
+  | { type: 'config_updated'; data: Record<string, unknown> }
   | { type: 'log'; data: Record<string, unknown> };
 
 export interface StreamSocketHandle {
@@ -611,7 +653,7 @@ export async function updateTelegramConfig(botToken: string, chatId: string, ena
   try {
     const res = await fetch(`${API_BASE}/api/control-center/telegram`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: JSON.stringify({ bot_token: botToken, chat_id: chatId, enabled }),
     });
     if (!res.ok) return null;
@@ -767,6 +809,7 @@ export async function fetchEconomicEventAnalysis(eventId: string): Promise<AIAna
 export interface AIConfig {
   active_model: string;
   custom_model_id?: string;
+  trading_method?: string;
   gemini_api_key?: string;
   claude_api_key?: string;
   deepseek_api_key?: string;
@@ -800,6 +843,7 @@ export async function fetchAIConfig(): Promise<AIConfig | null> {
 export async function updateAIConfig(payload: {
   active_model: string;
   custom_model_id?: string;
+  trading_method?: string;
   gemini_api_key?: string;
   claude_api_key?: string;
   deepseek_api_key?: string;
@@ -813,8 +857,41 @@ export async function updateAIConfig(payload: {
   try {
     const res = await fetch(`${API_BASE}/api/control-center/ai-config`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: JSON.stringify(payload),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function testAIConnection(payload: {
+  key_type: string;
+  api_key?: string;
+  model: string;
+  base_url?: string;
+}): Promise<{ status: string; result: { ok: boolean; message: string; latency_ms?: number; status_code?: number | null; error_code?: string | null } } | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/ai/test`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function updateTradingMethod(method: string): Promise<{ status: string; message: string; trading_method: string } | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/control-center/trading-method`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
+      body: JSON.stringify({ trading_method: method }),
     });
     if (!res.ok) return null;
     return await res.json();

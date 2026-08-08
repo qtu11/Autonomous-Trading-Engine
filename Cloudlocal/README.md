@@ -88,7 +88,13 @@ MT5_PASSWORD=your_mt5_password
 MT5_SERVER=YourBroker-Demo
 QUANTAI_BRIDGE_TOKEN=openssl_rand_hex_32
 ADMIN_PASSWORD=secure_admin_password
+QUANTAI_AI_MODEL=deepseek-v4-flash-free   # Model AI mặc định (OpenCode Zen Free, không cần key)
+OPENCODE_BASE_URL=https://opencode.ai/zen/v1/chat/completions   # Gateway OpenCode Zen Free
+# GATEWAY_URL=            # (tùy chọn) Gateway khách hàng riêng — ưu tiên cao nhất
+# GATEWAY_KEY=            # (tùy chọn) Key gateway riêng
 ```
+
+**AI Provider Priority (từ cao → thấp):** `GATEWAY_URL+KEY` → Key/Model khách hàng (`*_API_KEY` + `custom_model_id`) → `OpenCode Zen Free Pool` (mặc định) → default keys khác. Hệ thống chạy hoàn toàn miễn phí trên OpenCode khi chưa cấu hình key nào.
 
 ### 3. Install as Windows Service (Auto-start on boot)
 ```powershell

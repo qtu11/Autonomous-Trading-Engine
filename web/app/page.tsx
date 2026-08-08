@@ -17,11 +17,13 @@ import {
   executeOrderBuy,
   executeOrderSell,
   executeOrderCloseAll,
+  executeResetAll,
   executeCloseProfit,
   executeCloseLosing,
   analyzeNewsEvent,
   updateAiAutoLoop,
   fetchChatHistory,
+  updateTradingMethod,
   type NewsAnalysisResponse,
   type Candle,
   type Position,
@@ -40,6 +42,8 @@ import {
   type BrainEvaluation,
   type StrategyStat,
   type BrainAdjustment,
+  type MarkupResponse,
+  type MarkupItem,
 } from '../lib/api';
 import ControlCenter from './components/ControlCenter';
 import EconomicCalendar from './components/EconomicCalendar';
@@ -124,16 +128,23 @@ function CandleChart({
   livePrice,
   positions,
   indicators,
+  markup,
+  selectedTradingMethod,
 }: {
   candles: Candle[];
   livePrice: number;
   positions: Position[];
   indicators: TechnicalIndicators;
+  markup?: MarkupResponse | null;
+  selectedTradingMethod: string;
 }) {
   const [visibleCount, setVisibleCount] = useState(75);
   const [panOffset, setPanOffset] = useState(0);
+  const [yPan, setYPan] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStartX, setDragStartX] = useState(0);
+  const [dragStartY, setDragStartY] = useState(0);
+  const dragAxis = useRef<'x' | 'y' | null>(null);
 
   const W = 1000, H = 420;
   const PL = 8, PR = 80, PT = 20, PB = 40;
@@ -170,7 +181,7 @@ function CandleChart({
   const bW = Math.max(cW * 0.6, 2);
   const maxV = Math.max(...vis.map((c) => c.v)) || 1;
   const priceH = 250; // Candlestick panel price height
-  const py = (p: number) => PT + ((maxP - p) / range) * priceH;
+  const py = (p: number) => PT + ((maxP - p) / range) * priceH + yPan;
   const px = (i: number) => PL + (i + 0.5) * cW;
   const ticks = [0.15, 0.4, 0.65, 0.9].map((r) => minP + range * r);
 
@@ -227,16 +238,226 @@ function CandleChart({
     return rsi;
   };
 
+  const isSniper = selectedTradingMethod === 'SNIPER';
+
+  const ema9 = computeEMA(candles, 9);
+  const ema21 = computeEMA(candles, 21);
+  
+  const computeVWAP = (data: Candle[]): number[] => {
+    const res: number[] = [];
+    let cumPv = 0;
+    let cumVol = 0;
+    for (let i = 0; i < data.length; i++) {
+      const hlc3 = (data[i].h + data[i].l + data[i].c) / 3.0;
+      const vol = data[i].v || 1.0;
+      cumPv += hlc3 * vol;
+      cumVol += vol;
+      res.push(cumPv / (cumVol || 1.0));
+    }
+    return res;
+  };
+  const vwap = computeVWAP(candles);
+
   const ema20 = computeEMA(candles, 20);
   const ema50 = computeEMA(candles, 50);
   const rsi14 = computeRSI(candles, 14);
 
+  const visEma9 = ema9.slice(startIdx, endIdx);
+  const visEma21 = ema21.slice(startIdx, endIdx);
+  const visVwap = vwap.slice(startIdx, endIdx);
   const visEma20 = ema20.slice(startIdx, endIdx);
   const visEma50 = ema50.slice(startIdx, endIdx);
   const visRsi = rsi14.slice(startIdx, endIdx);
 
+  const ema9Points = visEma9.map((v, i) => `${px(i)},${py(v)}`).join(' ');
+  const ema21Points = visEma21.map((v, i) => `${px(i)},${py(v)}`).join(' ');
+  const vwapPoints = visVwap.map((v, i) => `${px(i)},${py(v)}`).join(' ');
   const ema20Points = visEma20.map((v, i) => `${px(i)},${py(v)}`).join(' ');
   const ema50Points = visEma50.map((v, i) => `${px(i)},${py(v)}`).join(' ');
+
+  // Sniper Dashboard & Level calculations
+  let sniperDashboardData: any = null;
+  let activeSniperSignal: any = null;
+
+  if (isSniper && candles.length > 1) {
+    const lastIdx = candles.length - 1;
+    const lastC = candles[lastIdx];
+    
+    const e9Val = ema9[lastIdx] || 0;
+    const e21Val = ema21[lastIdx] || 0;
+    const vwapVal = vwap[lastIdx] || 0;
+    const rsiVal = rsi14[lastIdx] || 50;
+    
+    const ema12 = computeEMA(candles, 12);
+    const ema26 = computeEMA(candles, 26);
+    const mLine = ema12.map((v, idx) => v - ema26[idx]);
+    
+    const mSig: number[] = [];
+    const kMacd = 2 / 10;
+    let mSigVal = mLine[0] || 0;
+    for (let i = 0; i < mLine.length; i++) {
+      mSigVal = mLine[i] * kMacd + mSigVal * (1 - kMacd);
+      mSig.push(mSigVal);
+    }
+    
+    const currM = mLine[lastIdx] || 0;
+    const currS = mSig[lastIdx] || 0;
+    
+    const computeADXClient = (data: Candle[]): number[] => {
+      const adxArr: number[] = [];
+      const tr: number[] = [];
+      const plusDM: number[] = [];
+      const minusDM: number[] = [];
+      
+      for (let i = 0; i < data.length; i++) {
+        if (i === 0) {
+          tr.push(data[i].h - data[i].l);
+          plusDM.push(0);
+          minusDM.push(0);
+        } else {
+          const prev = data[i - 1];
+          const trVal = Math.max(
+            data[i].h - data[i].l,
+            Math.abs(data[i].h - prev.c),
+            Math.abs(data[i].l - prev.c)
+          );
+          tr.push(trVal);
+          
+          const up = data[i].h - prev.h;
+          const down = prev.l - data[i].l;
+          plusDM.push(up > down && up > 0 ? up : 0);
+          minusDM.push(down > up && down > 0 ? down : 0);
+        }
+      }
+      
+      const computeEMAForSeries = (series: number[], period: number): number[] => {
+        const ema: number[] = [];
+        const kVal = 2 / (period + 1);
+        let val = series[0] || 0;
+        for (let i = 0; i < series.length; i++) {
+          val = series[i] * kVal + val * (1 - kVal);
+          ema.push(val);
+        }
+        return ema;
+      };
+      
+      const trSmooth = computeEMAForSeries(tr, 14);
+      const plusDMSmooth = computeEMAForSeries(plusDM, 14);
+      const minusDMSmooth = computeEMAForSeries(minusDM, 14);
+      
+      const dx: number[] = [];
+      for (let i = 0; i < data.length; i++) {
+        const trS = trSmooth[i] || 1e-9;
+        const pDI = 100 * (plusDMSmooth[i] / trS);
+        const mDI = 100 * (minusDMSmooth[i] / trS);
+        const sum = pDI + mDI;
+        const diff = Math.abs(pDI - mDI);
+        dx.push(100 * (diff / (sum || 1e-9)));
+      }
+      
+      return computeEMAForSeries(dx, 14);
+    };
+    
+    const adxSeries = computeADXClient(candles);
+    const currADX = adxSeries[lastIdx] || 0;
+    
+    const vols = candles.map(c => c.v || 0);
+    let sumVol = 0;
+    const startVol = Math.max(0, lastIdx - 19);
+    for (let i = startVol; i <= lastIdx; i++) {
+      sumVol += vols[i];
+    }
+    const volAvg = sumVol / (lastIdx - startVol + 1);
+    const currVol = lastC.v || 0;
+    
+    let bScore = 0;
+    bScore += lastC.c > vwapVal ? 1 : 0;
+    bScore += rsiVal > 50 ? 1 : 0;
+    bScore += currM > currS ? 1 : 0;
+    bScore += e9Val > e21Val ? 1 : 0;
+    bScore += (currADX > 25 && lastC.c > e9Val) ? 1 : 0;
+    bScore += (currVol > volAvg && lastC.c > lastC.o) ? 1 : 0;
+    bScore += (rsi14[Math.max(0, lastIdx - 1)] > 50) ? 1 : 0;
+    const bullPct = (bScore / 7) * 100;
+    
+    let rScore = 0;
+    rScore += lastC.c < vwapVal ? 1 : 0;
+    rScore += rsiVal < 50 ? 1 : 0;
+    rScore += currM < currS ? 1 : 0;
+    rScore += e9Val < e21Val ? 1 : 0;
+    rScore += (currADX > 25 && lastC.c < e9Val) ? 1 : 0;
+    rScore += (currVol > volAvg && lastC.c < lastC.o) ? 1 : 0;
+    rScore += (rsi14[Math.max(0, lastIdx - 1)] < 50) ? 1 : 0;
+    const bearPct = (rScore / 7) * 100;
+    
+    const biasText = (bullPct - bearPct) >= 40 ? "STRONG BULL" : (bearPct - bullPct) >= 40 ? "STRONG BEAR" : bullPct > bearPct ? "MILD BULL" : "MILD BEAR";
+    const biasCol = biasText.includes("STRONG BULL") ? '#10b981' : biasText.includes("STRONG BEAR") ? '#ef4444' : '#9ca3af';
+    
+    const triggerBuy = lastIdx >= 1 && ema9[lastIdx] > ema21[lastIdx] && ema9[lastIdx - 1] <= ema21[lastIdx - 1];
+    const triggerSell = lastIdx >= 1 && ema9[lastIdx] < ema21[lastIdx] && ema9[lastIdx - 1] >= ema21[lastIdx - 1];
+    
+    sniperDashboardData = {
+      bullPct,
+      bearPct,
+      biasText,
+      biasCol,
+      vwapStatus: lastC.c > vwapVal ? "ABOVE" : "BELOW",
+      vwapCol: lastC.c > vwapVal ? '#10b981' : '#ef4444',
+      rsiVal,
+      macdTrend: currM > currS ? "BULL" : "BEAR",
+      macdCol: currM > currS ? '#10b981' : '#ef4444',
+      adxVal: currADX,
+      adxCol: currADX > 25 ? '#10b981' : '#9ca3af',
+      emaCross: e9Val > e21Val ? "BULL" : "BEAR",
+      emaCrossCol: e9Val > e21Val ? '#10b981' : '#ef4444',
+      volStatus: currVol > volAvg ? "HIGH" : "LOW",
+      volCol: currVol > volAvg ? '#10b981' : '#9ca3af',
+      statusText: triggerBuy || triggerSell ? "NEW" : "WAIT",
+      statusCol: triggerBuy || triggerSell ? '#10b981' : '#fff',
+    };
+    
+    for (let j = endIdx - 1; j >= 1; j--) {
+      const e9_j = ema9[j];
+      const e21_j = ema21[j];
+      const e9_j_prev = ema9[j - 1];
+      const e21_j_prev = ema21[j - 1];
+      
+      const isBuy = e9_j > e21_j && e9_j_prev <= e21_j_prev;
+      const isSell = e9_j < e21_j && e9_j_prev >= e21_j_prev;
+      
+      if (isBuy || isSell) {
+        let sumAtr = 0;
+        const startAtrIdx = Math.max(0, j - 13);
+        const countAtr = j - startAtrIdx + 1;
+        for (let k = startAtrIdx; k <= j; k++) {
+          sumAtr += candles[k].h - candles[k].l;
+        }
+        const currAtr = sumAtr / countAtr;
+        const risk = currAtr * 1.5;
+        
+        const entry = candles[j].c;
+        const sl = isBuy ? entry - risk : entry + risk;
+        const tp1 = isBuy ? entry + risk : entry - risk;
+        const tp2 = isBuy ? entry + risk * 2 : entry - risk * 2;
+        const tp3 = isBuy ? entry + risk * 3 : entry - risk * 3;
+        const tp4 = isBuy ? entry + risk * 4 : entry - risk * 4;
+        const tp5 = isBuy ? entry + risk * 5 : entry - risk * 5;
+        
+        activeSniperSignal = {
+          type: isBuy ? 'BUY' : 'SELL',
+          entry,
+          sl,
+          tp1,
+          tp2,
+          tp3,
+          tp4,
+          tp5,
+          signalIdx: j,
+        };
+        break;
+      }
+    }
+  }
 
   // RSI Layout Definitions
   const rsiPT = 320;
@@ -249,26 +470,79 @@ function CandleChart({
     if (e.deltaY < 0) { setVisibleCount((v) => Math.max(15, v - 10)); }
     else { setVisibleCount((v) => Math.min(Math.min(2000, total), v + 10)); }
   };
-  const handleMouseDown = (e: React.MouseEvent) => { setIsDragging(true); setDragStartX(e.clientX); };
+  const handleMouseDown = (e: React.MouseEvent) => { setIsDragging(true); dragAxis.current = null; setDragStartX(e.clientX); setDragStartY(e.clientY); };
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!isDragging) return;
     const dx = e.clientX - dragStartX;
-    if (Math.abs(dx) > 5) {
+    const dy = e.clientY - dragStartY;
+    if (dragAxis.current === null && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+      dragAxis.current = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x';
+    }
+    if (dragAxis.current === 'x') {
       const shift = Math.round(dx / 8);
       setPanOffset((p) => Math.max(0, Math.min(total - visibleCount, p + shift)));
       setDragStartX(e.clientX);
+    } else if (dragAxis.current === 'y') {
+      setYPan((p) => Math.max(-priceH, Math.min(priceH, p + dy)));
+      setDragStartY(e.clientY);
     }
   };
-  const handleMouseUp = () => setIsDragging(false);
+  const handleMouseUp = () => { setIsDragging(false); dragAxis.current = null; };
+  const handleDoubleClick = () => { setPanOffset(0); setYPan(0); };
 
   const tp2 = indicators.r2 || validLivePrice + 5.5;
   const tp1 = indicators.r1 || validLivePrice + 2.7;
   const entryP = validLivePrice;
   const slP = indicators.s1 || validLivePrice - 5.7;
 
+  // ── AI Markup resolution (detector objects → candle positions) ──
+  const tsToIdx = new Map<string, number>();
+  candles.forEach((c, i) => { if (c.ts) tsToIdx.set(c.ts.slice(0, 16).replace('T', ' '), i); });
+  const markIdx = (t?: string): number | null => {
+    if (!t) return null;
+    const i = tsToIdx.get(t.slice(0, 16).replace('T', ' '));
+    return i === undefined ? null : i;
+  };
+  const zoneTypes = new Set(['OB', 'FVG', 'BREAKER', 'MITIGATION', 'REJECTION', 'iFVG', 'OTE', 'PD', 'ASIAN', 'SR', 'CHANNEL', 'RANGE', 'DEALING_RANGE', 'LIQUIDITY_POOL', 'SUPPLY_DEMAND', 'VOLUME_IMBALANCE', 'VOID', 'BPR', 'UNICORN', 'PDH_PDL', 'WEEKLY_MONTHLY_HL', 'SESSION_HL', 'AMD']);
+  const arrowTypes = new Set(['SWING', 'BOS', 'CHoCH', 'LIQUIDITY', 'KILLZONE', 'PATTERN', 'BREAKOUT', 'PULLBACK', 'RETEST', 'FAKE_BREAKOUT', 'MSS', 'INDUCEMENT', 'TURTLE_SOUP', 'JUDAS_SWING', 'SMT_DIVERGENCE', 'SILVER_BULLET']);
+  const zoneColor = (m: MarkupItem): string => {
+    const d = m.direction;
+    if (m.type === 'SR') return d === 'BULLISH' ? 'rgba(59,130,246,0.28)' : d === 'BEARISH' ? 'rgba(249,115,22,0.28)' : 'rgba(156,163,175,0.25)';
+    if (m.type === 'CHANNEL' || m.type === 'RANGE') return 'rgba(203,213,225,0.22)';
+    if (m.type === 'DEALING_RANGE') return 'rgba(70,130,180,0.25)';
+    if (m.type === 'LIQUIDITY_POOL') return d === 'BULLISH' ? 'rgba(255,215,0,0.25)' : 'rgba(240,230,140,0.22)';
+    if (m.type === 'VOLUME_IMBALANCE' || m.type === 'INDUCEMENT') return 'rgba(168,85,247,0.25)';
+    if (m.type === 'BPR') return 'rgba(255,140,0,0.28)';
+    if (m.type === 'UNICORN') return 'rgba(255,215,0,0.4)';
+    if (m.type === 'PDH_PDL' || m.type === 'WEEKLY_MONTHLY_HL') return d === 'BULLISH' ? 'rgba(210,105,30,0.3)' : 'rgba(160,82,45,0.3)';
+    if (m.type === 'SESSION_HL') return 'rgba(46,160,67,0.25)';
+    if (m.type === 'VOID') return 'rgba(255,0,255,0.22)';
+    return d === 'BULLISH' ? 'rgba(59,130,246,0.28)' : d === 'BEARISH' ? 'rgba(249,115,22,0.28)' : 'rgba(156,163,175,0.25)';
+  };
+  const arrowColor = (m: MarkupItem): string => {
+    if (m.type === 'PATTERN') return '#f1f5f9';
+    if (m.type === 'BREAKOUT') return '#4ade80';
+    if (m.type === 'PULLBACK' || m.type === 'RETEST') return '#22d3ee';
+    if (m.type === 'FAKE_BREAKOUT') return '#ef4444';
+    if (m.type === 'MSS' || m.type === 'CHoCH' || m.type === 'BOS') return '#e879f9';
+    if (m.type === 'TURTLE_SOUP') return '#fb923c';
+    if (m.type === 'JUDAS_SWING') return '#dc2626';
+    if (m.type === 'SMT_DIVERGENCE') return '#60a5fa';
+    if (m.type === 'SILVER_BULLET') return '#f1f5f9';
+    if (m.type === 'AMD') return '#facc15';
+    return m.direction === 'BULLISH' ? '#fde047' : '#e879f9';
+  };
+  const visStartTs = candles[startIdx]?.ts?.slice(0, 16).replace('T', ' ');
+  const visEndTs = candles[endIdx - 1]?.ts?.slice(0, 16).replace('T', ' ');
+  const inView = (t?: string): boolean => {
+    if (!t) return false;
+    const ts = t.slice(0, 16).replace('T', ' ');
+    return (visStartTs ? ts >= visStartTs : true) && (visEndTs ? ts <= visEndTs : true);
+  };
+
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} style={{ display: 'block', width: '100%', height: '100%', cursor: isDragging ? 'grabbing' : 'grab' }}>
+      <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onDoubleClick={handleDoubleClick} style={{ display: 'block', width: '100%', height: '100%', cursor: isDragging ? 'grabbing' : 'grab' }}>
         <defs>
           <linearGradient id="vG" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.green} stopOpacity={0.35} /><stop offset="100%" stopColor={C.green} stopOpacity={0.03} /></linearGradient>
           <linearGradient id="vGRed" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.red} stopOpacity={0.35} /><stop offset="100%" stopColor={C.red} stopOpacity={0.03} /></linearGradient>
@@ -282,6 +556,24 @@ function CandleChart({
           </g>
         ))}
 
+        {/* AI Markup: Zone rectangles (structural + advanced detectors) — under candles */}
+        {markup && Array.isArray(markup.objects) && markup.objects.map((m, k) => {
+          if (!zoneTypes.has(m.type) || !m.top || !m.bottom) return null;
+          const i1 = markIdx(m.time_start);
+          // zones without a time_end are still active — extend to the newest candle
+          const i2 = markIdx(m.time_end) ?? (candles.length - 1);
+          if (i1 === null || i2 === null || !inView(m.time_start) && !inView(m.time_end) && !(i1 < endIdx && i2 >= startIdx)) return null;
+          if (i2 < startIdx || i1 >= endIdx) return null;
+          const x1 = px(Math.max(i1, startIdx) - startIdx) - cW / 2;
+          const x2 = px(Math.min(i2, endIdx - 1) - startIdx) + cW / 2;
+          const yT = py(Math.max(m.top, m.bottom));
+          const yB = py(Math.min(m.top, m.bottom));
+          const zW = Math.max(x2 - x1, 1.5);
+          const zH = Math.max(yB - yT, 1.5);
+          const col = zoneColor(m);
+          return <rect key={`mkz${k}`} x={x1} y={yT} width={zW} height={zH} fill={col} stroke={m.type === 'UNICORN' || m.type === 'BPR' ? 'rgba(255,215,0,0.6)' : 'rgba(255,255,255,0.14)'} strokeWidth={0.6} strokeDasharray="2,2" rx={1} />;
+        })}
+
         {/* Volume Bars (rendered at bottom of candlestick panel, y = 270) */}
         {vis.map((c, i) => {
           const vh = (c.v / maxV) * 35;
@@ -292,21 +584,114 @@ function CandleChart({
         {/* Candlesticks */}
         {vis.map((c, i) => {
           const bull = c.c >= c.o;
-          const col = bull ? C.green : C.red;
+          let col = bull ? C.green : C.red;
+          
+          if (isSniper) {
+            const absIdx = startIdx + i;
+            if (absIdx >= 1) {
+              const e9_curr = ema9[absIdx];
+              const e21_curr = ema21[absIdx];
+              const e9_prev = ema9[absIdx - 1];
+              const e21_prev = ema21[absIdx - 1];
+              
+              const trigBuy = e9_curr > e21_curr && e9_prev <= e21_prev;
+              const trigSell = e9_curr < e21_curr && e9_prev >= e21_prev;
+              
+              if (trigBuy || trigSell) {
+                col = '#000000';
+              } else {
+                let lastSignal = 0;
+                for (let j = absIdx; j >= 0; j--) {
+                  const e9_j = ema9[j];
+                  const e21_j = ema21[j];
+                  const e9_j_prev = j > 0 ? ema9[j - 1] : e9_j;
+                  const e21_j_prev = j > 0 ? ema21[j - 1] : e21_j;
+                  if (e9_j > e21_j && e9_j_prev <= e21_j_prev) {
+                    lastSignal = 1;
+                    break;
+                  }
+                  if (e9_j < e21_j && e9_j_prev >= e21_j_prev) {
+                    lastSignal = -1;
+                    break;
+                  }
+                }
+                const retestBuy = lastSignal === 1 && c.l <= e9_curr && c.l > e21_curr;
+                const retestSell = lastSignal === -1 && c.h >= e9_curr && c.h < e21_curr;
+                if (retestBuy || retestSell) {
+                  col = '#f97316';
+                }
+              }
+            }
+          }
+
           const bT = py(Math.max(c.o, c.c));
           const bB = py(Math.min(c.o, c.c));
           const bH = Math.max(bB - bT, 1.5);
           return (
             <g key={`c${i}`}>
               <line x1={px(i)} y1={py(c.h)} x2={px(i)} y2={py(c.l)} stroke={col} strokeWidth={1.2} />
-              <rect x={px(i) - bW / 2} y={bT} width={bW} height={bH} fill={col} opacity={bull ? 0.95 : 0.9} rx={0.5} />
+              <rect x={px(i) - bW / 2} y={bT} width={bW} height={bH} fill={col} opacity={col === '#000000' ? 1.0 : (bull ? 0.95 : 0.9)} rx={0.5} />
             </g>
           );
         })}
 
-        {/* Real Moving Average lines */}
-        {ema20Points && <polyline points={ema20Points} fill="none" stroke={C.blue} strokeWidth={1.2} opacity={0.85} />}
-        {ema50Points && <polyline points={ema50Points} fill="none" stroke={C.gold} strokeWidth={1.2} opacity={0.85} />}
+        {/* Real Moving Average lines / Sniper lines & ribbon */}
+        {!isSniper ? (
+          <>
+            {ema20Points && <polyline points={ema20Points} fill="none" stroke={C.blue} strokeWidth={1.2} opacity={0.85} />}
+            {ema50Points && <polyline points={ema50Points} fill="none" stroke={C.gold} strokeWidth={1.2} opacity={0.85} />}
+          </>
+        ) : (
+          <>
+            {/* EMA Ribbon */}
+            {vis.map((c, i) => {
+              const val9 = visEma9[i];
+              const val21 = visEma21[i];
+              if (val9 === undefined || val21 === undefined) return null;
+              const y9 = py(val9);
+              const y21 = py(val21);
+              const col = val9 > val21 ? 'rgba(16,185,129,0.14)' : 'rgba(239,68,68,0.14)';
+              return (
+                <line key={`ribbon${i}`} x1={px(i)} y1={y9} x2={px(i)} y2={y21} stroke={col} strokeWidth={bW} />
+              );
+            })}
+            {/* EMA 9 */}
+            {ema9Points && <polyline points={ema9Points} fill="none" stroke="#10b981" strokeWidth={1.2} opacity={0.9} />}
+            {/* EMA 21 */}
+            {ema21Points && <polyline points={ema21Points} fill="none" stroke="#ef4444" strokeWidth={1.2} opacity={0.9} />}
+            {/* VWAP */}
+            {vwapPoints && <polyline points={vwapPoints} fill="none" stroke="#3b82f6" strokeWidth={1.5} opacity={0.95} />}
+            
+            {/* Buy/Sell text shapes */}
+            {vis.map((c, i) => {
+              const absIdx = startIdx + i;
+              if (absIdx < 1) return null;
+              const e9_curr = ema9[absIdx];
+              const e21_curr = ema21[absIdx];
+              const e9_prev = ema9[absIdx - 1];
+              const e21_prev = ema21[absIdx - 1];
+              
+              const trigBuy = e9_curr > e21_curr && e9_prev <= e21_prev;
+              const trigSell = e9_curr < e21_curr && e9_prev >= e21_prev;
+              
+              if (trigBuy) {
+                return (
+                  <g key={`shapeBuy${i}`}>
+                    <text x={px(i)} y={py(c.l) + 12} fill="#10b981" fontSize={8} fontFamily={C.mono} fontWeight="bold" textAnchor="middle">BUY</text>
+                  </g>
+                );
+              }
+              if (trigSell) {
+                return (
+                  <g key={`shapeSell${i}`}>
+                    <text x={px(i)} y={py(c.h) - 8} fill="#ef4444" fontSize={8} fontFamily={C.mono} fontWeight="bold" textAnchor="middle">SELL</text>
+                  </g>
+                );
+              }
+              return null;
+            })}
+          </>
+        )}
 
         {/* Live Price Line (Current Ask Price) */}
         <g>
@@ -354,6 +739,17 @@ function CandleChart({
           );
         })}
 
+        {/* AI Markup: Trendlines */}
+        {markup && Array.isArray(markup.objects) && markup.objects.map((m, k) => {
+          if (m.type !== 'TRENDLINE' && m.type !== 'DEALING_CURVE') return null;
+          const i1 = markIdx(m.time_start);
+          const i2 = markIdx(m.time_end);
+          if (i1 === null || i2 === null) return null;
+          if ((i1 < startIdx && i2 < startIdx) || (i1 >= endIdx && i2 >= endIdx)) return null;
+          const curve = m.type === 'DEALING_CURVE';
+          return <line key={`mkt${k}`} x1={px(Math.max(i1, startIdx) - startIdx)} y1={py(m.top || 0)} x2={px(Math.min(i2, endIdx - 1) - startIdx)} y2={py(m.bottom || 0)} stroke={curve ? '#b0c4de' : '#4ade80'} strokeWidth={curve ? 1.1 : 0.9} strokeDasharray={curve ? '' : '4,3'} opacity={curve ? 0.9 : 0.85} />;
+        })}
+
         {/* Panel Separator Line */}
         <line x1={PL} y1={295} x2={W - PR} y2={295} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
 
@@ -375,6 +771,109 @@ function CandleChart({
 
         {/* RSI Polyline */}
         {rsiPoints && <polyline points={rsiPoints} fill="none" stroke="#a855f7" strokeWidth={1.2} />}
+
+        {/* AI Markup: Event arrows + labels (patterns, breaks, liquidity, ICT) */}
+        {markup && Array.isArray(markup.objects) && markup.objects.map((m, k) => {
+          if (!arrowTypes.has(m.type)) return null;
+          const i1 = markIdx(m.time_start);
+          if (i1 === null || i1 < startIdx || i1 >= endIdx) return null;
+          const x = px(i1 - startIdx);
+          const y = py(m.price || 0);
+          const ac = arrowColor(m);
+          const up = m.direction === 'BULLISH';
+          return (
+            <g key={`mka${k}`}>
+              {up
+                ? <path d={`M ${x - 3.5} ${y + 3.5} L ${x} ${y - 4} L ${x + 3.5} ${y + 3.5} Z`} fill={ac} />
+                : <path d={`M ${x - 3.5} ${y - 3.5} L ${x} ${y + 4} L ${x + 3.5} ${y - 3.5} Z`} fill={ac} />}
+              {m.label && <text x={x + 5} y={y - 4} fill={ac} fontSize={6.5} fontFamily={C.mono} fontWeight="700">{m.label}</text>}
+            </g>
+          );
+        })}
+
+        {/* Sniper Strategy Levels (Entry, SL, TP1-TP5) */}
+        {isSniper && activeSniperSignal && (() => {
+          const sig = activeSniperSignal;
+          const sIdx = sig.signalIdx;
+          if (sIdx < startIdx - 20 || sIdx >= endIdx) return null;
+          
+          const startX = px(Math.max(0, sIdx - startIdx));
+          const endX = px(Math.min(visibleCount - 1, sIdx - startIdx + 20));
+          const labelX = px(Math.min(visibleCount - 1, sIdx - startIdx + 12));
+          
+          const levels = [
+            { price: sig.entry, color: '#3b82f6', label: `ENTRY: ${sig.entry.toFixed(2)}`, width: 1.5, dash: '' },
+            { price: sig.sl, color: '#ef4444', label: `SL: ${sig.sl.toFixed(2)}`, width: 1.5, dash: '' },
+            { price: sig.tp1, color: '#10b981', label: `TP1: ${sig.tp1.toFixed(2)}`, width: 1, dash: '3,3' },
+            { price: sig.tp2, color: '#10b981', label: `TP2: ${sig.tp2.toFixed(2)}`, width: 1, dash: '3,3' },
+            { price: sig.tp3, color: '#10b981', label: `TP3: ${sig.tp3.toFixed(2)}`, width: 1, dash: '3,3' },
+            { price: sig.tp4, color: '#047857', label: `TP4: ${sig.tp4.toFixed(2)}`, width: 1.5, dash: '' },
+            { price: sig.tp5, color: '#065f46', label: `TP5: ${sig.tp5.toFixed(2)}`, width: 2, dash: '' },
+          ];
+          
+          return (
+            <g key="sniperLevels">
+              {levels.map((lvl, idx) => {
+                const y = py(lvl.price);
+                return (
+                  <g key={`slvl${idx}`}>
+                    <line x1={startX} y1={y} x2={endX} y2={y} stroke={lvl.color} strokeWidth={lvl.width} strokeDasharray={lvl.dash} opacity={0.85} />
+                    <rect x={labelX} y={y - 6} width={58} height={11} fill="rgba(15,23,42,0.92)" stroke={lvl.color} strokeWidth={0.5} rx={2} />
+                    <text x={labelX + 29} y={y + 2} fill="#fff" fontSize={6.2} fontFamily={C.mono} textAnchor="middle" fontWeight="bold">
+                      {lvl.label}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })()}
+
+        {/* Sniper Strategy Dashboard Overlay */}
+        {isSniper && sniperDashboardData && (() => {
+          const d = sniperDashboardData;
+          const rows = [
+            { label: "BULL SCORE", value: `${d.bullPct.toFixed(0)}%`, bg: '#047857', tc: '#fff' },
+            { label: "BEAR SCORE", value: `${d.bearPct.toFixed(0)}%`, bg: '#b91c1c', tc: '#fff' },
+            { label: "MARKET BIAS", value: d.biasText, bg: '#1f2937', tc: d.biasCol },
+            { label: "Price/VWAP", value: d.vwapStatus, tc: d.vwapCol },
+            { label: "RSI (14)", value: d.rsiVal.toFixed(1), tc: d.rsiVal > 50 ? '#10b981' : '#ef4444' },
+            { label: "MACD Trend", value: d.macdTrend, tc: d.macdCol },
+            { label: "ADX Power", value: d.adxVal.toFixed(1), tc: d.adxCol },
+            { label: "EMA Cross", value: d.emaCross, tc: d.emaCrossCol },
+            { label: "Vol Status", value: d.volStatus, tc: d.volCol },
+            { label: "Status", value: d.statusText, tc: d.statusCol },
+            { label: "Sniper Mode", value: "Qtus V.02", tc: '#3b82f6' },
+          ];
+          
+          const tableW = 86;
+          const rowH = 10;
+          const tableH = rows.length * rowH;
+          const tableX = PL + 8;
+          const tableY = 48;
+          
+          return (
+            <g key="sniperDashboard" opacity={0.92}>
+              <rect x={tableX} y={tableY} width={tableW} height={tableH} fill="rgba(15,23,42,0.92)" stroke="rgba(255,255,255,0.08)" strokeWidth={0.7} rx={3} />
+              {rows.map((r, idx) => {
+                const ry = tableY + idx * rowH;
+                return (
+                  <g key={`drow${idx}`}>
+                    {r.bg && <rect x={tableX + 0.6} y={ry + 0.6} width={tableW - 1.2} height={rowH - 1.2} fill={r.bg} opacity={0.8} rx={1.5} />}
+                    {idx > 0 && <line x1={tableX} y1={ry} x2={tableX + tableW} y2={ry} stroke="rgba(255,255,255,0.05)" strokeWidth={0.4} />}
+                    
+                    <text x={tableX + 4} y={ry + 7} fill={r.bg ? '#fff' : '#9ca3af'} fontSize={5.5} fontFamily={C.sans} fontWeight="bold">
+                      {r.label}
+                    </text>
+                    <text x={tableX + tableW - 4} y={ry + 7} fill={r.tc || '#fff'} fontSize={5.5} fontFamily={C.mono} fontWeight="bold" textAnchor="end">
+                      {r.value}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
+          );
+        })()}
 
         {/* Watermark Logo */}
         <g transform={`translate(${PL + 10}, 30)`}>
@@ -538,9 +1037,135 @@ function getSessionName(): string {
   return 'Asian';
 }
 
+const translations = {
+  VI: {
+    ask: "Giá Ask",
+    bid: "Giá Bid",
+    spread: "Chênh lệch",
+    balance: "Số dư",
+    equity: "Vốn khả dụng",
+    margin: "Ký quỹ",
+    freeMargin: "Ký quỹ tự do",
+    marginLevel: "Mức ký quỹ",
+    plToday: "P/L Hôm nay",
+    drawdown: "Sụt giảm",
+    latency: "Độ trễ",
+    accountOverview: "TỔNG QUAN TÀI KHOẢN",
+    performanceToday: "HIỆU SUẤT HÔM NAY",
+    chartTitle: "BIỂU ĐỒ - XAUUSD",
+    autoTrade: "TỰ ĐỘNG",
+    aiAssistant: "TRỢ LÝ AI",
+    activePositions: "VỊ THẾ ĐANG MỞ",
+    pendingOrders: "LỆNH CHỜ KHỚP",
+    tradeLedger: "SỔ LỆNH GIAO DỊCH",
+    systemLogs: "NHẬT KÝ HỆ THỐNG",
+    ticket: "Vé (Ticket)",
+    type: "Loại",
+    volume: "Khối lượng",
+    entry: "Giá vào",
+    current: "Giá hiện tại",
+    profit: "Lợi nhuận",
+    action: "Thao tác",
+    time: "Thời gian",
+    target: "Mục tiêu",
+    price: "Mức giá",
+    account: "Tài khoản",
+    currency: "Tiền tệ",
+    leverage: "Đòn bẩy",
+    broker: "Nhà môi giới",
+    credit: "Tín dụng",
+    marginUsed: "Ký quỹ đã dùng",
+    realizedPL: "P/L Thực tế",
+    floatingPL: "P/L Trạng thái",
+    totalPL: "Tổng P/L",
+    winRate: "Tỷ lệ thắng",
+    trades: "Giao dịch",
+    bestTrade: "Giao dịch tốt nhất",
+    worstTrade: "Giao dịch tệ nhất",
+    noActivePositions: "Không có vị thế giao dịch nào đang mở.",
+    noPendingOrders: "Không có lệnh chờ nào.",
+    noHistory: "Chưa ghi nhận lịch sử giao dịch hôm nay.",
+    noLogs: "Chưa có log hệ thống.",
+    loadingData: "Đang tải dữ liệu...",
+    closeAllConfirm: "Xác nhận reset toàn bộ hệ thống? (Tất cả vị thế đang mở và lệnh chờ sẽ bị đóng/hủy, PnL ngày hôm nay sẽ được đặt lại về 0)",
+    resetSuccess: "Reset hệ thống thành công!",
+    resetFailed: "Reset thất bại: "
+  },
+  EN: {
+    ask: "Ask",
+    bid: "Bid",
+    spread: "Spread",
+    balance: "Balance",
+    equity: "Equity",
+    margin: "Margin",
+    freeMargin: "Free Margin",
+    marginLevel: "Margin Level",
+    plToday: "P/L Today",
+    drawdown: "Drawdown",
+    latency: "Latency",
+    accountOverview: "ACCOUNT OVERVIEW",
+    performanceToday: "PERFORMANCE TODAY",
+    chartTitle: "CHART - XAUUSD",
+    autoTrade: "AUTO TRADE",
+    aiAssistant: "AI ASSISTANT",
+    activePositions: "ACTIVE POSITIONS",
+    pendingOrders: "PENDING ORDERS",
+    tradeLedger: "TRADE LEDGER",
+    systemLogs: "SYSTEM LOGS",
+    ticket: "Ticket",
+    type: "Type",
+    volume: "Volume",
+    entry: "Entry",
+    current: "Current",
+    profit: "Profit",
+    action: "Action",
+    time: "Time",
+    target: "Target",
+    price: "Price",
+    account: "Account",
+    currency: "Currency",
+    leverage: "Leverage",
+    broker: "Broker",
+    credit: "Credit",
+    marginUsed: "Margin Used",
+    realizedPL: "Realized P/L",
+    floatingPL: "Floating P/L",
+    totalPL: "Total P/L",
+    winRate: "Win Rate",
+    trades: "Trades",
+    bestTrade: "Best Trade",
+    worstTrade: "Worst Trade",
+    noActivePositions: "No active positions.",
+    noPendingOrders: "No pending orders.",
+    noHistory: "No trading history recorded today.",
+    noLogs: "No system logs available.",
+    loadingData: "Loading system data...",
+    closeAllConfirm: "Confirm system reset? (All open positions and pending orders will be closed/cancelled, and today's PnL will be reset to 0)",
+    resetSuccess: "System reset successfully!",
+    resetFailed: "Reset failed: "
+  }
+};
+
 // ── Main Dashboard Application ─────────────────────────────────────────────────
 export default function App() {
   const router = useRouter();
+
+  const [lang, setLang] = useState<'VI' | 'EN'>('VI');
+  useEffect(() => {
+    const saved = localStorage.getItem('quantai_lang');
+    if (saved === 'VI' || saved === 'EN') {
+      setLang(saved);
+    }
+  }, []);
+
+  const changeLang = (l: 'VI' | 'EN') => {
+    setLang(l);
+    localStorage.setItem('quantai_lang', l);
+  };
+
+  const t = (key: keyof typeof translations['VI']) => {
+    return translations[lang]?.[key] || translations['VI'][key] || key;
+  };
 
   // Authentication Guard
   useEffect(() => {
@@ -568,6 +1193,7 @@ export default function App() {
   const [tf, setTf] = useState('M15');
   const [useRealTradingViewChart, setUseRealTradingViewChart] = useState(false);
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [markup, setMarkup] = useState<MarkupResponse | null>(null);
   const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [clock, setClock] = useState('');
@@ -579,6 +1205,7 @@ export default function App() {
   const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [selectedAiModel, setSelectedAiModel] = useState<string>('auto');
+  const [selectedTradingMethod, setSelectedTradingMethod] = useState<string>('ULTRA_CONFLUENCE');
   const [isMt5Connected, setIsMt5Connected] = useState(false);
 
   const [indicators, setIndicators] = useState<TechnicalIndicators>({
@@ -654,6 +1281,28 @@ export default function App() {
     }
   };
 
+  const handleTradingMethodChange = async (method: string) => {
+    setSelectedTradingMethod(method);
+    const res = await updateTradingMethod(method);
+    if (res && res.status === "SUCCESS") {
+      const cc = await fetchControlCenterStatus();
+      if (cc) setControlCenter(cc);
+    }
+  };
+
+  const handleResetAll = async () => {
+    if (!window.confirm(t('closeAllConfirm'))) {
+      return;
+    }
+    const res = await executeResetAll();
+    if (res && res.status === 'SUCCESS') {
+      alert(t('resetSuccess'));
+      window.location.reload();
+    } else {
+      alert(t('resetFailed') + (res?.message || 'Unknown error'));
+    }
+  };
+
   const handleAutoBuy = async () => {
     const res = await executeOrderBuy(0.10);
     setChatMsgs((m) => [...m, { role: 'ai', text: `[BUY] ${res.message}`, time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) }]);
@@ -712,7 +1361,12 @@ export default function App() {
       ]).catch(() => [null, null, null, null, null, null, null, null, null, null] as const);
 
       if (!active || controller.signal.aborted) return;
-      if (controlCenterResult) setControlCenter(controlCenterResult);
+      if (controlCenterResult) {
+        setControlCenter(controlCenterResult);
+        if (controlCenterResult.safeguards?.trading_method) {
+          setSelectedTradingMethod(controlCenterResult.safeguards.trading_method);
+        }
+      }
       if (pendingResult) setPendingOrders(pendingResult);
       if (logsResult) setLogs(logsResult as LogEntry[]);
       if (chatHistoryResult) setChatMsgs(chatHistoryResult);
@@ -742,7 +1396,7 @@ export default function App() {
         if (statusResult.news) setNews(statusResult.news);
       }
 
-      if (marketResult && statusResult?.mt5_connected) { setCandles(marketResult.candles); if (marketResult.indicators) setIndicators(marketResult.indicators); }
+      if (marketResult && statusResult?.mt5_connected) { setCandles(marketResult.candles); if (marketResult.indicators) setIndicators(marketResult.indicators); if (marketResult.markup) setMarkup(marketResult.markup); }
       if (positionsResult && statusResult?.mt5_connected) setPositions(positionsResult);
       if (historyResult && statusResult?.mt5_connected) setTradeHistory(historyResult);
 
@@ -760,7 +1414,7 @@ export default function App() {
     setChatMsgs((m) => [...m, { role: 'user', text: customPrompt, time: t }]);
     const aiRes = await sendCopilotChat(customPrompt, 'XAUUSD', tf, selectedAiModel);
     if (aiRes) { setChatMsgs((m) => [...m, aiRes]); }
-    else { setChatMsgs((m) => [...m, { role: 'ai', text: 'AI Copilot unavailable.', time: t }]); }
+    else { setChatMsgs((m) => [...m, { role: 'ai', text: 'AI unavailable.', time: t }]); }
   };
 
   const sendChat = async () => { if (!chatInput.trim()) return; const p = chatInput; setChatInput(''); await triggerAIChat(p); };
@@ -780,6 +1434,7 @@ export default function App() {
   const activeTotalPL = todayPerf.realized_pl + floatingPnl;
   const activeDrawdown = activeBalance > 0 ? Math.max(0, ((activeBalance - activeEquity) / activeBalance * 100)) : 0.0;
   const activeRiskPct = activeBalance > 0 ? Math.min(100, (activeMargin / activeBalance * 100)) : 0.0;
+  const plPct = (activeBalance - activeTotalPL) > 0 ? (activeTotalPL / (activeBalance - activeTotalPL) * 100) : 0.0;
 
   const displayPositions = positions;
   const displayPending = pendingOrders;
@@ -803,34 +1458,54 @@ export default function App() {
           </div>
         </div>
         <VDiv />
-        <HStat label="Ask" value={askPrice > 0 ? `$${askPrice.toFixed(2)}` : "N/A"} color={C.green} />
+        <HStat label={t('ask')} value={askPrice > 0 ? `$${askPrice.toFixed(2)}` : "N/A"} color={C.green} />
         <VDiv />
-        <HStat label="Bid" value={bidPrice > 0 ? `$${bidPrice.toFixed(2)}` : "N/A"} color={C.blue} />
+        <HStat label={t('bid')} value={bidPrice > 0 ? `$${bidPrice.toFixed(2)}` : "N/A"} color={C.blue} />
         <VDiv />
-        <HStat label="Spread" value={(askPrice > 0 && bidPrice > 0) ? `${(askPrice - bidPrice).toFixed(2)}` : "N/A"} color={C.gold} />
+        <HStat label={t('spread')} value={(askPrice > 0 && bidPrice > 0) ? `${(askPrice - bidPrice).toFixed(2)}` : "N/A"} color={C.gold} />
         <VDiv />
-        <HStat label="Balance" value={`$${activeBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
+        <HStat label={t('balance')} value={`$${activeBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
         <VDiv />
-        <HStat label="Equity" value={`$${activeEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} color={C.green} />
+        <HStat label={t('equity')} value={`$${activeEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} color={C.green} />
         <VDiv />
-        <HStat label="Margin" value={`$${activeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
+        <HStat label={t('margin')} value={`$${activeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
         <VDiv />
-        <HStat label="Free Margin" value={`$${activeFreeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
+        <HStat label={t('freeMargin')} value={`$${activeFreeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
         <VDiv />
-        <HStat label="Margin Level" value={`${activeMarginLevel.toFixed(2)}%`} color={C.green} />
+        <HStat label={t('marginLevel')} value={`${activeMarginLevel.toFixed(2)}%`} color={C.green} />
         <VDiv />
-        <HStat label="P/L Today" value={`+${activeTotalPL >= 0 ? '$' + activeTotalPL.toFixed(2) : '-$' + Math.abs(activeTotalPL).toFixed(2)} (+0.53%)`} color={C.green} />
+        <HStat
+          label={t('plToday')}
+          value={`${activeTotalPL >= 0 ? '+$' : '-$'}${Math.abs(activeTotalPL).toFixed(2)} (${plPct >= 0 ? '+' : ''}${plPct.toFixed(2)}%)`}
+          color={activeTotalPL > 0 ? C.green : activeTotalPL < 0 ? C.red : C.text}
+        />
         <VDiv />
-        <HStat label="Drawdown" value={`${activeDrawdown.toFixed(2)}%`} color={C.red} />
+        <HStat label={t('drawdown')} value={`${activeDrawdown.toFixed(2)}%`} color={C.red} />
         <VDiv />
-        <HStat label="Latency" value={`${latencyMs || 23}ms`} color={C.green} />
+        <HStat label={t('latency')} value={`${latencyMs || 23}ms`} color={C.green} />
         <div style={{ flex: 1 }} />
         <div style={{ fontSize: 8, color: C.text, fontFamily: C.mono, display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
           <span style={{ color: C.text, fontWeight: 700 }}>{clock || '14:27:35'}</span>
           <span style={{ fontSize: 6.5, color: C.muted }}>(UTC+7)</span>
           <VDiv />
           <button ref={controlCenterTriggerRef} type="button" onClick={() => setIsControlCenterOpen(true)} style={{ color: C.dim, background: 'transparent', border: 0, padding: 0, cursor: 'pointer', fontSize: 10 }}>[CFG]</button>
-          <button type="button" style={{ color: C.text, background: 'transparent', border: 0, padding: 0, cursor: 'pointer', fontSize: 8, fontFamily: C.mono }}>VI / US</button>
+          <button
+            type="button"
+            onClick={() => changeLang(lang === 'VI' ? 'EN' : 'VI')}
+            style={{ color: C.text, background: 'transparent', border: 0, padding: 0, cursor: 'pointer', fontSize: 8, fontFamily: C.mono, fontWeight: 700 }}
+            title={lang === 'VI' ? 'Chuyển sang tiếng Anh' : 'Switch to Vietnamese'}
+          >
+            {lang === 'VI' ? 'VI' : 'EN'}
+          </button>
+          <VDiv />
+          <button
+            type="button"
+            onClick={handleResetAll}
+            style={{ color: C.red, background: 'transparent', border: 0, padding: 0, cursor: 'pointer', fontSize: 8, fontFamily: C.mono, fontWeight: 700 }}
+            title={lang === 'VI' ? 'Reset toàn bộ hệ thống (PnL & Lệnh mở)' : 'Reset all system data (PnL & Open Positions)'}
+          >
+            [RESET]
+          </button>
           <VDiv />
           <button
             type="button"
@@ -859,28 +1534,28 @@ export default function App() {
 
           {/* ACCOUNT OVERVIEW */}
           <Panel style={{ justifyContent: 'space-between' }}>
-            <SectionTitle action={<span style={{ fontSize: 6.5, color: (controlCenter?.account?.trade_mode === 'REAL') ? C.gold : C.muted, fontFamily: C.mono, fontWeight: 800 }}>{accountId > 0 ? `${controlCenter?.account?.trade_mode || 'ACC'}-${accountId}` : 'DISCONNECTED'}</span>}>ACCOUNT OVERVIEW</SectionTitle>
-            <Row label="Account" value={accountId > 0 ? `${controlCenter?.account?.trade_mode || 'ACC'}-${accountId}` : 'DISCONNECTED'} />
-            <Row label="Currency" value={currency || 'USD'} />
-            <Row label="Leverage" value={leverage > 0 ? `1:${leverage}` : 'N/A'} />
-            <Row label="Broker" value={broker || 'N/A'} />
-            <Row label="Balance" value={`$${activeBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-            <Row label="Equity" value={`$${activeEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} color={C.green} />
-            <Row label="Credit" value="$0.00" />
-            <Row label="Free Margin" value={`$${activeFreeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-            <Row label="Margin Used" value={`$${activeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-            <Row label="Margin Level" value={`${activeMarginLevel.toFixed(2)}%`} color={C.green} />
+            <SectionTitle action={<span style={{ fontSize: 6.5, color: (controlCenter?.account?.trade_mode === 'REAL') ? C.gold : C.muted, fontFamily: C.mono, fontWeight: 800 }}>{accountId > 0 ? `${controlCenter?.account?.trade_mode || 'ACC'}-${accountId}` : 'DISCONNECTED'}</span>}>{t('accountOverview')}</SectionTitle>
+            <Row label={t('account')} value={accountId > 0 ? `${controlCenter?.account?.trade_mode || 'ACC'}-${accountId}` : 'DISCONNECTED'} />
+            <Row label={t('currency')} value={currency || 'USD'} />
+            <Row label={t('leverage')} value={leverage > 0 ? `1:${leverage}` : 'N/A'} />
+            <Row label={t('broker')} value={broker || 'N/A'} />
+            <Row label={t('balance')} value={`$${activeBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
+            <Row label={t('equity')} value={`$${activeEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} color={C.green} />
+            <Row label={t('credit')} value="$0.00" />
+            <Row label={t('freeMargin')} value={`$${activeFreeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
+            <Row label={t('marginUsed')} value={`$${activeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
+            <Row label={t('marginLevel')} value={`${activeMarginLevel.toFixed(2)}%`} color={C.green} />
             <Divider />
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
-                <SectionTitle action={<span style={{ fontSize: 8, color: C.green, fontFamily: C.mono }}>&gt;&gt;</span>}>PERFORMANCE TODAY</SectionTitle>
-                <Row label="Realized P/L" value={todayPerf.realized_pl !== 0 ? `+$${todayPerf.realized_pl.toFixed(2)}` : '+$28.10'} color={C.green} />
-                <Row label="Floating P/L" value={`+$${(displayPositions.reduce((s, p) => s + p.profit, 0)).toFixed(2)}`} color={C.green} />
-                <Row label="Total P/L" value={`+$${activeTotalPL.toFixed(2)}`} color={C.green} />
-                <Row label="Win Rate" value={todayPerf.trades_today > 0 ? `${((todayPerf.wins / todayPerf.trades_today) * 100).toFixed(2)}%` : '66.67%'} color={C.gold} />
-                <Row label="Trades" value={todayPerf.trades_today > 0 ? `${todayPerf.trades_today} (${todayPerf.wins}W / ${todayPerf.losses}L)` : '12 (8W / 4L)'} />
-                <Row label="Best Trade" value={todayPerf.best_trade_today !== 0 ? `+$${todayPerf.best_trade_today.toFixed(2)}` : '+$45.63'} color={C.green} />
-                <Row label="Worst Trade" value={todayPerf.worst_trade_today !== 0 ? `$${todayPerf.worst_trade_today.toFixed(2)}` : '-$12.38'} color={C.red} />
+                <SectionTitle action={<span style={{ fontSize: 8, color: C.green, fontFamily: C.mono }}>&gt;&gt;</span>}>{t('performanceToday')}</SectionTitle>
+                <Row label={t('realizedPL')} value={todayPerf.realized_pl !== 0 ? `${todayPerf.realized_pl >= 0 ? '+' : ''}$${todayPerf.realized_pl.toFixed(2)}` : '+$28.10'} color={todayPerf.realized_pl >= 0 ? C.green : C.red} />
+                <Row label={t('floatingPL')} value={`${(displayPositions.reduce((s, p) => s + p.profit, 0)) >= 0 ? '+' : ''}$${(displayPositions.reduce((s, p) => s + p.profit, 0)).toFixed(2)}`} color={(displayPositions.reduce((s, p) => s + p.profit, 0)) >= 0 ? C.green : C.red} />
+                <Row label={t('totalPL')} value={`${activeTotalPL >= 0 ? '+' : ''}$${activeTotalPL.toFixed(2)}`} color={activeTotalPL >= 0 ? C.green : C.red} />
+                <Row label={t('winRate')} value={todayPerf.trades_today > 0 ? `${((todayPerf.wins / todayPerf.trades_today) * 100).toFixed(2)}%` : '66.67%'} color={C.gold} />
+                <Row label={t('trades')} value={todayPerf.trades_today > 0 ? `${todayPerf.trades_today} (${todayPerf.wins}W / ${todayPerf.losses}L)` : '12 (8W / 4L)'} />
+                <Row label={t('bestTrade')} value={todayPerf.best_trade_today !== 0 ? `+$${todayPerf.best_trade_today.toFixed(2)}` : '+$45.63'} color={C.green} />
+                <Row label={t('worstTrade')} value={todayPerf.worst_trade_today !== 0 ? `$${todayPerf.worst_trade_today.toFixed(2)}` : '-$12.38'} color={C.red} />
               </div>
               <div style={{ paddingTop: 10 }}>
                 <PerformanceSparkline equityCurve={performance.equity_curve} />
@@ -892,7 +1567,7 @@ export default function App() {
           <Panel style={{ gap: 0, display: 'flex', flexDirection: 'column' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px', flexShrink: 0 }}>
               <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                <SectionTitle>CHART - XAUUSD · M15</SectionTitle>
+                <SectionTitle>{t('chartTitle')} · M15</SectionTitle>
                 {['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'].map((t) => (
                   <TFBtn key={t} label={t} active={tf === t} onClick={() => setTf(t)} />
                 ))}
@@ -915,7 +1590,7 @@ export default function App() {
               {useRealTradingViewChart ? (
                 <RealTradingViewWidget symbol="FX:XAUUSD" />
               ) : (
-                <CandleChart candles={candles} livePrice={price || 2363.10} positions={displayPositions} indicators={indicators} />
+                <CandleChart candles={candles} livePrice={price || 2363.10} positions={displayPositions} indicators={indicators} markup={markup} selectedTradingMethod={selectedTradingMethod} />
               )}
             </div>
           </Panel>
@@ -928,7 +1603,7 @@ export default function App() {
                   style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', userSelect: 'none' }}
                   onClick={handleToggleAutoTrade}
                 >
-                  <span style={{ fontSize: 6.5, color: (controlCenter?.safeguards?.ai_auto_loop) ? C.green : C.muted, fontWeight: 700, fontFamily: C.mono }}>AUTO TRADE</span>
+                  <span style={{ fontSize: 6.5, color: (controlCenter?.safeguards?.ai_auto_loop) ? C.green : C.muted, fontWeight: 700, fontFamily: C.mono }}>{t('autoTrade')}</span>
                   <div style={{
                     width: 22, height: 10, borderRadius: 5, background: (controlCenter?.safeguards?.ai_auto_loop) ? 'rgba(34,197,94,0.3)' : 'rgba(255,255,255,0.08)',
                     border: `1px solid ${(controlCenter?.safeguards?.ai_auto_loop) ? C.green : 'rgba(255,255,255,0.15)'}`, position: 'relative', transition: 'all 0.2s'
@@ -941,6 +1616,24 @@ export default function App() {
                 </div>
 
                 <select
+                  value={selectedTradingMethod}
+                  onChange={(e) => handleTradingMethodChange(e.target.value)}
+                  style={{
+                    fontSize: 6.5, color: C.muted, fontFamily: C.mono, background: 'rgba(255,255,255,0.04)',
+                    border: '1px solid rgba(255,255,255,0.08)', borderRadius: '3px', padding: '1px 3px',
+                    outline: 'none', cursor: 'pointer',
+                  }}
+                  title="Trading Method"
+                >
+                   <option value="ULTRA_CONFLUENCE" style={{ background: '#0b0f19', color: C.text }}>Ultra Confluence</option>
+                  <option value="SMC" style={{ background: '#0b0f19', color: C.text }}>SMC Concepts</option>
+                  <option value="ICT" style={{ background: '#0b0f19', color: C.text }}>ICT Killzone</option>
+                  <option value="PRICE_ACTION" style={{ background: '#0b0f19', color: C.text }}>Price Action</option>
+                  <option value="SNIPER" style={{ background: '#0b0f19', color: C.text }}>Sniper Strategy</option>
+                  <option value="INDICATOR" style={{ background: '#0b0f19', color: C.text }}>Chỉ báo (EMA/RSI)</option>
+                </select>
+
+                <select
                   value={selectedAiModel}
                   onChange={(e) => setSelectedAiModel(e.target.value)}
                   style={{
@@ -950,37 +1643,57 @@ export default function App() {
                   }}
                 >
                   <option value="auto" style={{ background: '#0b0f19', color: C.text }}>Auto Fallback</option>
-                  <option value="gpt-4o" style={{ background: '#0b0f19', color: C.green }}>GPT-4o</option>
-                  <option value="kimi-k3" style={{ background: '#0b0f19', color: C.gold }}>Kimi-K3</option>
-                  <option value="gemini-1.5-flash" style={{ background: '#0b0f19', color: C.cyan }}>Gemini 1.5 Flash</option>
+                  <optgroup label="🆓 OpenCode Zen Free (Mặc định - Không cần Key)" style={{ background: '#0b0f19', color: C.muted }}>
+                    <option value="deepseek-v4-flash-free" style={{ background: '#0b0f19', color: C.green }}>DeepSeek V4 Flash</option>
+                    <option value="big-pickle" style={{ background: '#0b0f19', color: C.green }}>Big Pickle</option>
+                    <option value="mimo-v2.5-free" style={{ background: '#0b0f19', color: C.green }}>MiMo V2.5</option>
+                    <option value="nemotron-3-ultra-free" style={{ background: '#0b0f19', color: C.green }}>Nemotron 3 Ultra</option>
+                    <option value="north-mini-code-free" style={{ background: '#0b0f19', color: C.green }}>North Mini</option>
+                    <option value="laguna-s-2.1-free" style={{ background: '#0b0f19', color: C.green }}>Laguna S 2.1</option>
+                    <option value="longcat-2.0-free" style={{ background: '#0b0f19', color: C.green }}>LongCat 2.0</option>
+                  </optgroup>
+                  <optgroup label="💎 Premium (Cần API Key)" style={{ background: '#0b0f19', color: C.muted }}>
+                    <option value="gpt-4o" style={{ background: '#0b0f19', color: C.green }}>GPT-4o</option>
+                    <option value="kimi-k3" style={{ background: '#0b0f19', color: C.gold }}>Kimi-K3</option>
+                    <option value="gemini-3.5-flash" style={{ background: '#0b0f19', color: C.blue }}>Gemini 3.5 Flash</option>
+                  </optgroup>
                 </select>
               </div>
-            }>AI ASSISTANT</SectionTitle>
+            }>{t('aiAssistant')}</SectionTitle>
 
-            {/* Market Analysis Card (Dark Purple Velvet Style) */}
+            {/* Market Analysis Card (Live Data) */}
             <div style={{ padding: '6px 8px', background: 'rgba(30, 20, 50, 0.75)', border: '1px solid rgba(168, 85, 247, 0.35)', borderRadius: '5px', flexShrink: 0, boxShadow: '0 0 15px rgba(168, 85, 247, 0.15)' }}>
-              <div style={{ fontSize: 7.5, color: '#e9d5ff', fontWeight: 600, marginBottom: 2 }}>Market Analysis (14:27)</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                <div style={{ fontSize: 7.5, color: '#e9d5ff', fontWeight: 600 }}>Market Analysis</div>
+                <div style={{ fontSize: 6.5, color: C.muted, fontFamily: C.mono }}>
+                  {clock} {indicators.data_status === 'LIVE_VERIFIED' ? '• LIVE' : '• N/A'}
+                </div>
+              </div>
               <div style={{ fontSize: 7, color: '#c0a0e0', fontFamily: C.mono, lineHeight: 1.35, marginBottom: 4 }}>
-                XAUUSD đang trong xu hướng tăng ngắn hạn trên khung M15. Giá đang kiểm định vùng kháng cự 2366.00 - 2368.00. Nếu phá vỡ 2368.50, mục tiêu tiếp theo là 2374.00.
+                XAUUSD {bidPrice > 0 ? `@ ${bidPrice.toFixed(2)} / ${askPrice > 0 ? askPrice.toFixed(2) : '—'}` : 'N/A'}. {' '}
+                EMA20 {indicators.ema20 > 0 ? indicators.ema20.toFixed(2) : 'N/A'} | EMA50 {indicators.ema50 > 0 ? indicators.ema50.toFixed(2) : 'N/A'} | EMA200 {indicators.ema200 > 0 ? indicators.ema200.toFixed(2) : 'N/A'}. {' '}
+                RSI(14) {indicators.rsi > 0 ? indicators.rsi.toFixed(1) : 'N/A'} | ATR(14) {indicators.atr > 0 ? indicators.atr.toFixed(2) : 'N/A'} | Pivot {indicators.pivot > 0 ? indicators.pivot.toFixed(2) : 'N/A'}.
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
                 <span style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>Trading Bias</span>
-                <span style={{ fontSize: 8, color: C.green, fontWeight: 800, fontFamily: C.mono }}>BULLISH</span>
+                <span style={{ fontSize: 8, color: aiSignal.primary_signal === 'BUY' ? C.green : aiSignal.primary_signal === 'SELL' ? C.red : C.muted, fontWeight: 800, fontFamily: C.mono }}>
+                  {aiSignal.primary_signal}
+                </span>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
                 <span style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>Confidence</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '60%' }}>
                   <div style={{ flex: 1, height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 2 }}>
-                    <div style={{ height: '100%', width: '72%', background: C.green, borderRadius: 2 }} />
+                    <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, parseInt(aiSignal.confidence) || 0))}%`, background: aiSignal.primary_signal === 'SELL' ? C.red : C.green, borderRadius: 2 }} />
                   </div>
-                  <span style={{ fontSize: 7.5, color: C.text, fontWeight: 700, fontFamily: C.mono }}>72%</span>
+                  <span style={{ fontSize: 7.5, color: C.text, fontWeight: 700, fontFamily: C.mono }}>{aiSignal.confidence || 'N/A'}</span>
                 </div>
               </div>
               <div style={{ fontSize: 6.5, color: C.muted, fontFamily: C.mono, marginTop: 3 }}>
-                Key Levels: • Support: 2368.00 - 2357.48 | • Resistance: 2365.80 - 2374.00
+                Key Levels: • Support: {indicators.s2 > 0 ? indicators.s2.toFixed(2) : '—'} - {indicators.s1 > 0 ? indicators.s1.toFixed(2) : '—'} | • Resistance: {indicators.r1 > 0 ? indicators.r1.toFixed(2) : '—'} - {indicators.r2 > 0 ? indicators.r2.toFixed(2) : '—'}
               </div>
               <div style={{ fontSize: 6.5, color: C.green, fontFamily: C.mono, marginTop: 2 }}>
-                Recommendation: BUY nếu phá 2368.50 | SL: 2357.48 | TP1: 2365.80 | TP2: 2374.00
+                Recommendation: {aiSignal.primary_signal !== 'NO_TRADE' && aiSignal.primary_signal ? `${aiSignal.primary_signal} | Entry: ${aiSignal.entry_zone || '—'} | SL: ${aiSignal.stop_loss || '—'} | TP: ${aiSignal.take_profit || '—'}` : 'Chờ tín hiệu từ AI Engine...'}
               </div>
             </div>
 
@@ -1006,7 +1719,7 @@ export default function App() {
 
           {/* OPEN POSITIONS (3) */}
           <Panel style={{ justifyContent: 'space-between' }}>
-            <SectionTitle>OPEN POSITIONS ({displayPositions.length})</SectionTitle>
+            <SectionTitle>{t('activePositions')} ({displayPositions.length})</SectionTitle>
             <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 7.5 }}>
                 <thead>
@@ -1033,14 +1746,14 @@ export default function App() {
               </table>
             </div>
             <div style={{ paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-              <span style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>Total Floating P/L</span>
+              <span style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>{t('floatingPL')}</span>
               <span style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 800, color: (displayPositions.reduce((s, p) => s + p.profit, 0)) >= 0 ? C.green : C.red }}>{(displayPositions.reduce((s, p) => s + p.profit, 0)) >= 0 ? '+' : ''}${(displayPositions.reduce((s, p) => s + p.profit, 0)).toFixed(2)}</span>
             </div>
           </Panel>
 
           {/* PENDING ORDERS */}
           <Panel style={{ justifyContent: 'space-between' }}>
-            <SectionTitle>PENDING ORDERS ({displayPending.length})</SectionTitle>
+            <SectionTitle>{t('pendingOrders')} ({displayPending.length})</SectionTitle>
             <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 7.5 }}>
                 <thead>
@@ -1219,7 +1932,7 @@ export default function App() {
 
           {/* TRADE HISTORY (LATEST 10) */}
           <Panel style={{ justifyContent: 'space-between' }}>
-            <SectionTitle>TRADE HISTORY (LATEST 10)</SectionTitle>
+            <SectionTitle>{t('tradeLedger')} (LATEST 10)</SectionTitle>
             <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 7 }}>
                 <thead>
@@ -1247,9 +1960,9 @@ export default function App() {
               </table>
             </div>
             <div style={{ paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 7.5, fontFamily: C.mono, flexShrink: 0 }}>
-              <span style={{ color: C.muted }}>Total Trades: <span style={{ color: C.text }}>{todayPerf?.trades_today !== undefined ? todayPerf.trades_today : tradeHistory.length}</span></span>
-              <span style={{ color: C.muted }}>Win Rate: <span style={{ color: C.text }}>{performance?.win_rate || '0.0%'}</span></span>
-              <span style={{ color: C.muted }}>Total P/L: <span style={{ color: (todayPerf?.realized_pl || 0) >= 0 ? C.green : C.red, fontWeight: 800 }}>{(todayPerf?.realized_pl || 0) >= 0 ? `+$${(todayPerf?.realized_pl || 0).toFixed(2)}` : `-$${Math.abs(todayPerf?.realized_pl || 0).toFixed(2)}`}</span></span>
+              <span style={{ color: C.muted }}>{t('trades')}: <span style={{ color: C.text }}>{todayPerf?.trades_today !== undefined ? todayPerf.trades_today : tradeHistory.length}</span></span>
+              <span style={{ color: C.muted }}>{t('winRate')}: <span style={{ color: C.text }}>{performance?.win_rate || '0.0%'}</span></span>
+              <span style={{ color: C.muted }}>{t('realizedPL')}: <span style={{ color: (todayPerf?.realized_pl || 0) >= 0 ? C.green : C.red, fontWeight: 800 }}>{(todayPerf?.realized_pl || 0) >= 0 ? `+$${(todayPerf?.realized_pl || 0).toFixed(2)}` : `-$${Math.abs(todayPerf?.realized_pl || 0).toFixed(2)}`}</span></span>
             </div>
           </Panel>
 
@@ -1859,7 +2572,7 @@ export default function App() {
                   SYSTEM LOG CONSOLE - REALTIME LOG MONITOR
                 </div>
                 <div style={{ fontSize: 9.5, color: C.muted, fontFamily: C.sans, marginTop: 2 }}>
-                  Nhật ký ghi chép hệ thống toàn diện (EA MT5, Risk Engine, AI Copilot, Order Latency)
+                  Nhật ký ghi chép hệ thống toàn diện (EA MT5, Risk Engine, AI , Order Latency)
                 </div>
               </div>
               <button

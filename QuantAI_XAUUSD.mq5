@@ -15,15 +15,15 @@ input string   InpApiUrl           = "https://autonomous-trading-engine.vercel.a
 input ulong    InpMagicNumber      = 888999;                 // EA Magic Number
 input string   InpSymbol           = "XAUUSDm";              // Trading Symbol (Blank for auto-detect chart)
 input int      InpPollIntervalSec  = 1;                      // AI Protocol Poll Interval (seconds)
-input bool     InpExecutionEnabled = true;                 // Fail closed until the command protocol is upgraded
-input string   InpBridgeToken      = "20022007@Tu";                    // Required Bearer token for protected bridge endpoints
+input bool     InpExecutionEnabled = false;                // Fail closed: execution starts DISABLED unless explicitly enabled
+input string   InpBridgeToken      = "";                   // Required Bearer token for protected bridge endpoints (set in terminal/input params)
 input string   InpExecutorId       = "ate-ea-local";        // Unique executor identity for command leases
 input bool     InpVerifyAccount    = true;                  // Strict Account Verification (DEMO + LIVE allowlist)
 input string   InpExpectedCompany   = "Exness Technologies Ltd"; // Broker company allowlist
 input long     InpExpectedLiveLogin = 0;                    // LIVE account allowlist (0 = not configured -> LIVE refused)
 input string   InpExpectedLiveServer= "";                   // LIVE server allowlist (empty = not configured)
 input double   InpMaxSpread        = 0.50;                   // XAUUSDm raw-price spread cap
-input int      InpMaxPositions     = 1;                      // Matching symbol/magic position cap
+input int      InpMaxPositions     = 5;                     // Matching symbol/magic position cap (kept in sync with backend risk policy)
 input int      InpMaxDeviationPts  = 50;                     // Broker request deviation cap
 input int      InpCalendarIntervalSec = 300;                 // Economic calendar push interval (seconds)
 input int      InpMaxConsecutiveFailures = 5;                // Backoff threshold before slowing poll
@@ -77,10 +77,10 @@ int OnInit()
    m_trade.SetDeviationInPoints(InpMaxDeviationPts);
    m_trade.SetAsyncMode(false);
    
-   if(InpPollIntervalSec < 1 || InpMagicNumber != 888999)
+   if(InpPollIntervalSec < 1)
    {
-      QuantAILog("INIT_FAILED: poll interval or magic is invalid.");
-      Print("QuantAI configuration rejected: poll interval or magic is invalid.");
+      QuantAILog("INIT_FAILED: poll interval is invalid.");
+      Print("QuantAI configuration rejected: poll interval is invalid.");
       return(INIT_PARAMETERS_INCORRECT);
    }
    if(!SymbolSelect(g_symbol, true))
@@ -173,7 +173,6 @@ bool IsValidCommand(double volume, double stopLoss, double takeProfit, string ac
    double minVolume = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
    double maxVolume = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MAX);
    double step = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_STEP);
-   int digits = (int)SymbolInfoInteger(g_symbol, SYMBOL_DIGITS);
    double point = SymbolInfoDouble(g_symbol, SYMBOL_POINT);
    int stopsLevel = (int)SymbolInfoInteger(g_symbol, SYMBOL_TRADE_STOPS_LEVEL);
    int freezeLevel = (int)SymbolInfoInteger(g_symbol, SYMBOL_TRADE_FREEZE_LEVEL);
@@ -208,9 +207,24 @@ void OnTimer()
    if(!TerminalInfoInteger(TERMINAL_CONNECTED))
    {
       m_consecutive_failures++;
-      if(m_consecutive_failures >= InpMaxConsecutiveFailures)
-         PrintFormat("QuantAI reconnect watchdog: terminal offline (failures=%d). Backing off.", m_consecutive_failures);
+      if(m_consecutive_failures == 1)
+      {
+         Print("QuantAI reconnect watchdog: Terminal disconnected from broker. Attempting to reconnect...");
+      }
+      else if(m_consecutive_failures == InpMaxConsecutiveFailures)
+      {
+         PrintFormat("QuantAI reconnect watchdog: Terminal offline for %d seconds. Backing off check interval to 10 seconds.", m_consecutive_failures);
+         EventSetTimer(10);
+      }
       return; // Skip this cycle; timer fires again and retries automatically.
+   }
+
+   // Restore normal polling if connection recovered
+   if(m_consecutive_failures > 0)
+   {
+      PrintFormat("QuantAI reconnect watchdog: Terminal reconnected successfully. Restoring poll interval to %d seconds.", InpPollIntervalSec);
+      m_consecutive_failures = 0;
+      EventSetTimer(InpPollIntervalSec);
    }
 
    // 1. Send Telemetry to AI Engine (also acts as the EA heartbeat) at its own cadence.
@@ -292,7 +306,7 @@ void SendTelemetry()
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
    
-   int res = WebRequest("POST", QuantAIApiBase() + "/api/telemetry", headers, 3000, data, result, result_headers);
+   int res = WebRequest("POST", QuantAIApiBase() + "/api/v1/telemetry", headers, 3000, data, result, result_headers);
    if(res != 200)
    {
       int err = GetLastError();
@@ -719,6 +733,6 @@ double ExtractDouble(string json, string key, double defaultValue)
    if(endPos > 0) sub = StringSubstr(sub, 0, endPos);
    
    double val = StringToDouble(sub);
-   return (val > 0) ? val : defaultValue;
+   return (val != 0) ? val : defaultValue;
 }
 //+------------------------------------------------------------------+

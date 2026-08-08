@@ -46,18 +46,86 @@ class RiskDecision:
     policy_version: str
 
 
-def _normalize_volume(requested: float, spec: SymbolSpec) -> Optional[float]:
+#--- Dynamic lot sizing / DCA tuning (applies at command-issuance time) ---------
+# AI tự quyết định khối lượng dựa trên vốn; mọi lô được clamp trong [volume_min, volume_max].
+# DCA tích cực (cùng hướng, giá theo đúng kịch bản): lot lệnh đầu lớn nhất, các lệnh sau nhỏ dần.
+# DCA âm (giá chạy ngược): lot theo cấp số cộng tăng dần nhưng tổng rủi ro không vượt cap.
+DCA_DEFAULT_MIN_LOT    = 0.01
+DCA_DEFAULT_MAX_LOT    = 20.0
+# Hệ số thu nhỏ lot khi nhồi cùng hướng (mỗi lệnh sau = lot trước * ratio)
+DCA_SAME_DIRECTION_RATIO = 0.60
+# Hệ số tăng khi nhồi ngược hướng:   vol(n) = base * (1 + growth * (n-1))
+DCA_COUNTER_DIRECTION_GROWTH = 1.20
+# Tổng rủi ro nếu toàn bộ basket chạm SL không được vượt quá tỷ lệ equity.
+MAX_BASKET_LOSS_FRACTION = 0.50
+
+
+def _normalize_volume(requested: float, spec: SymbolSpec, volume_max: Optional[float] = None) -> Optional[float]:
     if not isfinite(requested) or not isfinite(spec.volume_min) or not isfinite(spec.volume_max) or not isfinite(spec.volume_step):
         return None
-    if requested <= 0 or spec.volume_step <= 0 or requested < (spec.volume_min * 0.5):
+    if requested <= 0 or spec.volume_step <= 0:
         return None
+    if requested < spec.volume_min * 0.5:
+        return None
+    hard_max = spec.volume_max if volume_max is None else min(volume_max, spec.volume_max)
     if requested < spec.volume_min:
         requested = spec.volume_min
     steps = int((requested - spec.volume_min + 1e-12) / spec.volume_step)
     volume = spec.volume_min + steps * spec.volume_step
-    if volume > spec.volume_max:
-        volume = spec.volume_max
+    if volume > hard_max:
+        volume = hard_max
     return round(volume, 2)
+
+
+def compute_dca_volume(
+    *,
+    base_volume: float,
+    entry_index: int,
+    same_direction: bool,
+    spec: SymbolSpec,
+    volume_max: float = DCA_DEFAULT_MAX_LOT,
+) -> Optional[float]:
+    """Khối lượng cho lệnh thứ `entry_index` (0-based) trong chuỗi DCA.
+
+    - entry_index 0: lệnh đầu tiên dùng đúng volume từ equity-based sizing.
+    - same_direction=True  (nhồi đứng hướng, giá đúng kịch bản): lot giảm dần sau mỗi lệnh.
+    - same_direction=False (DCA ngược, giá đang chạy ngược vùng SL cũ): lot tăng dần nhưng vẫn <= max.
+    Không bao giờ trả > volume_max hoặc < volume_min.
+    """
+    if base_volume is None or not isfinite(base_volume) or base_volume <= 0:
+        return None
+    if entry_index <= 0:
+        return _normalize_volume(base_volume, spec, volume_max)
+    if same_direction:
+        scaled = base_volume * (DCA_SAME_DIRECTION_RATIO ** entry_index)
+    else:
+        scaled = base_volume * (1.0 + DCA_COUNTER_DIRECTION_GROWTH * entry_index)
+    return _normalize_volume(scaled, spec, volume_max)
+
+
+def cap_volume_to_basket_risk(
+    *,
+    desired_volume: Optional[float],
+    existing_lot_volumes: Iterable[float],
+    risk_per_lot: float,
+    equity: float,
+    spec: SymbolSpec,
+    max_basket_loss_fraction: float = MAX_BASKET_LOSS_FRACTION,
+) -> Optional[float]:
+    """Giới hạn lot của lệnh sắp mở sao cho nếu TOÀN BỘ basket chạm SL thì tổng
+    rủi ro = risk_per_lot * (existing_lots + new_lot) không vượt equity * fraction.
+    Trả None khi basket đã dùng hết ngân sách rủi ro (chặn nhồi thêm)."""
+    if desired_volume is None or equity <= 0 or not isfinite(risk_per_lot) or risk_per_lot <= 0:
+        return None
+    existing_lots = sum(float(v) for v in existing_lot_volumes)
+    if not isfinite(existing_lots) or existing_lots < 0:
+        return None
+    budget = equity * max(max_basket_loss_fraction, 0.0)
+    remaining_budget = budget - (risk_per_lot * existing_lots)
+    if remaining_budget <= 0:
+        return None
+    allowed_lot = remaining_budget / risk_per_lot
+    return _normalize_volume(min(desired_volume, allowed_lot), spec)
 
 
 def evaluate_risk(

@@ -1,19 +1,41 @@
-# QuantAI Performance Optimization Plan
+# QuantAI - Kế Hoạch Tối Ưu Hiệu Năng (Performance Optimization Plan)
 
-## Latency & Throughput Targets
+## Mục Tiêu Độ Trễ & Thông Lượng
 
-- **MT5 Tick Ingestion to AI Decision Latency**: `< 15ms`
-- **FastAPI Command Issuance Latency**: `< 5ms`
-- **MQL5 EA Poll Cycle**: `1000ms` (1 second timer)
-- **WebSocket Broadcast Cadence**: `1000ms`
-- **Next.js Dashboard Re-render Efficiency**: `60 FPS` SVG chart rendering with zero main thread blocking.
+| Chỉ số | Mục tiêu |
+|--------|----------|
+| Tick Ingestion -> Quyết định AI | < 15ms |
+| FastAPI Command Issuance | < 5ms |
+| MQL5 EA Poll Cycle | 1000ms (timer 1s) |
+| WebSocket Broadcast Cadence | 1000ms |
+| Next.js Rendering | 60 FPS SVG chart, không block main thread |
+| Server -> EA command propagation | <= 1s (trong TTL 10s) |
 
-## Backend Optimization Strategies
-1. **SQLite WAL Mode**: Ensures non-blocking concurrent reads while commands/events are written under `BEGIN IMMEDIATE` locks.
-2. **In-Memory Caching**: Market indicators and telemetry computed once per tick/request and broadcasted over WebSocket to avoid redundant DB or MT5 queries.
-3. **AsyncIO Non-blocking I/O**: Lifespan managed background tasks for broadcasting and decision loops.
+## Chiến Lược Tối Ưu Backend (Python/FastAPI)
 
-## Frontend Optimization Strategies
-1. **WebSocket Telemetry Stream**: Reduces HTTP polling overhead from 1s fetch intervals to single persistent WS connection.
-2. **Lightweight SVG Chart Canvas**: Custom optimized SVG chart component handling up to 2000 candles with mouse wheel zoom and drag panning.
-3. **React `memo` & `useCallback`**: Prevents unnecessary re-renders of control center panels and status indicators.
+1. **SQLite WAL Mode**: đọc không cạnh tranh với ghi; mọi ghi nằm trong `BEGIN IMMEDIATE`.
+2. **In-Memory Caching**: chỉ báo & telemetry tính 1 lần / tick rồi broadcast WebSocket, tránh lặp truy vấn DB/MT5.
+3. **AsyncIO Non-blocking I/O**: background tasks (broadcast & decision loop) trong lifespan.
+4. **Multi-AI fast path**: miễn phí chạy Zen Free; tránh retry kéo dài bằng cooldown 300s mỗi model.
+5. **Đo lường**: log JSON kèm timestamp mỗi sự kiện để truy vết nếu vượt ngưỡng.
+
+## Chiến Lược Tối Ưu Frontend (Next.js)
+
+1. **WebSocket Telemetry**: thay HTTP polling 1s bằng 1 kết nối WS liên tục.
+2. **SVG Chart nhẹ**: component canvas tùy chỉnh, xử lý tới 2000 cây nến, zoom bằng wheel + drag pan.
+3. **React `memo` & `useCallback`**: ngăn re-render không cần thiết các panel Control Center & status.
+4. **Lazy loading**: component nặng (chart, backup) chỉ tải khi cần.
+
+## Giám Sát Hiệu Năng
+
+| Metric | Nguồn | Cảnh báo |
+|--------|-------|----------|
+| EA heartbeat age | `/api/telemetry` | > 10s -> STALE |
+| Command pending age | SQLite | > TTL -> EXPIRED |
+| AI call duration | Log JSON | > 10s -> cảnh báo |
+| WebSocket lag | `/ws/stream` | > 1.5s -> cảnh báo |
+| MT5 connection | `symbol_info_tick` | fail -> cảnh báo |
+
+---
+
+*Tài liệu thuộc dự án QuantAI - Nguyễn Quang Tú (QTusdev) | MIT License.*

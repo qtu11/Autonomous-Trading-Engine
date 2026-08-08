@@ -18,6 +18,12 @@
   powershell -ExecutionPolicy Bypass -File .\start.ps1
 #>
 
+[CmdletBinding()]
+Param(
+    [switch]$Docker
+)
+
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 Set-StrictMode -Off
 $ErrorActionPreference = 'Stop'
 
@@ -79,6 +85,99 @@ function Test-BackendHealth {
 Write-Host "=======================================================================" -ForegroundColor DarkCyan
 Write-Host "   AUTONOMOUS TRADING ENGINE (ATE) BLOOMBERG DESK - LAUNCHER" -ForegroundColor DarkCyan
 Write-Host "=======================================================================" -ForegroundColor DarkCyan
+
+# Hoi che do khoi chay: Local hay Docker
+$ChooseDocker = $false
+if ($Docker) {
+    $ChooseDocker = $true
+} else {
+    Write-Host "=======================================================================" -ForegroundColor DarkCyan
+    Write-Host "   BAN MUON KHOI CHAY HE THONG BANG CHE DO NAO?" -ForegroundColor Cyan
+    Write-Host "     [L] Local Service (Chay truc tiep Node.js & Python FastAPI tren host Windows)" -ForegroundColor Gray
+    Write-Host "     [D] Docker Compose (Chay toan bo dich vu trong Cloudlocal Docker Containers)" -ForegroundColor Gray
+    Write-Host "=======================================================================" -ForegroundColor DarkCyan
+    $choice = Read-Host "Nhap lua chon cua ban [L/D] (Mac dinh: L)"
+    if ($choice -eq 'd' -or $choice -eq 'D') {
+        $ChooseDocker = $true
+    }
+}
+
+if ($ChooseDocker) {
+    Write-Step "Khoi chay he thong o che do DOCKER COMPOSE"
+    
+    # 1. Kiem tra Docker daemon
+    Write-Host "    Dang kiem tra Docker daemon..." -ForegroundColor Gray
+    & docker info > $null 2>&1
+    if ($LastExitCode -ne 0) {
+        Write-Host "    [ERROR] Docker Desktop chua khoi dong hoac chua cai dat. Vui long bat Docker Desktop va thu lai!" -ForegroundColor Red
+        Read-Host "Nhan Enter de thoat..."
+        exit 1
+    }
+    Write-Ok "Docker Daemon dang hoat dong."
+
+    # 2. Kiem tra file .env
+    $dockerEnv = Join-Path $Root "Cloudlocal\.env"
+    $dockerTemplate = Join-Path $Root "Cloudlocal\.env.template"
+    if (-not (Test-Path $dockerEnv)) {
+        if (Test-Path $dockerTemplate) {
+            Copy-Item $dockerTemplate $dockerEnv -Force
+            Write-Ok "Khoi tao file Cloudlocal\.env tu template"
+        } else {
+            Write-Warn "Khong tim thay file Cloudlocal\.env va .env.template!"
+        }
+    }
+
+    # 3. Chay docker compose up
+    Write-Step "Dang khoi chay Docker Compose (Cloudlocal)..."
+    $composeFile = Join-Path $Root "Cloudlocal\docker-compose.yml"
+    
+    # Chay lenh build & up
+    & docker compose -f $composeFile -p cloudlocal up -d --build
+    if ($LastExitCode -ne 0) {
+        Write-Host "    [ERROR] Khong the khoi chay Docker Compose." -ForegroundColor Red
+        Read-Host "Nhan Enter de thoat..."
+        exit 1
+    }
+    Write-Ok "Cac container cua Cloudlocal da duoc khoi tao."
+
+    # 4. Xac thuc health
+    Write-Step "Xac thuc trang thai hoat dong cua Docker Services..."
+    $DockerUrl = "http://localhost:8080"
+    $deadline = (Get-Date).AddSeconds(60)
+    $dockerHealthy = $false
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $res = Invoke-WebRequest -Uri "$DockerUrl/health" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue
+            if ($null -ne $res -and $res.StatusCode -eq 200) {
+                $dockerHealthy = $true
+                break
+            }
+        } catch {}
+        try {
+            $resDirect = Invoke-WebRequest -Uri "http://localhost:3001" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue
+            if ($null -ne $resDirect -and $resDirect.StatusCode -eq 200) {
+                $dockerHealthy = $true
+                break
+            }
+        } catch {}
+        Start-Sleep -Seconds 3
+    }
+
+    if ($dockerHealthy) {
+        Write-Ok "He thong Docker hoat dong on dinh tai $DockerUrl"
+        Start-Sleep -Seconds 2
+        Start-Process $DockerUrl
+    } else {
+        Write-Warn "Cac dich vu Docker dang khoi dong cham. Trinh duyet se mo link sau vai giay."
+        Start-Process $DockerUrl
+    }
+    
+    Write-Host "`n[SUCCESS] Docker Stack Services active." -ForegroundColor Green
+    Write-Host "  Nginx Proxy (public entry):  $DockerUrl" -ForegroundColor Gray
+    Write-Host "  Next.js Frontend (direct):   http://localhost:3001" -ForegroundColor Gray
+    Write-Host "  FastAPI Backend (direct):    http://localhost:8005" -ForegroundColor Gray
+    exit 0
+}
 
 # 1. Free ports
 Write-Step "[1/6] Freeing ports $BackendPort and $FrontendPort"

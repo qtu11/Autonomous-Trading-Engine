@@ -1,61 +1,116 @@
 {
     "week_monday": "2026-08-03",
-    "generated_at": "2026-08-06T09:15:13.952530",
+    "generated_at": "2026-08-08T10:30:55.139566",
     "events": [
         {
-            "id": "evt-20260803-1",
-            "day": "Mon",
-            "date": "03/08",
-            "time": "19:30",
-            "title": "US Core Durable Goods Orders (MoM)",
-            "impact": "MED",
-            "actual": "",
-            "forecast": "0.2%",
-            "previous": "0.1%"
-        },
-        {
-            "id": "evt-20260803-2",
+            "id": "evt-20260804-1",
             "day": "Tue",
             "date": "04/08",
-            "time": "19:30",
-            "title": "US Core CPI Inflation Rate (MoM)",
+            "time": "08:30",
+            "title": "US ISM Manufacturing PMI",
             "impact": "HIGH",
             "actual": "",
-            "forecast": "0.3%",
-            "previous": "0.4%"
+            "forecast": "49.5",
+            "previous": "49.0"
         },
         {
-            "id": "evt-20260803-3",
+            "id": "evt-20260804-2",
+            "day": "Tue",
+            "date": "04/08",
+            "time": "10:00",
+            "title": "US JOLTS Job Openings",
+            "impact": "MED",
+            "actual": "",
+            "forecast": "9.2M",
+            "previous": "9.3M"
+        },
+        {
+            "id": "evt-20260805-1",
             "day": "Wed",
             "date": "05/08",
-            "time": "21:00",
-            "title": "FOMC Interest Rate Decision",
+            "time": "08:30",
+            "title": "US ADP Employment Report",
             "impact": "HIGH",
             "actual": "",
-            "forecast": "5.50%",
-            "previous": "5.50%"
+            "forecast": "175K",
+            "previous": "172K"
         },
         {
-            "id": "evt-20260803-4",
+            "id": "evt-20260805-2",
+            "day": "Wed",
+            "date": "05/08",
+            "time": "10:00",
+            "title": "US ISM Services PMI",
+            "impact": "HIGH",
+            "actual": "",
+            "forecast": "51.0",
+            "previous": "50.5"
+        },
+        {
+            "id": "evt-20260806-1",
             "day": "Thu",
             "date": "06/08",
-            "time": "19:30",
+            "time": "08:30",
             "title": "US Initial Jobless Claims",
             "impact": "MED",
             "actual": "",
-            "forecast": "218K",
-            "previous": "212K"
+            "forecast": "235K",
+            "previous": "238K"
         },
         {
-            "id": "evt-20260803-5",
+            "id": "evt-20260806-2",
+            "day": "Thu",
+            "date": "06/08",
+            "time": "10:00",
+            "title": "US Factory Orders",
+            "impact": "MED",
+            "actual": "",
+            "forecast": "-0.3%",
+            "previous": "0.2%"
+        },
+        {
+            "id": "evt-20260807-1",
             "day": "Fri",
             "date": "07/08",
-            "time": "19:30",
-            "title": "US Non-Farm Payrolls (NFP)",
+            "time": "08:30",
+            "title": "US Non-Farm Payrolls",
             "impact": "HIGH",
             "actual": "",
-            "forecast": "190K",
-            "previous": "229K"
+            "forecast": "185K",
+            "previous": "175K"
+        },
+        {
+            "id": "evt-20260807-2",
+            "day": "Fri",
+            "date": "07/08",
+            "time": "08:30",
+            "title": "US Unemployment Rate",
+            "impact": "HIGH",
+            "actual": "",
+            "forecast": "4.2%",
+            "previous": "4.1%"
+        },
+        {
+            "id": "evt-20260807-3",
+            "day": "Fri",
+            "date": "07/08",
+            "time": "08:30",
+            "title": "US Average Hourly Earnings",
+            "impact": "HIGH",
+            "actual": "",
+            "forecast": "0.3%",
+            "previous": "0.2%"
+        },
+        {
+            "id": "evt-20260807-4",
+            "day": "Fri",
+            "date": "07/08",
+            "time": "10:00",
+            "title": "US Consumer Sentiment Index",
+            "impact": "MED",
+            "actual": "",
+            "forecast": "68.5",
+            "previous": "67.8"
         }
     ]
 }

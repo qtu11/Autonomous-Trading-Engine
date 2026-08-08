@@ -1,0 +1,29 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ate_backend
+    ports:
+      - "8005:8005"
+    volumes:
+      - ./quantai_brain.sqlite3:/app/quantai_brain.sqlite3
+      - ./user_control_config.json:/app/user_control_config.json
+    environment:
+      - PORT=8005
+      - HOST=0.0.0.0
+      - TRADING_METHOD=ULTRA_CONFLUENCE
+    restart: always
+
+  frontend:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: ate_frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_ATE_API_ORIGIN=http://localhost:8005
+    depends_on:
+      - backend
+    restart: always

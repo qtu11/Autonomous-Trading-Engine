@@ -226,8 +226,15 @@ async def analyze_news_impact(news_event: Dict[str, Any], indicators: Dict[str, 
 @app.get("/api/v1/models/status")
 async def models_status():
     return {
-        "active_model": os.getenv("QUANTAI_AI_MODEL", "kimi-k3"),
-        "available_models": ["kimi-k3", "gemini-2.0-flash", "gpt-4o", "claude-3.5-sonnet"],
+        "active_model": os.getenv("QUANTAI_AI_MODEL", "deepseek-v4-flash-free"),
+        "available_models": [
+            "deepseek-v4-flash-free", "big-pickle", "mimo-v2.5-free",
+            "nemotron-3-ultra-free", "north-mini-code-free", "laguna-s-2.1-free",
+            "longcat-2.0-free", "ling-3.0-flash-free",
+            "kimi-k3", "gemini-2.0-flash", "gpt-4o", "claude-3.5-sonnet"
+        ],
+        "default_free_gateway": os.getenv("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1/chat/completions"),
+        "requires_api_key": False,
         "redis_connected": redis_client is not None,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }

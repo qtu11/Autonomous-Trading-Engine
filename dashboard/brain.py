@@ -50,6 +50,7 @@ class BrainStore:
                     decision_id TEXT PRIMARY KEY,
                     ts TEXT NOT NULL,
                     strategy_version TEXT NOT NULL,
+                    trading_method TEXT NOT NULL DEFAULT 'INDICATOR',
                     symbol TEXT NOT NULL,
                     timeframe TEXT NOT NULL,
                     action TEXT NOT NULL,
@@ -89,7 +90,8 @@ class BrainStore:
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS strategy_stats (
-                    strategy_version TEXT PRIMARY KEY,
+                    strategy_version TEXT NOT NULL,
+                    trading_method TEXT NOT NULL DEFAULT 'INDICATOR',
                     status TEXT NOT NULL,
                     params_json TEXT NOT NULL,
                     sample_size INTEGER NOT NULL DEFAULT 0,
@@ -101,7 +103,8 @@ class BrainStore:
                     total_pnl REAL NOT NULL DEFAULT 0,
                     avg_r REAL,
                     updated_at TEXT NOT NULL,
-                    notes TEXT
+                    notes TEXT,
+                    PRIMARY KEY (strategy_version, trading_method)
                 )
                 """
             )
@@ -135,6 +138,7 @@ class BrainStore:
         self,
         *,
         strategy_version: str,
+        trading_method: str = "INDICATOR",
         symbol: str,
         timeframe: str,
         action: str,
@@ -157,14 +161,14 @@ class BrainStore:
             connection.execute(
                 """
                 INSERT INTO brain_decisions (
-                    decision_id, ts, strategy_version, symbol, timeframe, action,
+                    decision_id, ts, strategy_version, trading_method, symbol, timeframe, action,
                     confidence, entry, stop_loss, take_profit, volume,
                     reason_codes_json, indicators_json, account_json, context_json,
                     status, command_id, order_ticket, decision_detail
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    decision_id, _now_iso(), strategy_version, symbol, timeframe, action,
+                    decision_id, _now_iso(), strategy_version, trading_method, symbol, timeframe, action,
                     int(confidence), entry, stop_loss, take_profit, volume,
                     json.dumps(reason_codes, ensure_ascii=False),
                     json.dumps(indicators, ensure_ascii=False, default=str),
@@ -247,40 +251,48 @@ class BrainStore:
                 (decision_id,),
             )
             row = connection.execute(
-                "SELECT strategy_version FROM brain_decisions WHERE decision_id=?",
+                "SELECT strategy_version, trading_method FROM brain_decisions WHERE decision_id=?",
                 (decision_id,),
             ).fetchone()
         if row is not None:
-            self._roll_strategy_stats(row["strategy_version"], net_profit, delta_wins, delta_losses, delta_be)
+            self._roll_strategy_stats(
+                row["strategy_version"],
+                row["trading_method"] if "trading_method" in row.keys() else "INDICATOR",
+                net_profit,
+                delta_wins,
+                delta_losses,
+                delta_be
+            )
         return evaluation_id
 
     def _roll_strategy_stats(
         self,
         strategy_version: str,
-        net_profit: float,
-        delta_wins: int,
-        delta_losses: int,
-        delta_be: int,
+        trading_method: str = "INDICATOR",
+        net_profit: float = 0.0,
+        delta_wins: int = 0,
+        delta_losses: int = 0,
+        delta_be: int = 0,
     ) -> None:
         with self._lock, self._connection() as connection:
             existing = connection.execute(
-                "SELECT * FROM strategy_stats WHERE strategy_version=?",
-                (strategy_version,),
+                "SELECT * FROM strategy_stats WHERE strategy_version=? AND trading_method=?",
+                (strategy_version, trading_method),
             ).fetchone()
             if existing is None:
                 connection.execute(
                     """
                     INSERT INTO strategy_stats (
-                        strategy_version, status, params_json, sample_size, wins,
+                        strategy_version, trading_method, status, params_json, sample_size, wins,
                         losses, breakevens, win_rate, profit_factor, total_pnl,
                         avg_r, updated_at, notes
-                    ) VALUES (?, 'ACTIVE', '{}', 0, 0, 0, 0, NULL, NULL, 0, NULL, ?, 'auto-created')
+                    ) VALUES (?, ?, 'ACTIVE', '{}', 0, 0, 0, 0, NULL, NULL, 0, NULL, ?, 'auto-created')
                     """,
-                    (strategy_version, _now_iso()),
+                    (strategy_version, trading_method, _now_iso()),
                 )
             stats = connection.execute(
-                "SELECT * FROM strategy_stats WHERE strategy_version=?",
-                (strategy_version,),
+                "SELECT * FROM strategy_stats WHERE strategy_version=? AND trading_method=?",
+                (strategy_version, trading_method),
             ).fetchone()
             sample_size = int(stats["sample_size"]) + 1
             wins = int(stats["wins"]) + delta_wins
@@ -292,17 +304,17 @@ class BrainStore:
             gross_loss = max(0.0, -total_pnl)
             profit_factor = round(gross_profit / gross_loss, 4) if gross_loss else None
             avg_r_row = connection.execute(
-                "SELECT AVG(r_multiple) AS avg_r FROM brain_evaluations WHERE decision_id IN (SELECT decision_id FROM brain_decisions WHERE strategy_version=?)",
-                (strategy_version,),
+                "SELECT AVG(r_multiple) AS avg_r FROM brain_evaluations WHERE decision_id IN (SELECT decision_id FROM brain_decisions WHERE strategy_version=? AND trading_method=?)",
+                (strategy_version, trading_method),
             ).fetchone()
             avg_r = round(float(avg_r_row["avg_r"]), 4) if avg_r_row and avg_r_row["avg_r"] is not None else None
             connection.execute(
                 """
                 UPDATE strategy_stats SET sample_size=?, wins=?, losses=?, breakevens=?,
                     win_rate=?, profit_factor=?, total_pnl=?, avg_r=?, updated_at=?
-                WHERE strategy_version=?
+                WHERE strategy_version=? AND trading_method=?
                 """,
-                (sample_size, wins, losses, breakevens, win_rate, profit_factor, total_pnl, avg_r, _now_iso(), strategy_version),
+                (sample_size, wins, losses, breakevens, win_rate, profit_factor, total_pnl, avg_r, _now_iso(), strategy_version, trading_method),
             )
 
     def strategy_summary(self) -> List[Dict[str, Any]]:
@@ -316,7 +328,7 @@ class BrainStore:
         with self._lock, self._connection() as connection:
             rows = connection.execute(
                 """
-                SELECT decision_id, ts, strategy_version, action, confidence, entry,
+                SELECT decision_id, ts, strategy_version, trading_method, action, confidence, entry,
                        stop_loss, take_profit, volume, reason_codes_json, context_json,
                        status, order_ticket, decision_detail
                 FROM brain_decisions ORDER BY ts DESC LIMIT ?

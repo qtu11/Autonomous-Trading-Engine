@@ -5,11 +5,12 @@ import json
 import time
 import asyncio
 import urllib.request
+import pandas as pd
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
-from fastapi import Depends, FastAPI, HTTPException, Header, Query, WebSocket, WebSocketDisconnect, status
+from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -17,10 +18,36 @@ from pydantic import BaseModel, Field
 from command_store import CommandStore
 from brain import BrainStore
 from logging_config import LogEvent, log_event, read_recent_logs, timed, get_logger
-from risk_gate import AccountSnapshot, RiskPolicy, SymbolSpec, evaluate_risk
+from risk_gate import (
+    AccountSnapshot,
+    DCA_DEFAULT_MAX_LOT,
+    MAX_BASKET_LOSS_FRACTION,
+    RiskPolicy,
+    SymbolSpec,
+    cap_volume_to_basket_risk,
+    compute_dca_volume,
+    evaluate_risk,
+)
 from risk_profiles import FOREX_RISK_PROFILES
 from strategy_core import StrategyConfig, decide_signal
+from signal_engines import run_signal_engine, SignalResult
+from chart_markup import build_chart_markup
 from ws_hub import WS_MANAGER
+
+try:
+    from mt5_auto import find_terminal64, deploy_expert_to_chart
+    HAS_MT5_AUTO = True
+except Exception:
+    find_terminal64 = None
+    deploy_expert_to_chart = None
+    HAS_MT5_AUTO = False
+
+try:
+    from ai_provider_test import test_provider_connection
+    HAS_AI_TEST = True
+except Exception:
+    test_provider_connection = None
+    HAS_AI_TEST = False
 logger = get_logger()
 
 def load_local_env() -> None:
@@ -69,6 +96,14 @@ OPERATOR_TOKEN = os.getenv("ATE_OPERATOR_TOKEN") or os.getenv("QUANTAI_OPERATOR_
 ADMIN_LOGIN = (os.getenv("ADMIN_LOGIN") or "").strip()
 ADMIN_PASSWORD = (os.getenv("ADMIN_PASSWORD") or os.getenv("ADMIN-PASSWORD") or "").strip()
 
+# Bearer tokens minted by /api/auth/login when OPERATOR_TOKEN is unset.
+# token -> unix expiry. Validated by require_operator_token (fail-closed).
+_ADMIN_SESSIONS: Dict[str, float] = {}
+_ADMIN_SESSION_TTL = 30 * 24 * 3600  # 30 days
+_LOGIN_ATTEMPTS: Dict[str, list] = {}  # client_ip -> [timestamps] (brute-force guard)
+_LOGIN_WINDOW_SECONDS = 300            # 5-minute rolling window
+_LOGIN_MAX_ATTEMPTS = 10
+
 import base64
 
 def _encode_secret(secret: str) -> str:
@@ -95,42 +130,114 @@ def _decode_secret(stored: str) -> str:
 # Control Center Persistent Configuration File (separate from .env)
 CONTROL_CONFIG_FILE = os.path.join(os.path.dirname(__file__), "user_control_config.json")
 
+# Optional Firestore cloud mirror (best-effort). Local file is the ground
+# truth; cloud is a sync layer so any dashboard/device sees the same config.
+import firebase_sync  # noqa: E402
+_firebase_sync_enabled = bool(os.getenv("FIREBASE_ENABLE_SYNC", "true").lower() in ("1", "true", "yes"))
+
 def load_control_config() -> dict:
+    local: dict = {}
     if os.path.exists(CONTROL_CONFIG_FILE):
         try:
             with open(CONTROL_CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if "mt5_password" in data:
-                    data["mt5_password"] = _decode_secret(data["mt5_password"])
-                return data
+                for field in CONFIG_SECRET_FIELDS:
+                    if field in data and data[field]:
+                        data[field] = _decode_secret(str(data[field]))
+                local = data
         except Exception:
             pass
-    return {}
+    if not _firebase_sync_enabled:
+        return local
+    try:
+        cloud = firebase_sync.pull_config() or {}
+        if not cloud:
+            return local
+        local_ts = local.get("config_updated_at", "")
+        cloud_ts = cloud.get("config_updated_at", "")
+        if cloud_ts and (not local_ts or cloud_ts > local_ts):
+            merged = {**local, **cloud}
+            merged.pop("config_updated_at", None)
+            _persist_config_file(merged)
+            return merged
+    except Exception:
+        pass
+    return local
+
+def _persist_config_file(data: dict) -> None:
+    try:
+        with open(CONTROL_CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Failed to write control config: {e}")
+
+# Fields persisted with enc:v1: prefix (never stored as plaintext on disk).
+CONFIG_SECRET_FIELDS = (
+    "mt5_password",
+    "telegram_bot_token",
+    "gemini_api_key",
+    "claude_api_key",
+    "deepseek_api_key",
+    "openai_api_key",
+    "zplay_api_key",
+    "grok_api_key",
+    "qwen_api_key",
+    "gateway_key",
+)
+
+
+def _mask_field(value: str) -> str:
+    """Return a masked sentinel for UI round-trip (keeps existing key on POST)."""
+    return "*****" if value else ""
+
 
 def save_control_config(data: dict):
     existing = load_control_config()
     existing.update(data)
-    if "mt5_password" in existing and existing["mt5_password"]:
-        existing_to_save = dict(existing)
-        existing_to_save["mt5_password"] = _encode_secret(existing_to_save["mt5_password"])
-    else:
-        existing_to_save = existing
+    existing["config_updated_at"] = datetime.now(timezone.utc).isoformat()
+    existing_to_save = dict(existing)
+    for field in CONFIG_SECRET_FIELDS:
+        if field in existing_to_save and existing_to_save[field]:
+            existing_to_save[field] = _encode_secret(str(existing_to_save[field]))
+    _persist_config_file(existing_to_save)
+    if _firebase_sync_enabled:
+        try:
+            mirror = dict(existing)
+            for field in CONFIG_SECRET_FIELDS:
+                if field in mirror and mirror[field]:
+                    mirror[field] = _encode_secret(str(mirror[field]))
+            firebase_sync.push_config(mirror)
+        except Exception as e:
+            logger.error(f"Firebase sync failed: {e}")
+
+async def broadcast_config_updated():
+    """Notify every connected dashboard that Control Center config changed."""
     try:
-        with open(CONTROL_CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(existing_to_save, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        logger.error(f"Failed to save control config: {e}")
+        cfg = load_control_config()
+        safe = dict(cfg)
+        for field in CONFIG_SECRET_FIELDS:
+            if field in safe and safe[field]:
+                safe[field] = _mask_field(str(safe[field]))
+        await WS_MANAGER.broadcast({"type": "config_updated", "data": safe})
+    except Exception:
+        pass
 
 _saved_cfg = load_control_config()
 
 # Dynamic Runtime State managed exclusively via CONTROL CENTER UI.
-# Fail-closed defaults: DEMO-only until explicitly armed, LIVE disabled until configured.
-EXECUTION_MODE = _saved_cfg.get("execution_mode", "DEMO").upper()
+# Fail-closed defaults: DISABLED unless control center explicitly arms a mode.
+EXECUTION_MODE = (_saved_cfg.get("execution_mode") or "DISABLED").upper()
 LIVE_ARMED = bool(_saved_cfg.get("live_armed", False))
-DEMO_ARMED = bool(_saved_cfg.get("demo_armed", True))
-KILL_SWITCH = bool(_saved_cfg.get("kill_switch", False))
-ENABLE_TRADING = bool(_saved_cfg.get("enable_trading", True))
+DEMO_ARMED = bool(_saved_cfg.get("demo_armed", False))
+KILL_SWITCH = bool(_saved_cfg.get("kill_switch", True)) or EXECUTION_MODE == "DISABLED"
+ENABLE_TRADING = bool(_saved_cfg.get("enable_trading", EXECUTION_MODE != "DISABLED"))
 AI_AUTO_LOOP = bool(_saved_cfg.get("ai_auto_loop", False))
+
+# Runtime execution symbol (persisted via Control Center MT5 login form);
+# validated/fallback at runtime to the broker-available symbol.
+if _saved_cfg.get("execution_symbol"):
+    EXECUTION_SYMBOL = str(_saved_cfg["execution_symbol"])
+EXECUTION_TIMEFRAME = str(_saved_cfg.get("execution_timeframe") or os.getenv("ATE_EXECUTION_TIMEFRAME", "M15") or "M15")
 
 MT5_SAVED_LOGIN = int(_saved_cfg.get("mt5_login", os.getenv("MT5_LOGIN", "0") or "0"))
 MT5_SAVED_PASSWORD = _saved_cfg.get("mt5_password", os.getenv("MT5_PASSWORD", ""))
@@ -140,7 +247,8 @@ TELEGRAM_BOT_TOKEN = _saved_cfg.get("telegram_bot_token") or os.getenv("TELEGRAM
 TELEGRAM_CHAT_ID = _saved_cfg.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(_saved_cfg.get("telegram_enabled", True))
 
-ACTIVE_AI_MODEL = _saved_cfg.get("active_ai_model") or os.getenv("QUANTAI_AI_MODEL", "gemini-2.0-flash")
+ACTIVE_AI_MODEL = _saved_cfg.get("active_ai_model") or os.getenv("QUANTAI_AI_MODEL", "deepseek-v4-flash-free")
+TRADING_METHOD = _saved_cfg.get("trading_method", "ULTRA_CONFLUENCE")
 USER_CUSTOM_MODEL_ID = _saved_cfg.get("custom_model_id", "")
 USER_GEMINI_KEY = _saved_cfg.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")
 USER_CLAUDE_KEY = _saved_cfg.get("claude_api_key") or os.getenv("CLAUDE_API_KEY", "")
@@ -150,18 +258,35 @@ USER_ZPLAY_KEY = _saved_cfg.get("zplay_api_key") or os.getenv("ZPLAY_API_KEY", "
 USER_GROK_KEY = _saved_cfg.get("grok_api_key") or os.getenv("GROK_API_KEY", "")
 USER_QWEN_KEY = _saved_cfg.get("qwen_api_key") or os.getenv("QWEN_API_KEY", "")
 USER_GATEWAY_URL = _saved_cfg.get("gateway_url") or os.getenv("GATEWAY_URL", "")
+USER_GATEWAY_URL = _saved_cfg.get("gateway_url") or os.getenv("GATEWAY_URL", "")
 USER_GATEWAY_KEY = _saved_cfg.get("gateway_key") or os.getenv("GATEWAY_KEY", "")
+TRADING_METHOD = _saved_cfg.get("trading_method") or "ULTRA_CONFLUENCE"
+
+# Risk Guard persisted values (reloaded from Control Center /api/control-center/risk)
+_saved_risk_frac = _saved_cfg.get("risk_per_trade_fraction")
+_saved_max_pos = _saved_cfg.get("max_open_positions")
+_saved_max_spread = _saved_cfg.get("max_spread")
+if _saved_risk_frac is not None or _saved_max_pos is not None or _saved_max_spread is not None:
+    for _rp in ("XAUUSD", "XAUUSDM"):
+        _prof = FOREX_RISK_PROFILES.get(_rp)
+        if _prof:
+            if _saved_max_spread is not None:
+                _prof["max_spread"] = float(_saved_max_spread)
+            _pol = _prof["policy"]
+            _prof["policy"] = replace(
+                _pol,
+                risk_per_trade_fraction=float(_saved_risk_frac) if _saved_risk_frac is not None else _pol.risk_per_trade_fraction,
+                max_open_positions=int(_saved_max_pos) if _saved_max_pos is not None else _pol.max_open_positions,
+            )
 
 def send_telegram_alert(message: str) -> bool:
-    """Send an instant Telegram alert notification using urllib.request with SSL unverified context."""
+    """Send an instant Telegram alert notification using urllib.request (TLS verified)."""
     bot_token = TELEGRAM_BOT_TOKEN.strip()
     chat_id = TELEGRAM_CHAT_ID.strip()
     if not bot_token or not chat_id or not TELEGRAM_ENABLED:
         return False
     try:
         import urllib.request
-        import ssl
-        ctx = ssl._create_unverified_context()
         url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         
         # Build enriched header metadata if not already formatted with GOLDQUANT header
@@ -192,7 +317,7 @@ def send_telegram_alert(message: str) -> bool:
 
         payload = json.dumps({"chat_id": chat_id, "text": full_msg, "parse_mode": "HTML"}).encode("utf-8")
         req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+        with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status == 200
     except Exception as e:
         logger.error(f"Telegram notification error: {e}")
@@ -694,15 +819,30 @@ def require_bridge_token(authorization: Optional[str] = Header(default=None)) ->
 
 
 def require_operator_token(authorization: Optional[str] = Header(default=None)) -> None:
-    if not OPERATOR_TOKEN:
+    """Fail-closed operator gate.
+
+    Accepts ``Bearer OPERATOR_TOKEN`` (from .env) or a live admin session token
+    minted by /api/auth/login. Without valid credentials the request is rejected —
+    there is no anonymous path into Control Center mutation endpoints.
+    """
+    now = time.time()
+    token = None
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[len("Bearer "):].strip()
+    if OPERATOR_TOKEN and token and secrets.compare_digest(token, OPERATOR_TOKEN):
         return
-    expected = f"Bearer {OPERATOR_TOKEN}"
-    if not authorization or not secrets.compare_digest(authorization, expected):
+    if token and token in _ADMIN_SESSIONS and _ADMIN_SESSIONS[token] > now:
+        return
+    if not OPERATOR_TOKEN and not _ADMIN_SESSIONS:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "OPERATOR_AUTH_REQUIRED"},
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "OPERATOR_AUTH_NOT_CONFIGURED", "message": "Chưa cấu hình OPERATOR_TOKEN trong .env hoặc chưa có phiên đăng nhập quản trị."},
         )
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail={"code": "OPERATOR_AUTH_REQUIRED", "message": "Cần token quản trị (Authorization: Bearer <token>)."},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 class LoginRequest(BaseModel):
@@ -711,8 +851,17 @@ class LoginRequest(BaseModel):
 
 
 @app.post("/api/auth/login")
-async def admin_login(req: LoginRequest):
+async def admin_login(req: LoginRequest, request: Request):
     """Authenticate administrator using credentials strictly configured in .env (ADMIN_LOGIN / ADMIN_PASSWORD)."""
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    attempts = [ts for ts in _LOGIN_ATTEMPTS.get(client_ip, []) if now - ts < _LOGIN_WINDOW_SECONDS]
+    if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "TOO_MANY_ATTEMPTS", "message": "Quá nhiều lần đăng nhập. Thử lại sau 5 phút."},
+        )
+    _LOGIN_ATTEMPTS[client_ip] = attempts
     input_login = req.login.strip()
     input_password = req.password.strip()
     
@@ -723,7 +872,12 @@ async def admin_login(req: LoginRequest):
         )
     
     if secrets.compare_digest(input_login, ADMIN_LOGIN) and secrets.compare_digest(input_password, ADMIN_PASSWORD):
-        token = OPERATOR_TOKEN or f"auth_session_{secrets.token_hex(16)}"
+        _LOGIN_ATTEMPTS[client_ip] = []
+        if OPERATOR_TOKEN:
+            token = OPERATOR_TOKEN
+        else:
+            token = f"auth_session_{secrets.token_hex(24)}"
+            _ADMIN_SESSIONS[token] = time.time() + _ADMIN_SESSION_TTL
         log_event(LogEvent.OPERATOR_AUTHENTICATED, component="auth", login=input_login)
         return {
             "status": "SUCCESS",
@@ -737,6 +891,7 @@ async def admin_login(req: LoginRequest):
             }
         }
     else:
+        _LOGIN_ATTEMPTS[client_ip] = attempts + [now]
         log_event(LogEvent.SECURITY_ALERT, component="auth", login=input_login, reason="INVALID_CREDENTIALS")
         raise HTTPException(
             status_code=401,
@@ -818,6 +973,35 @@ def resolve_symbol(symbol: str = "XAUUSD") -> str:
             mt5.symbol_select(s, True)
             return s
     return symbol
+
+def resolve_symbol_info(symbol: str = "XAUUSDm") -> tuple[str, str]:
+    """
+    Resolve the requested symbol against the connected broker with a human
+    readable reason (used by the Control Center MT5 login form).
+
+    Returns (resolved_symbol, reason). Fallback chain: requested -> XAUUSDm ->
+    XAUUSD -> first available Gold-family symbol -> original request.
+    """
+    preferred = (symbol or "XAUUSDm").strip()
+    if not ensure_mt5_connected():
+        return preferred, "Chưa kết nối MT5; giữ nguyên symbol yêu cầu (sẽ kiểm tra lại khi có kết nối)."
+    candidates = [preferred, "XAUUSDm", "XAUUSD.m", "XAUUSD_m", "XAUUSD", "GOLD"]
+    seen = set()
+    for s in candidates:
+        if s in seen:
+            continue
+        seen.add(s)
+        info = mt5.symbol_info(s)
+        if info is None:
+            continue
+        try:
+            mt5.symbol_select(s, True)
+        except Exception:
+            pass
+        if s.upper() == preferred.upper():
+            return s, f"Symbol {s} có sẵn trên broker (đúng như yêu cầu)."
+        return s, f"Symbol {preferred} không có trên broker -> fallback sang {s} (XAUUSD/XAUUSDm nhánh vàng)."
+    return preferred, f"Không tìm thấy symbol vàng nào ({', '.join(candidates)}); giữ nguyên {preferred} (chưa kiểm chứng)."
 
 def calc_rsi(closes: List[float], period: int = 14) -> float:
     if len(closes) < period + 1:
@@ -1584,6 +1768,24 @@ def get_today_performance() -> dict:
     deals = mt5.history_deals_get(today_start, now)
     if not deals:
         return unavailable
+
+    cfg = load_control_config()
+    pnl_reset_str = cfg.get("pnl_reset_time")
+    pnl_reset_ts = 0.0
+    if pnl_reset_str:
+        try:
+            pnl_reset_dt = datetime.fromisoformat(pnl_reset_str)
+            pnl_reset_ts = pnl_reset_dt.timestamp()
+        except Exception:
+            pass
+
+    today_start_ts = today_start.timestamp()
+    old_position_ids = set()
+    if pnl_reset_ts > today_start_ts:
+        for d in deals:
+            if d.entry == 0 and d.time < pnl_reset_ts:
+                old_position_ids.add(d.position_id)
+
     realized = 0.0
     wins = 0
     losses = 0
@@ -1593,6 +1795,9 @@ def get_today_performance() -> dict:
     for d in deals:
         if d.entry not in (1, 2) and d.profit == 0:
             continue
+        if pnl_reset_ts > today_start_ts:
+            if d.time < pnl_reset_ts or d.position_id in old_position_ids:
+                continue
         net = float(d.profit + d.swap + d.commission)
         realized += net
         count += 1
@@ -1751,8 +1956,8 @@ async def get_status():
 
 @app.get("/api/market")
 async def get_market(symbol: str = "XAUUSD", tf: str = "M15"):
+    actual_symbol = resolve_symbol(symbol)
     if ensure_mt5_connected():
-        actual_symbol = resolve_symbol(symbol)
         tf_map = {
             "M1": mt5.TIMEFRAME_M1,
             "M5": mt5.TIMEFRAME_M5,
@@ -1771,6 +1976,7 @@ async def get_market(symbol: str = "XAUUSD", tf: str = "M15"):
                 dt = datetime.fromtimestamp(r['time'])
                 candles.append({
                     "t": dt.strftime("%H:%M"),
+                    "ts": dt.isoformat(),
                     "o": float(r['open']),
                     "h": float(r['high']),
                     "l": float(r['low']),
@@ -1778,9 +1984,44 @@ async def get_market(symbol: str = "XAUUSD", tf: str = "M15"):
                     "v": float(r['tick_volume'])
                 })
             indicators = get_technical_indicators(actual_symbol)
-            return {"symbol": actual_symbol, "timeframe": tf, "candles": candles, "indicators": indicators}
-            
+            response = {"symbol": actual_symbol, "timeframe": tf, "candles": candles, "indicators": indicators}
+            markup = get_markup_cached(actual_symbol)
+            if markup and markup.get("objects"):
+                response["markup"] = markup
+            return response
+
+    # Fallback to real candles pushed by the EA (e.g. inside Docker container)
+    global _EA_PUSHED_CANDLES
+    if actual_symbol in _EA_PUSHED_CANDLES and tf in _EA_PUSHED_CANDLES[actual_symbol]:
+        candles = _EA_PUSHED_CANDLES[actual_symbol][tf]
+        indicators = get_technical_indicators(actual_symbol)
+        response = {"symbol": actual_symbol, "timeframe": tf, "candles": candles, "indicators": indicators}
+        markup = get_markup_cached(actual_symbol)
+        if markup and markup.get("objects"):
+            response["markup"] = markup
+        return response
+
     return {"symbol": symbol, "timeframe": tf, "candles": [], "indicators": get_technical_indicators()}
+
+
+# ── Chart markup cache: web poll is 1s, markup compute is heavy → TTL 3s ─────
+_MARKUP_CACHE: Dict[str, Dict[str, Any]] = {}
+_MARKUP_CACHE_TTL = 3.0
+
+
+def get_markup_cached(symbol: str) -> Dict[str, Any]:
+    now = time.time()
+    cache_key = (symbol, TRADING_METHOD)
+    cached = _MARKUP_CACHE.get(cache_key)
+    if cached and (now - cached["ts"]) < _MARKUP_CACHE_TTL:
+        return cached["payload"]
+    try:
+        mtf_data = fetch_mt5_multi_timeframe(symbol)
+        payload = build_chart_markup(symbol, mtf_data, broker_utc_offset_hours=2.0, method=TRADING_METHOD)
+    except Exception as exc:
+        payload = {"symbol": symbol, "method": TRADING_METHOD, "objects": [], "generated_at": datetime.now(timezone.utc).isoformat(), "error": str(exc)}
+    _MARKUP_CACHE[cache_key] = {"ts": now, "payload": payload}
+    return payload
 
 # ── Persistent command protocol for the MQL5 EA bridge ─────────────────────
 COMMAND_STORE = CommandStore(os.getenv("QUANTAI_COMMAND_DB", os.path.join(os.path.dirname(__file__), "quantai_commands.sqlite3")))
@@ -1876,9 +2117,32 @@ class CommandReceiptRequest(BaseModel):
     deal_ticket: Optional[int] = None
 
 
+class ChartMarkupRequest(BaseModel):
+    executor_id: str = Field(min_length=1, max_length=128)
+    symbol: str = Field(min_length=1, max_length=32)
+    account_login: int
+    account_server: str = Field(default="", max_length=128)
+    broker_company: str = Field(default="", max_length=128)
+    trade_mode: str = Field(default="DEMO", max_length=16)
+
+
 class AdjustmentActionRequest(BaseModel):
     action: str
     reason: str = ""
+
+class CandlePushItem(BaseModel):
+    t: str
+    ts: str
+    o: float
+    h: float
+    l: float
+    c: float
+    v: float
+
+class PushCandlesRequest(BaseModel):
+    symbol: str
+    timeframe: str
+    candles: List[CandlePushItem]
 
 
 # LIVE identity allowlist (empty login = LIVE not configured -> fail closed).
@@ -1987,6 +2251,56 @@ async def get_command(command_id: str):
     return command
 
 
+@app.post("/api/v1/bridge/markup", dependencies=[Depends(require_bridge_token)])
+@app.post("/api/v1/bridge/markup/", dependencies=[Depends(require_bridge_token)])
+async def bridge_chart_markup(req: ChartMarkupRequest):
+    """Phân phối cấu trúc ICT/SMC/Price Action (OB, FVG, BOS/CHoCH, swing,
+    trendline, OTE, Premium/Discount, Asian Range, Killzone...) cho EA vẽ chart.
+
+    AI Engine (server) là nguồn duy nhất quyết định & sinh objects; EA chỉ RENDER.
+    """
+    if req.symbol != EXECUTION_SYMBOL:
+        return {"symbol": req.symbol, "method": TRADING_METHOD, "objects": [], "error": "SYMBOL_MISMATCH"}
+    try:
+        mtf_data = fetch_mt5_multi_timeframe(EXECUTION_SYMBOL)
+        if not mtf_data or mtf_data.get("M15") is None:
+            return {"symbol": req.symbol, "method": TRADING_METHOD, "objects": [], "error": "MARKET_DATA_UNAVAILABLE"}
+    except Exception as exc:
+        log_event(LogEvent.EXCEPTION, component="markup", exc=exc)
+        return {"symbol": req.symbol, "method": TRADING_METHOD, "objects": [], "error": str(exc)}
+    markup = build_chart_markup(EXECUTION_SYMBOL, mtf_data, broker_utc_offset_hours=2.0, method=TRADING_METHOD)
+    # Trace a slim heartbeat so the operator can see markup is being pushed.
+    log_event(LogEvent.COMMAND_CLAIMED, component="chart-markup", symbol=req.symbol, objects=len(markup.get("objects", [])))
+    return markup
+
+
+# In-memory storage for real candles pushed by the EA on host machine
+_EA_PUSHED_CANDLES: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+
+@app.post("/api/v1/bridge/candles", dependencies=[Depends(require_bridge_token)])
+@app.post("/api/v1/bridge/candles/", dependencies=[Depends(require_bridge_token)])
+async def bridge_push_candles(req: PushCandlesRequest):
+    """Nhận nến thật (live candles) được đẩy lên từ EA chạy trên máy host Windows."""
+    global _EA_PUSHED_CANDLES
+    symbol = resolve_symbol(req.symbol)
+    tf = req.timeframe
+    
+    if symbol not in _EA_PUSHED_CANDLES:
+        _EA_PUSHED_CANDLES[symbol] = {}
+        
+    _EA_PUSHED_CANDLES[symbol][tf] = [c.model_dump() for c in req.candles]
+    
+    # Ghi nhận log heartbeat nhận nến thành công
+    log_event(
+        LogEvent.COMMAND_CLAIMED,
+        component="candles-sync",
+        symbol=symbol,
+        timeframe=tf,
+        candles=len(req.candles)
+    )
+    return {"status": "SUCCESS", "message": f"Successfully cached {len(req.candles)} candles for {symbol} ({tf})"}
+
+
 @app.get("/api/control-center/status")
 async def get_control_center_status():
     """Sanitized, read-only operational diagnostics for the local dashboard."""
@@ -2063,6 +2377,7 @@ async def get_control_center_status():
             "live_armed": LIVE_ARMED,
             "trading_enabled": ENABLE_TRADING,
             "ai_auto_loop": AI_AUTO_LOOP,
+            "trading_method": TRADING_METHOD,
             "bridge_auth_configured": bool(BRIDGE_TOKEN),
             "operator_auth_configured": bool(OPERATOR_TOKEN),
             "risk_policy_execution_enabled": bool(risk.execution_enabled),
@@ -2123,6 +2438,10 @@ class MT5LoginRequest(BaseModel):
     login: int
     password: str = Field(min_length=1)
     server: str = Field(min_length=1)
+    terminal_path: Optional[str] = None
+    symbol: Optional[str] = None
+    timeframe: Optional[str] = None
+    auto_deploy: bool = True
 
 
 class RiskConfigRequest(BaseModel):
@@ -2131,62 +2450,111 @@ class RiskConfigRequest(BaseModel):
     max_spread: float = Field(ge=0.01, le=10.0)
 
 
-@app.post("/api/control-center/kill-switch")
+@app.post("/api/control-center/kill-switch", dependencies=[Depends(require_operator_token)])
 async def update_kill_switch(req: ControlKillSwitchRequest):
     global KILL_SWITCH
     KILL_SWITCH = req.active
     return {"status": "SUCCESS", "kill_switch_active": KILL_SWITCH}
 
 
-@app.post("/api/control-center/demo-arm")
+@app.post("/api/control-center/demo-arm", dependencies=[Depends(require_operator_token)])
 async def update_demo_arm(req: ControlDemoArmRequest):
     global DEMO_ARMED
     DEMO_ARMED = req.armed
     return {"status": "SUCCESS", "demo_armed": DEMO_ARMED}
 
 
-@app.post("/api/control-center/login-mt5")
+@app.post("/api/control-center/login-mt5", dependencies=[Depends(require_operator_token)])
 async def login_mt5_account(req: MT5LoginRequest):
-    global DEMO_LOGIN, DEMO_SERVER
+    global DEMO_LOGIN, DEMO_SERVER, EXECUTION_SYMBOL, EXECUTION_TIMEFRAME
     if not HAS_MT5:
         raise HTTPException(status_code=503, detail={"code": "MT5_MODULE_UNAVAILABLE", "message": "MetaTrader 5 Python SDK chưa sẵn sàng."})
 
-    try:
-        mt5.shutdown()
-    except Exception:
-        pass
+    # 1) Resolve trading symbol: preferred -> fallback chain with clear reason.
+    preferred_symbol = (req.symbol or EXECUTION_SYMBOL or "XAUUSDm").strip() or "XAUUSDm"
+    resolved_symbol, resolution_reason = resolve_symbol_info(preferred_symbol)
 
-    init_res = mt5.initialize(login=req.login, password=req.password, server=req.server)
-    if not init_res:
-        err = mt5.last_error()
-        raise HTTPException(status_code=400, detail={"code": "MT5_LOGIN_FAILED", "message": f"Không thể kết nối MT5: {err}"})
+    # 2) Connect to the terminal (with terminal_path when provided) and log in.
+    if (req.terminal_path or "").strip():
+        from mt5_auto import connect_and_login as auto_connect
 
-    info = mt5.account_info()
-    if info is None:
-        raise HTTPException(status_code=400, detail={"code": "MT5_ACCOUNT_INFO_FAILED", "message": "Không đọc được thông tin tài khoản MT5 sau khi đăng nhập."})
+        ok, msg, acc = auto_connect(
+            req.terminal_path.strip(),
+            str(req.login),
+            req.password,
+            req.server,
+        )
+        if not ok:
+            raise HTTPException(status_code=400, detail={"code": "MT5_LOGIN_FAILED", "message": msg})
+        info = acc
+    else:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        init_res = mt5.initialize(login=req.login, password=req.password, server=req.server)
+        if not init_res:
+            err = mt5.last_error()
+            raise HTTPException(status_code=400, detail={"code": "MT5_LOGIN_FAILED", "message": f"Không thể kết nối MT5: {err}"})
+        info = mt5.account_info()
+        if info is None:
+            raise HTTPException(status_code=400, detail={"code": "MT5_ACCOUNT_INFO_FAILED", "message": "Không đọc được thông tin tài khoản MT5 sau khi đăng nhập."})
 
     DEMO_LOGIN = req.login
     DEMO_SERVER = req.server
+    EXECUTION_SYMBOL = resolved_symbol
+    EXECUTION_TIMEFRAME = (req.timeframe or EXECUTION_TIMEFRAME or "M15").upper()
     os.environ["MT5_LOGIN"] = str(req.login)
     os.environ["MT5_PASSWORD"] = req.password
     os.environ["MT5_SERVER"] = req.server
 
+    # 3) Persist (symbol/timeframe + credentials) and sync with EA-facing config.
+    save_control_config({
+        "mt5_login": int(req.login),
+        "mt5_server": req.server,
+        "execution_symbol": resolved_symbol,
+        "execution_timeframe": EXECUTION_TIMEFRAME,
+        "symbol_resolution_reason": resolution_reason,
+    })
+    await broadcast_config_updated()
+
+    # 4) Optional auto-deploy: launch terminal64 -> copy .ex5 -> open chart -> attach EA -> Algo Trading.
+    deploy_report = None
+    if req.auto_deploy and HAS_MT5_AUTO and deploy_expert_to_chart is not None:
+        deploy_report = await asyncio.to_thread(
+            deploy_expert_to_chart,
+            str(req.login),
+            req.password,
+            req.server,
+            resolved_symbol,
+            EXECUTION_TIMEFRAME,
+            terminal64_path=(req.terminal_path or "").strip() or None,
+        )
+
+    wire_trade_mode = "DEMO" if getattr(info, "trade_mode", 0) == getattr(mt5, "ACCOUNT_TRADE_MODE_DEMO", 0) else "REAL"
     return {
         "status": "SUCCESS",
-        "message": f"Đăng nhập tài khoản MT5 #{info.login} ({info.server}) thành công.",
+        "message": f"Đăng nhập tài khoản MT5 #{getattr(info, 'login', req.login)} ({getattr(info, 'server', req.server)}) thành công.",
         "account": {
-            "login": info.login,
-            "server": info.server,
-            "balance": info.balance,
-            "equity": info.equity,
-            "trade_mode": "DEMO" if getattr(info, "trade_mode", 0) == getattr(mt5, "ACCOUNT_TRADE_MODE_DEMO", 0) else "REAL",
-            "leverage": info.leverage,
-            "currency": info.currency,
+            "login": getattr(info, "login", req.login),
+            "server": getattr(info, "server", req.server),
+            "balance": getattr(info, "balance", 0),
+            "equity": getattr(info, "equity", 0),
+            "trade_mode": wire_trade_mode,
+            "leverage": getattr(info, "leverage", 0),
+            "currency": getattr(info, "currency", ""),
         },
+        "symbol": {
+            "requested": preferred_symbol,
+            "resolved": resolved_symbol,
+            "reason": resolution_reason,
+        },
+        "timeframe": EXECUTION_TIMEFRAME,
+        "deploy": deploy_report,
     }
 
 
-@app.post("/api/control-center/risk")
+@app.post("/api/control-center/risk", dependencies=[Depends(require_operator_token)])
 async def update_risk_config(req: RiskConfigRequest):
     profile = FOREX_RISK_PROFILES.get("XAUUSD")
     if profile:
@@ -2206,6 +2574,12 @@ async def update_risk_config(req: RiskConfigRequest):
             risk_per_trade_fraction=req.risk_per_trade_fraction,
             max_open_positions=req.max_open_positions,
         )
+    save_control_config({
+        "risk_per_trade_fraction": req.risk_per_trade_fraction,
+        "max_open_positions": req.max_open_positions,
+        "max_spread": req.max_spread,
+    })
+    await broadcast_config_updated()
     return {
         "status": "SUCCESS",
         "risk_per_trade_fraction": req.risk_per_trade_fraction,
@@ -2289,14 +2663,32 @@ def issue_demo_command() -> dict[str, Any]:
     if tick is None or account is None or spec is None:
         raise HTTPException(status_code=503, detail={"code": "MARKET_DATA_UNAVAILABLE"})
     indicators = get_technical_indicators(EXECUTION_SYMBOL)
-    proposal = decide_signal(
-        symbol=EXECUTION_SYMBOL,
-        timeframe="M15",
-        indicators=indicators,
-        bid=float(tick.bid),
-        ask=float(tick.ask),
-        config=StrategyConfig(),
-    )
+
+    mtf_data = fetch_mt5_multi_timeframe(EXECUTION_SYMBOL)
+    if mtf_data and "M15" in mtf_data:
+        sig = run_signal_engine(EXECUTION_SYMBOL, mtf_data, broker_utc_offset_hours=2.0, method=TRADING_METHOD)
+        action_enum = SignalAction.BUY if sig.direction == "BUY" else (SignalAction.SELL if sig.direction == "SELL" else SignalAction.NO_TRADE)
+        proposal = DecisionProposal(
+            action=action_enum,
+            symbol=EXECUTION_SYMBOL,
+            timeframe="M15",
+            confidence=85 if sig.status == "APPROVED" else 0,
+            entry=sig.entry_price or float(tick.ask if sig.direction == "BUY" else tick.bid),
+            stop_loss=sig.sl,
+            take_profit=sig.tp,
+            reason_codes=(sig.reason_code,),
+            strategy_version=f"{TRADING_METHOD}-v1",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+    else:
+        proposal = decide_signal(
+            symbol=EXECUTION_SYMBOL,
+            timeframe="M15",
+            indicators=indicators,
+            bid=float(tick.bid),
+            ask=float(tick.ask),
+            config=StrategyConfig(),
+        )
     profile = get_risk_profile(EXECUTION_SYMBOL)
     if profile is None:
         raise HTTPException(status_code=503, detail={"code": "RISK_PROFILE_UNAVAILABLE"})
@@ -2313,36 +2705,6 @@ def issue_demo_command() -> dict[str, Any]:
     if pos_count > 0:
         if pos_count >= policy.max_open_positions:
             return {"status": "REJECTED", "reason_codes": ["REJECT_POSITION_LIMIT"], "command": None, "pos_count": pos_count, "total_pnl": total_pnl}
-        
-        # Check if active positions are protected (BE locked)
-        unprotected = []
-        last_entry_price = float(matching_positions[-1].price_open)
-        for pos in matching_positions:
-            is_pos_buy = (pos.type == 0)
-            sl = float(pos.sl)
-            open_p = float(pos.price_open)
-            if is_pos_buy:
-                if sl < open_p:
-                    unprotected.append(pos)
-            else:
-                if sl > open_p or sl == 0:
-                    unprotected.append(pos)
-
-        if unprotected:
-            # Position 1 is not yet protected at BE. AI holds position & observes price reaction!
-            return {"status": "REJECTED", "reason_codes": ["HOLD_OBSERVING_MARKET_UNPROTECTED"], "command": None, "pos_count": pos_count, "total_pnl": total_pnl}
-
-        # Existing positions are protected. Check if current price has broken out further
-        curr_price = float(tick.ask if proposal.action.value == "BUY" else tick.bid)
-        atr_val = indicators.get("atr") or 2.0
-        breakout_dist = max(atr_val * 0.5, 1.5)
-
-        if proposal.action.value == "BUY":
-            if curr_price - last_entry_price < breakout_dist:
-                return {"status": "REJECTED", "reason_codes": ["HOLD_OBSERVING_MARKET_CONSOLIDATING"], "command": None, "pos_count": pos_count, "total_pnl": total_pnl}
-        elif proposal.action.value == "SELL":
-            if last_entry_price - curr_price < breakout_dist:
-                return {"status": "REJECTED", "reason_codes": ["HOLD_OBSERVING_MARKET_CONSOLIDATING"], "command": None, "pos_count": pos_count, "total_pnl": total_pnl}
 
     decision = evaluate_risk(
         proposal=proposal,
@@ -2361,6 +2723,7 @@ def issue_demo_command() -> dict[str, Any]:
         log_event(LogEvent.RISK_REJECTED, component="risk-gate", action=proposal.action.value, reasons=list(decision.reason_codes))
         BRAIN.record_decision(
             strategy_version=proposal.strategy_version or "trend-confluence-v1",
+            trading_method=TRADING_METHOD,
             symbol=EXECUTION_SYMBOL,
             timeframe=proposal.timeframe,
             action=proposal.action.value,
@@ -2382,6 +2745,41 @@ def issue_demo_command() -> dict[str, Any]:
         )
         return {"status": "REJECTED", "reason_codes": decision.reason_codes, "command": None, "pos_count": pos_count, "total_pnl": total_pnl}
     log_event(LogEvent.RISK_APPROVED, component="risk-gate", action=proposal.action.value, volume=decision.volume)
+    # DCA / multi-entry lot sizing: AI tự quyết lot theo vốn, theo hướng lệnh mới so
+    # với vị thế cuối cùng đang mở; mọi lot clamp trong [volume_min, DCA_DEFAULT_MAX_LOT].
+    base_volume = decision.volume
+    effective_volume = base_volume
+    prev_positions = matching_positions if pos_count > 0 else []
+    same_direction = True
+    if prev_positions:
+        last_position = prev_positions[-1]
+        last_is_buy = (getattr(last_position, "type", 0) == 0)
+        same_direction = last_is_buy == (proposal.action.value == "BUY")
+        dca_volume = compute_dca_volume(
+            base_volume=base_volume,
+            entry_index=pos_count,
+            same_direction=same_direction,
+            spec=spec,
+            volume_max=DCA_DEFAULT_MAX_LOT,
+        )
+        if dca_volume is None:
+            log_event(LogEvent.RISK_REJECTED, component="risk-gate", action=proposal.action.value, reasons=["REJECT_DCA_VOLUME"])
+            return {"status": "REJECTED", "reason_codes": ["REJECT_DCA_VOLUME"], "command": None, "pos_count": pos_count, "total_pnl": total_pnl}
+        effective_volume = dca_volume
+    stop_distance = abs(proposal.entry - proposal.stop_loss)
+    risk_per_lot = (stop_distance / spec.tick_size) * spec.tick_value
+    capped_volume = cap_volume_to_basket_risk(
+        desired_volume=effective_volume,
+        existing_lot_volumes=[float(getattr(p, "volume", 0.0)) for p in prev_positions],
+        risk_per_lot=risk_per_lot,
+        equity=float(account.equity),
+        spec=spec,
+        max_basket_loss_fraction=MAX_BASKET_LOSS_FRACTION,
+    )
+    if capped_volume is None:
+        log_event(LogEvent.RISK_REJECTED, component="risk-gate", action=proposal.action.value, reasons=["REJECT_BASKET_RISK"])
+        return {"status": "REJECTED", "reason_codes": ["REJECT_BASKET_RISK"], "command": None, "pos_count": pos_count, "total_pnl": total_pnl}
+    effective_volume = capped_volume
     # Stable idempotency key per strategy state so the AI loop does NOT spam a new
     # command every scan while a position is already open. If a command already
     # reached a terminal state, mint a fresh one so new trades can still fire.
@@ -2391,10 +2789,10 @@ def issue_demo_command() -> dict[str, Any]:
         action=proposal.action.value,
         symbol=EXECUTION_SYMBOL,
         magic=EXECUTION_MAGIC,
-        volume=decision.volume,
+        volume=effective_volume,
         stop_loss=proposal.stop_loss,
         take_profit=proposal.take_profit,
-        reason=",".join(decision.reason_codes),
+        reason=",".join((*decision.reason_codes, "DCA_POSITIVE" if same_direction and pos_count > 0 else ("DCA_NEGATIVE" if pos_count > 0 else "INITIAL"))),
         ttl_seconds=DEMO_COMMAND_TTL,
     )
     if command.get("state") in ("EXECUTED", "REJECTED", "FAILED", "EXPIRED"):
@@ -2403,14 +2801,15 @@ def issue_demo_command() -> dict[str, Any]:
             action=proposal.action.value,
             symbol=EXECUTION_SYMBOL,
             magic=EXECUTION_MAGIC,
-            volume=decision.volume,
+            volume=effective_volume,
             stop_loss=proposal.stop_loss,
             take_profit=proposal.take_profit,
-            reason=",".join(decision.reason_codes),
+            reason=",".join((*decision.reason_codes, "DCA_POSITIVE" if same_direction and pos_count else "DCA_NEGATIVE" if pos_count else "INITIAL")),
             ttl_seconds=DEMO_COMMAND_TTL,
         )
     BRAIN.record_decision(
         strategy_version=proposal.strategy_version or "trend-confluence-v1",
+        trading_method=TRADING_METHOD,
         symbol=EXECUTION_SYMBOL,
         timeframe=proposal.timeframe,
         action=proposal.action.value,
@@ -2418,7 +2817,7 @@ def issue_demo_command() -> dict[str, Any]:
         entry=proposal.entry,
         stop_loss=proposal.stop_loss,
         take_profit=proposal.take_profit,
-        volume=decision.volume,
+        volume=effective_volume,
         reason_codes=list(decision.reason_codes),
         indicators={key: indicators.get(key) for key in ("ema20", "ema50", "ema200", "rsi", "atr")},
         account={"equity": float(account.equity), "margin_free": float(account.margin_free)},
@@ -2436,7 +2835,7 @@ def issue_demo_command() -> dict[str, Any]:
         ),
     )
     log_event(LogEvent.BRAIN_DECISION_RECORDED, component="ai-brain", action=proposal.action.value, confidence=proposal.confidence, command_id=command.get("command_id"))
-    log_event(LogEvent.ORDER_SENT, component="order", action=proposal.action.value, volume=decision.volume, command_id=command.get("command_id"))
+    log_event(LogEvent.ORDER_SENT, component="order", action=proposal.action.value, volume=effective_volume, command_id=command.get("command_id"))
     return {
         "status": "ISSUED",
         "reason_codes": decision.reason_codes,
@@ -2447,6 +2846,7 @@ def issue_demo_command() -> dict[str, Any]:
             "entry": proposal.entry,
             "stop_loss": proposal.stop_loss,
             "take_profit": proposal.take_profit,
+            "volume": effective_volume,
             "confidence": proposal.confidence,
         }
     }
@@ -2469,6 +2869,42 @@ def execution_disabled_response() -> None:
     )
 
 
+def fetch_mt5_multi_timeframe(symbol: str) -> Dict[str, pd.DataFrame]:
+    if not mt5.terminal_info():
+        return {}
+    tf_map = {
+        "H4": mt5.TIMEFRAME_H4,
+        "H1": mt5.TIMEFRAME_H1,
+        "M15": mt5.TIMEFRAME_M15,
+        "M5": mt5.TIMEFRAME_M5,
+        "M1": mt5.TIMEFRAME_M1,
+        "D1": mt5.TIMEFRAME_D1,
+    }
+    mtf = {}
+    for tf_name, tf_code in tf_map.items():
+        rates = mt5.copy_rates_from_pos(symbol, tf_code, 0, 500)
+        if rates is not None and len(rates) > 0:
+            df = pd.DataFrame(rates)
+            df["time"] = pd.to_datetime(df["time"], unit="s")
+            mtf[tf_name] = df
+    # Optional DXY-style correlation series for SMT Divergence (ICT).
+    # Only used when the symbol exists in the terminal.
+    if symbol and symbol.upper().startswith("XAU"):
+        try:
+            all_symbols = [s.name for s in mt5.symbols_get()]
+            for dxy_name in ("DXY", "DX", "USDX", "USDX.m"):
+                if dxy_name in all_symbols:
+                    rates = mt5.copy_rates_from_pos(dxy_name, mt5.TIMEFRAME_M15, 0, 500)
+                    if rates is not None and len(rates) > 0:
+                        df = pd.DataFrame(rates)
+                        df["time"] = pd.to_datetime(df["time"], unit="s")
+                        mtf["DXY"] = df
+                        break
+        except Exception:
+            pass
+    return mtf
+
+
 @app.post("/api/v1/decisions/evaluate")
 async def evaluate_trade_decision(req: OrderRequest):
     if not ensure_mt5_connected():
@@ -2481,14 +2917,32 @@ async def evaluate_trade_decision(req: OrderRequest):
     if tick is None or account_info is None or spec is None:
         raise HTTPException(status_code=503, detail={"code": "MARKET_DATA_UNAVAILABLE"})
 
-    proposal = decide_signal(
-        symbol=symbol,
-        timeframe="M15",
-        indicators=indicators,
-        bid=float(tick.bid),
-        ask=float(tick.ask),
-        config=StrategyConfig(),
-    )
+    mtf_data = fetch_mt5_multi_timeframe(symbol)
+    if mtf_data and "M15" in mtf_data:
+        sig = run_signal_engine(symbol, mtf_data, broker_utc_offset_hours=2.0, method=TRADING_METHOD)
+        action_enum = SignalAction.BUY if sig.direction == "BUY" else (SignalAction.SELL if sig.direction == "SELL" else SignalAction.NO_TRADE)
+        proposal = DecisionProposal(
+            action=action_enum,
+            symbol=symbol,
+            timeframe="M15",
+            confidence=85 if sig.status == "APPROVED" else 0,
+            entry=sig.entry_price,
+            stop_loss=sig.sl,
+            take_profit=sig.tp,
+            reason_codes=(sig.reason_code,),
+            strategy_version=f"{TRADING_METHOD}-v1",
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+    else:
+        proposal = decide_signal(
+            symbol=symbol,
+            timeframe="M15",
+            indicators=indicators,
+            bid=float(tick.bid),
+            ask=float(tick.ask),
+            config=StrategyConfig(),
+        )
+
     matching_positions = [
         position
         for position in (mt5.positions_get() or [])
@@ -2511,6 +2965,7 @@ async def evaluate_trade_decision(req: OrderRequest):
     )
     return {
         "status": "ANALYSIS_ONLY",
+        "trading_method": TRADING_METHOD,
         "proposal": {
             "action": proposal.action.value,
             "symbol": proposal.symbol,
@@ -2686,14 +3141,93 @@ async def order_close_all():
     return {"status": "SUCCESS", "message": "Yêu cầu CLOSE ALL đã được tạo trong Command Ledger!", "command": command}
 
 
-@app.post("/api/telegram/test_morning_news")
+@app.post("/api/reset_all", dependencies=[Depends(require_operator_token)])
+async def reset_all():
+    ready, reason = demo_execution_status()
+    if not ready or KILL_SWITCH:
+        execution_disabled_response()
+
+    # 1. Queue CLOSE_ALL command in Command Ledger
+    idempotency_key_close = f"reset-closeall:{int(time.time()*1000)}"
+    command_close = COMMAND_STORE.create_command(
+        idempotency_key=idempotency_key_close,
+        action="CLOSE_ALL",
+        symbol=EXECUTION_SYMBOL,
+        magic=EXECUTION_MAGIC,
+        volume=0.0,
+        stop_loss=None,
+        take_profit=None,
+        reason="SYSTEM_RESET_CLOSE_ALL",
+        ttl_seconds=DEMO_COMMAND_TTL,
+    )
+    log_event(LogEvent.ORDER_SENT, component="reset", action="CLOSE_ALL", command_id=command_close.get("command_id"))
+
+    # 2. Try Direct MT5 Action for instant response if connected
+    closed_tickets = []
+    cancelled_orders = []
+    if ensure_mt5_connected():
+        # Close positions
+        positions = mt5.positions_get() or []
+        for p in positions:
+            is_buy = (p.type == 0)
+            symbol_info = mt5.symbol_info_tick(p.symbol)
+            price = symbol_info.bid if is_buy else symbol_info.ask if symbol_info else p.price_current
+            
+            req = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": p.symbol,
+                "volume": float(p.volume),
+                "type": mt5.ORDER_TYPE_SELL if is_buy else mt5.ORDER_TYPE_BUY,
+                "position": p.ticket,
+                "price": float(price),
+                "magic": EXECUTION_MAGIC,
+                "comment": "QuantAI Reset Close",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            res = mt5.order_send(req)
+            if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                closed_tickets.append(p.ticket)
+                log_event(LogEvent.ORDER_SENT, component="reset", action="CLOSE_POSITION", ticket=p.ticket)
+
+        # Cancel pending orders
+        orders = mt5.orders_get() or []
+        for o in orders:
+            req = {
+                "action": mt5.TRADE_ACTION_REMOVE,
+                "order": o.ticket,
+            }
+            res = mt5.order_send(req)
+            if res and res.retcode == mt5.TRADE_RETCODE_DONE:
+                cancelled_orders.append(o.ticket)
+                log_event(LogEvent.ORDER_CANCELLED, component="reset", action="CANCEL_PENDING", order_ticket=o.ticket)
+
+    # 3. Save Reset Time to Control Config
+    reset_time = datetime.now()
+    save_control_config({"pnl_reset_time": reset_time.isoformat()})
+    await broadcast_config_updated()
+
+    msg = f"[RESET ALL] Anh Tú đã kích hoạt reset toàn bộ hệ thống lúc {reset_time.strftime('%H:%M:%S')}. Đã yêu cầu đóng vị thế (đã đóng trực tiếp: {closed_tickets}) và hủy lệnh chờ (đã hủy trực tiếp: {cancelled_orders})."
+    append_chat_message("ai", msg)
+    send_telegram_alert(f"<b>[SYSTEM RESET]</b> {msg}")
+
+    return {
+        "status": "SUCCESS",
+        "message": "Đã reset hệ thống thành công! Toàn bộ vị thế đã được đóng, lệnh chờ đã được hủy và PnL hôm nay đã được đặt lại.",
+        "pnl_reset_time": reset_time.isoformat(),
+        "closed_tickets": closed_tickets,
+        "cancelled_orders": cancelled_orders
+    }
+
+
+@app.post("/api/telegram/test_morning_news", dependencies=[Depends(require_operator_token)])
 async def trigger_test_morning_news():
     """Trigger an instant test morning news bulletin via Telegram."""
     sent = send_morning_news_telegram_bulletin()
     return {"status": "SUCCESS" if sent else "FAILED", "message": "Đã gửi bản tin kinh tế 05:00 AM tới Telegram!" if sent else "Gửi bản tin thất bại, kiểm tra bot token."}
 
 
-@app.post("/api/telegram/test_evening_pnl")
+@app.post("/api/telegram/test_evening_pnl", dependencies=[Depends(require_operator_token)])
 async def trigger_test_evening_pnl():
     """Trigger an instant test evening PnL report via Telegram."""
     sent = send_evening_pnl_telegram_report()
@@ -3018,7 +3552,8 @@ async def _ai_decision_loop() -> None:
                         )
 
                         analysis_str = (
-                            f"\n📊 BẢNG PHÂN TÍCH CHỈ BÁO KỸ THUẬT (M15)\n"
+                            f"\n📊 BẢNG PHÂN TÍCH HỆ THỐNG [{TRADING_METHOD}]\n"
+                            f"├─ Phương pháp: {TRADING_METHOD}\n"
                             f"├─ Xu hướng: {trend_str}\n"
                             f"│  └─ EMA20: {ema20:.2f} | EMA50: {ema50:.2f} | EMA200: {ema200:.2f}\n"
                             f"├─ Động lượng:\n"
@@ -3292,7 +3827,7 @@ async def get_brain_adjustments():
     return BRAIN.latest_adjustments(limit=20)
 
 
-@app.patch("/api/brain/adjustments/{adjustment_id}")
+@app.patch("/api/brain/adjustments/{adjustment_id}", dependencies=[Depends(require_operator_token)])
 async def apply_adjustment(adjustment_id: str, req: AdjustmentActionRequest):
     """Approve or reject an AI auto-adjust proposal."""
     if req.action == "approve":
@@ -3309,7 +3844,7 @@ async def apply_adjustment(adjustment_id: str, req: AdjustmentActionRequest):
     return {"status": "SUCCESS", "adjustment_id": adjustment_id, "action": req.action}
 
 
-@app.post("/api/control-center/ai-loop")
+@app.post("/api/control-center/ai-loop", dependencies=[Depends(require_operator_token)])
 async def update_ai_loop(req: ControlDemoArmRequest):
     global AI_AUTO_LOOP
     AI_AUTO_LOOP = req.armed
@@ -3398,7 +3933,7 @@ async def get_pending_orders():
     return []
 
 
-@app.post("/api/orders/close-profitable")
+@app.post("/api/orders/close-profitable", dependencies=[Depends(require_operator_token)])
 async def close_profitable_positions():
     """Close all positions with profit > 0 by creating commands in CommandStore."""
     ready, reason = demo_execution_status()
@@ -3432,7 +3967,7 @@ async def close_profitable_positions():
     return {"status": "SUCCESS", "message": f"Đã phát {len(created_commands)} lệnh đóng vị thế chốt lời vào Command Ledger!", "commands": created_commands}
 
 
-@app.post("/api/orders/close-losing")
+@app.post("/api/orders/close-losing", dependencies=[Depends(require_operator_token)])
 async def close_losing_positions():
     """Close all positions with profit < 0 by creating commands in CommandStore."""
     ready, reason = demo_execution_status()
@@ -3471,19 +4006,28 @@ class ControlCenterTelegramRequest(BaseModel):
     chat_id: str
     enabled: bool = True
 
-@app.post("/api/control-center/mode")
+@app.post("/api/control-center/mode", dependencies=[Depends(require_operator_token)])
 async def update_control_center_mode(req: ControlCenterModeRequest):
     global EXECUTION_MODE, LIVE_ARMED, DEMO_ARMED, KILL_SWITCH, AI_AUTO_LOOP, ENABLE_TRADING
     EXECUTION_MODE = req.mode.upper()
-    
+
     if EXECUTION_MODE == "LIVE":
         LIVE_ARMED = True
+        DEMO_ARMED = False
         ENABLE_TRADING = True
         KILL_SWITCH = False
     elif EXECUTION_MODE == "DEMO":
         DEMO_ARMED = True
+        LIVE_ARMED = False
         ENABLE_TRADING = True
         KILL_SWITCH = False
+    else:
+        # DISABLED -> force fail-closed regardless of request flags.
+        EXECUTION_MODE = "DISABLED"
+        LIVE_ARMED = False
+        DEMO_ARMED = False
+        ENABLE_TRADING = False
+        KILL_SWITCH = True
         
     if req.live_armed is not None: LIVE_ARMED = req.live_armed
     if req.demo_armed is not None: DEMO_ARMED = req.demo_armed
@@ -3499,6 +4043,7 @@ async def update_control_center_mode(req: ControlCenterModeRequest):
         "ai_auto_loop": AI_AUTO_LOOP,
         "enable_trading": ENABLE_TRADING,
     })
+    await broadcast_config_updated()
 
     log_event(LogEvent.INFO, component="control-center", message=f"Execution mode updated -> {EXECUTION_MODE} (LIVE_ARMED={LIVE_ARMED}, DEMO_ARMED={DEMO_ARMED})")
     ready, reason = execution_readiness()
@@ -3514,7 +4059,7 @@ async def update_control_center_mode(req: ControlCenterModeRequest):
 
     return {"status": "SUCCESS", "mode": EXECUTION_MODE, "ready": ready, "reason": reason}
 
-@app.post("/api/control-center/mt5-login")
+@app.post("/api/control-center/mt5-login", dependencies=[Depends(require_operator_token)])
 async def update_mt5_login_credentials(req: ControlCenterLoginRequest):
     global DEMO_LOGIN, DEMO_SERVER, MT5_SAVED_LOGIN, MT5_SAVED_PASSWORD, MT5_SAVED_SERVER
     DEMO_LOGIN = req.login
@@ -3529,6 +4074,7 @@ async def update_mt5_login_credentials(req: ControlCenterLoginRequest):
         "mt5_password": req.password,
         "mt5_server": req.server,
     })
+    await broadcast_config_updated()
 
     ok = False
     if HAS_MT5:
@@ -3543,7 +4089,7 @@ async def update_mt5_login_credentials(req: ControlCenterLoginRequest):
     else:
         return {"status": "ERROR", "message": f"Could not connect MT5 server {req.server} with login {req.login}"}
 
-@app.post("/api/control-center/telegram")
+@app.post("/api/control-center/telegram", dependencies=[Depends(require_operator_token)])
 async def update_telegram_config(req: ControlCenterTelegramRequest):
     global TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_ENABLED
     TELEGRAM_BOT_TOKEN = req.bot_token.strip()
@@ -3556,6 +4102,7 @@ async def update_telegram_config(req: ControlCenterTelegramRequest):
         "telegram_chat_id": TELEGRAM_CHAT_ID,
         "telegram_enabled": TELEGRAM_ENABLED,
     })
+    await broadcast_config_updated()
 
     sent = False
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
@@ -3567,9 +4114,45 @@ async def update_telegram_config(req: ControlCenterTelegramRequest):
 
     if sent:
         return {"status": "SUCCESS", "message": "Đã lưu thông số Telegram vào Control Center và gửi tin nhắn test thành công!"}
-class ControlCenterAIConfigRequest(BaseModel):
-    active_model: str = Field(default="gemini-2.0-flash", max_length=128)
+class AITestRequest(BaseModel):
+    key_type: str = Field(default="openai", max_length=32)
+    api_key: Optional[str] = None
+    model: str = Field(default="", max_length=128)
+    base_url: Optional[str] = None
+
+
+@app.post("/api/ai/test", dependencies=[Depends(require_operator_token)])
+async def test_ai_config_endpoint(req: AITestRequest):
+    """Test a provider config (key + model + url) before saving it.
+
+    Returns a structured verdict with a clear reason when it fails:
+    sai key / sai model / hết credit / lỗi url...
+    """
+    if not HAS_AI_TEST or test_provider_connection is None:
+        raise HTTPException(status_code=503, detail={"code": "AI_TEST_UNAVAILABLE", "message": "Module kiểm tra AI chưa sẵn sàng."})
+    model = (req.model or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail={"code": "MODEL_REQUIRED", "message": "Chưa nhập model ID cần test."})
+    key = (req.api_key or "").strip()
+    if req.key_type != "opencode" and not key:
+        raise HTTPException(status_code=400, detail={"code": "API_KEY_REQUIRED", "message": f"Nhà cung cấp {req.key_type} cần API key để test."})
+    result = await asyncio.to_thread(
+        test_provider_connection,
+        req.key_type.strip().lower(),
+        key,
+        model.strip(),
+        (req.base_url or "").strip() or None,
+    )
+    log_event(
+        LogEvent.INFO,
+        component="ai-test",
+        message=f"AI provider test {req.key_type}/{model} -> {'OK' if result.get('ok') else result.get('error_code')}",
+    )
+    return {"status": "SUCCESS", "result": result}
+    active_model: Optional[str] = Field(default="deepseek-v4-flash-free", max_length=128)
+    active_ai_model: Optional[str] = None
     custom_model_id: Optional[str] = None
+    trading_method: Optional[str] = None
     gemini_api_key: Optional[str] = None
     claude_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
@@ -3581,6 +4164,20 @@ class ControlCenterAIConfigRequest(BaseModel):
     gateway_key: Optional[str] = None
 
 SUPPORTED_AI_MODELS = [
+    # ── OpenCode Zen FREE MODELS (Mặc định - Không cần API Key) ──
+    # Nguồn: https://opencode.ai/zen/v1/chat/completions (Zen Gateway Anonymous).
+    # Đây là mô hình MẶC ĐỊNH: không cần key nào. Nếu khách hàng cấu hình
+    # gateway/api-key/model riêng (Control Center) thì hệ thống ưu tiên theo
+    # thứ tự: Custom Gateway → Custom Model → provider key riêng → OpenCode Free.
+    {"id": "deepseek-v4-flash-free", "name": "OpenCode DeepSeek V4 Flash Free ⭐ (Mặc định)", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "big-pickle", "name": "OpenCode Big Pickle Free (Stealth Reasoning)", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "mimo-v2.5-free", "name": "OpenCode MiMo V2.5 Free", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "nemotron-3-ultra-free", "name": "OpenCode Nemotron 3 Ultra Free", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "north-mini-code-free", "name": "OpenCode North Mini Code Free", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "laguna-s-2.1-free", "name": "OpenCode Laguna S 2.1 Free", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "longcat-2.0-free", "name": "OpenCode LongCat 2.0 Free", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "ling-3.0-flash-free", "name": "OpenCode Ling 3.0 Flash Free (Deprecated)", "provider": "OpenCode Zen", "key_type": "opencode"},
+
     # ── OpenAI ──
     {"id": "gpt-5.6-sol", "name": "OpenAI GPT-5.6 Sol ⭐ (Flagship)", "provider": "OpenAI", "key_type": "openai"},
     {"id": "gpt-5.6-terra", "name": "OpenAI GPT-5.6 Terra", "provider": "OpenAI", "key_type": "openai"},
@@ -3681,49 +4278,75 @@ SUPPORTED_AI_MODELS = [
     {"id": "gemma-3", "name": "Google Gemma 3", "provider": "Gemma", "key_type": "gemini"},
 ]
 
-USER_CUSTOM_MODEL_ID = ""
+USER_CUSTOM_MODEL_ID = _saved_cfg.get("custom_model_id", "")
 
 # Gemini quota handling: rotate between default models every couple hours to
 # dodge per-model 429 rate limits, and cool down any model that just returned 429.
 GEMINI_ROTATION_POOL = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3-flash"]
 GEMINI_ROTATION_IDX = 0
+OPENCODE_ROTATION_IDX = 0
 AI_MODEL_COOLDOWN: Dict[str, float] = {}
 AI_COOLDOWN_SECONDS = max(120, int(os.getenv("QUANTAI_AI_COOLDOWN_SECONDS", "7200")))
 
-USER_GROK_KEY = ""
-USER_QWEN_KEY = ""
-USER_GATEWAY_URL = ""
-USER_GATEWAY_KEY = ""
+USER_GROK_KEY = _saved_cfg.get("grok_api_key") or os.getenv("GROK_API_KEY", "")
+USER_QWEN_KEY = _saved_cfg.get("qwen_api_key") or os.getenv("QWEN_API_KEY", "")
+USER_GATEWAY_URL = _saved_cfg.get("gateway_url") or os.getenv("GATEWAY_URL", "")
+USER_GATEWAY_KEY = _saved_cfg.get("gateway_key") or os.getenv("GATEWAY_KEY", "")
 
-@app.post("/api/control-center/ai-config")
+class TradingMethodRequest(BaseModel):
+    trading_method: str = Field(default="ULTRA_CONFLUENCE", max_length=64)
+
+@app.post("/api/control-center/trading-method", dependencies=[Depends(require_operator_token)])
+async def update_trading_method_endpoint(req: TradingMethodRequest):
+    global TRADING_METHOD
+    method = req.trading_method.strip().upper()
+    if method not in ("INDICATOR", "SMC", "ICT", "PRICE_ACTION", "ULTRA_CONFLUENCE", "SNIPER"):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_TRADING_METHOD", "message": f"Phương pháp {method} không hợp lệ."})
+    TRADING_METHOD = method
+    save_control_config({"trading_method": TRADING_METHOD})
+    await broadcast_config_updated()
+    log_event(LogEvent.INFO, component="control-center", message=f"Trading method updated -> {TRADING_METHOD}")
+    return {
+        "status": "SUCCESS",
+        "message": f"Đã cập nhật phương pháp giao dịch: {TRADING_METHOD}",
+        "trading_method": TRADING_METHOD
+    }
+
+@app.post("/api/control-center/ai-config", dependencies=[Depends(require_operator_token)])
 async def update_control_center_ai_config(req: ControlCenterAIConfigRequest):
-    global ACTIVE_AI_MODEL, USER_CUSTOM_MODEL_ID, USER_GEMINI_KEY, USER_CLAUDE_KEY, USER_DEEPSEEK_KEY, USER_OPENAI_KEY, USER_ZPLAY_KEY, USER_GROK_KEY, USER_QWEN_KEY, USER_GATEWAY_URL, USER_GATEWAY_KEY
-    if req.active_model:
-        ACTIVE_AI_MODEL = req.active_model.strip()
+    global ACTIVE_AI_MODEL, USER_CUSTOM_MODEL_ID, USER_GEMINI_KEY, USER_CLAUDE_KEY, USER_DEEPSEEK_KEY, USER_OPENAI_KEY, USER_ZPLAY_KEY, USER_GROK_KEY, USER_QWEN_KEY, USER_GATEWAY_URL, USER_GATEWAY_KEY, TRADING_METHOD
+    model_input = req.active_model or req.active_ai_model
+    if model_input:
+        ACTIVE_AI_MODEL = model_input.strip()
+    if req.trading_method:
+        method = req.trading_method.strip().upper()
+        if method in ("INDICATOR", "SMC", "ICT", "PRICE_ACTION", "ULTRA_CONFLUENCE", "SNIPER"):
+            TRADING_METHOD = method
     if req.custom_model_id is not None:
         USER_CUSTOM_MODEL_ID = req.custom_model_id.strip()
-    if req.gemini_api_key is not None:
+    if req.gemini_api_key is not None and req.gemini_api_key.strip() != "*****":
         USER_GEMINI_KEY = req.gemini_api_key.strip()
-    if req.claude_api_key is not None:
+    if req.claude_api_key is not None and req.claude_api_key.strip() != "*****":
         USER_CLAUDE_KEY = req.claude_api_key.strip()
-    if req.deepseek_api_key is not None:
+    if req.deepseek_api_key is not None and req.deepseek_api_key.strip() != "*****":
         USER_DEEPSEEK_KEY = req.deepseek_api_key.strip()
-    if req.openai_api_key is not None:
+    if req.openai_api_key is not None and req.openai_api_key.strip() != "*****":
         USER_OPENAI_KEY = req.openai_api_key.strip()
-    if req.zplay_api_key is not None:
+    if req.zplay_api_key is not None and req.zplay_api_key.strip() != "*****":
         USER_ZPLAY_KEY = req.zplay_api_key.strip()
-    if req.grok_api_key is not None:
+    if req.grok_api_key is not None and req.grok_api_key.strip() != "*****":
         USER_GROK_KEY = req.grok_api_key.strip()
-    if req.qwen_api_key is not None:
+    if req.qwen_api_key is not None and req.qwen_api_key.strip() != "*****":
         USER_QWEN_KEY = req.qwen_api_key.strip()
     if req.gateway_url is not None:
         USER_GATEWAY_URL = req.gateway_url.strip()
     if req.gateway_key is not None:
-        USER_GATEWAY_KEY = req.gateway_key.strip()
+        USER_GATEWAY_KEY = req.gateway_key.strip() if req.gateway_key.strip() != "*****" else USER_GATEWAY_KEY
 
     save_control_config({
         "active_ai_model": ACTIVE_AI_MODEL,
         "custom_model_id": USER_CUSTOM_MODEL_ID,
+        "trading_method": TRADING_METHOD,
         "gemini_api_key": USER_GEMINI_KEY,
         "claude_api_key": USER_CLAUDE_KEY,
         "deepseek_api_key": USER_DEEPSEEK_KEY,
@@ -3734,20 +4357,23 @@ async def update_control_center_ai_config(req: ControlCenterAIConfigRequest):
         "gateway_url": USER_GATEWAY_URL,
         "gateway_key": USER_GATEWAY_KEY,
     })
+    await broadcast_config_updated()
 
     model_display = USER_CUSTOM_MODEL_ID or ACTIVE_AI_MODEL
-    log_event(LogEvent.INFO, component="ai-config", message=f"AI Config updated -> Active Model={model_display}")
+    log_event(LogEvent.INFO, component="ai-config", message=f"AI Config updated -> Active Model={model_display}, Method={TRADING_METHOD}")
     send_telegram_alert(
         f"<b>[AI ENGINE UPDATED]</b>\n"
         f"Model ưu tiên: <b>{model_display}</b>\n"
+        f"Phương pháp: <b>{TRADING_METHOD}</b>\n"
         f"Custom Gateway: {'🟢 CÓ' if USER_GATEWAY_URL else '⚪ TẮT'}\n"
         f"Tự động xoay vòng key khi hết token: 🟢 ĐÃ BẬT"
     )
 
     return {
         "status": "SUCCESS",
-        "message": f"Đã lưu mô hình AI ưu tiên: {model_display}",
-        "active_model": model_display
+        "message": f"Đã lưu mô hình AI ưu tiên: {model_display} và phương pháp: {TRADING_METHOD}",
+        "active_model": model_display,
+        "trading_method": TRADING_METHOD,
     }
 
 @app.get("/api/control-center/ai-config")
@@ -3755,15 +4381,16 @@ async def get_control_center_ai_config():
     return {
         "active_model": ACTIVE_AI_MODEL,
         "custom_model_id": USER_CUSTOM_MODEL_ID,
-        "gemini_api_key": USER_GEMINI_KEY,
-        "claude_api_key": USER_CLAUDE_KEY,
-        "deepseek_api_key": USER_DEEPSEEK_KEY,
-        "openai_api_key": USER_OPENAI_KEY,
-        "zplay_api_key": USER_ZPLAY_KEY,
-        "grok_api_key": USER_GROK_KEY,
-        "qwen_api_key": USER_QWEN_KEY,
+        "trading_method": TRADING_METHOD,
+        "gemini_api_key": _mask_field(USER_GEMINI_KEY),
+        "claude_api_key": _mask_field(USER_CLAUDE_KEY),
+        "deepseek_api_key": _mask_field(USER_DEEPSEEK_KEY),
+        "openai_api_key": _mask_field(USER_OPENAI_KEY),
+        "zplay_api_key": _mask_field(USER_ZPLAY_KEY),
+        "grok_api_key": _mask_field(USER_GROK_KEY),
+        "qwen_api_key": _mask_field(USER_QWEN_KEY),
         "gateway_url": USER_GATEWAY_URL,
-        "gateway_key": USER_GATEWAY_KEY,
+        "gateway_key": _mask_field(USER_GATEWAY_KEY),
         "has_gemini_key": bool(USER_GEMINI_KEY or os.getenv("GEMINI_API_KEY")),
         "has_claude_key": bool(USER_CLAUDE_KEY or os.getenv("CLAUDE_API_KEY")),
         "has_deepseek_key": bool(USER_DEEPSEEK_KEY or os.getenv("DEEPSEEK_API_KEY")),
@@ -3771,13 +4398,13 @@ async def get_control_center_ai_config():
         "has_zplay_key": bool(USER_ZPLAY_KEY or os.getenv("ZPLAY_API_KEY")),
         "has_grok_key": bool(USER_GROK_KEY or os.getenv("GROK_API_KEY")),
         "has_qwen_key": bool(USER_QWEN_KEY or os.getenv("QWEN_API_KEY")),
-        "has_gateway": bool(USER_GATEWAY_URL and USER_GATEWAY_KEY),
+        "has_gateway": bool(USER_GATEWAY_URL),
         "available_models": SUPPORTED_AI_MODELS,
     }
 
 
 def get_ai_endpoints_queue(preferred_model: str = "auto") -> List[Dict[str, Any]]:
-    global GEMINI_ROTATION_IDX
+    global GEMINI_ROTATION_IDX, OPENCODE_ROTATION_IDX
     target_model = USER_CUSTOM_MODEL_ID or (preferred_model if preferred_model and preferred_model != "auto" else ACTIVE_AI_MODEL)
     queue = []
 
@@ -3805,10 +4432,13 @@ def get_ai_endpoints_queue(preferred_model: str = "auto") -> List[Dict[str, Any]
         "zplay": os.getenv("ZPLAY_BASE_URL", "https://router.flatkey.ai/v1/chat/completions"),
         "grok": os.getenv("GROK_BASE_URL", "https://api.x.ai/v1/chat/completions"),
         "qwen": os.getenv("QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"),
+        "opencode": os.getenv("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1/chat/completions"),
     }
 
-    # 1. Custom Gateway Priority #0
-    if USER_GATEWAY_URL and USER_GATEWAY_KEY:
+    opencode_url = base_urls["opencode"]
+
+    # 1. Custom Gateway Priority #0 (khách hàng tự cấu hình gateway URL/Key → Ưu tiên cao nhất)
+    if USER_GATEWAY_URL:
         queue.append({
             "id": target_model,
             "name": f"Custom Gateway ({target_model})",
@@ -3820,7 +4450,53 @@ def get_ai_endpoints_queue(preferred_model: str = "auto") -> List[Dict[str, Any]
             "is_user_custom": True,
         })
 
-    # 1.5 Gemini rotation pool: rotate models to avoid quota (429) exhaustion.
+    # 1.1 Customer Custom Model ID (khách hàng chọn model cụ thể trong Control Center)
+    if USER_CUSTOM_MODEL_ID and not any(q["id"] == USER_CUSTOM_MODEL_ID for q in queue):
+        cm_info = next((m for m in SUPPORTED_AI_MODELS if m["id"] == USER_CUSTOM_MODEL_ID), None)
+        cm_ktype = cm_info["key_type"] if cm_info else ("openai" if ("gpt" in USER_CUSTOM_MODEL_ID or "o3" in USER_CUSTOM_MODEL_ID) else "gemini")
+        cm_key = custom_keys.get(cm_ktype) or custom_keys.get("openai")
+        queue.append({
+            "id": USER_CUSTOM_MODEL_ID,
+            "name": f"Customer Model ({USER_CUSTOM_MODEL_ID})",
+            "model": USER_CUSTOM_MODEL_ID,
+            "provider": cm_info["provider"] if cm_info else "Custom AI Provider",
+            "key_type": cm_ktype,
+            "url": base_urls.get(cm_ktype, base_urls["openai"]),
+            "api_key": cm_key or "",
+            "is_user_custom": True,
+        })
+
+    # 1.5 OpenCode Zen FREE Models — DEFAULT ACTIVE (chạy mặc định, KHÔNG cần API Key)
+    # Pool free luôn đứng trước các key trả phí; nếu model free fail (429/400/401)
+    # sẽ AUTO-SWITCH sang model free kế tiếp, chỉ fallback sang key trả phí khi
+    # toàn bộ pool free không khả dụng.
+    opencode_pool = [m["id"] for m in SUPPORTED_AI_MODELS if m["key_type"] == "opencode"]
+    if opencode_pool and not any(q["key_type"] == "opencode" for q in queue):
+        now_ts = time.time()
+        rotated_free = []
+        for offset in range(len(opencode_pool)):
+            mid = opencode_pool[(OPENCODE_ROTATION_IDX + offset) % len(opencode_pool)]
+            if now_ts >= AI_MODEL_COOLDOWN.get(mid, 0):
+                rotated_free.append(mid)
+        if not rotated_free:
+            rotated_free = list(opencode_pool)
+        for mid in rotated_free:
+            if any(q["id"] == mid for q in queue):
+                continue
+            queue.append({
+                "id": mid,
+                "name": f"OpenCode Free ({mid})",
+                "model": mid,
+                "provider": "OpenCode Zen",
+                "key_type": "opencode",
+                "url": opencode_url,
+                "api_key": "",
+                "is_user_custom": False,
+                "is_free": True,
+            })
+        OPENCODE_ROTATION_IDX = (OPENCODE_ROTATION_IDX + 1) % len(opencode_pool)
+
+    # 2. Gemini rotation pool: rotate models to avoid quota (429) exhaustion.
     # Models on cooldown (rate-limited recently) are skipped this round.
     gemini_pool_key = custom_keys.get("gemini") or default_keys.get("gemini")
     if gemini_pool_key:
@@ -3910,19 +4586,22 @@ def call_multi_ai_completion(system_prompt: str, user_msg: str, preferred_model:
     for idx, p in enumerate(providers):
         req_key = p["api_key"]
         req_url = p["url"]
-        if not req_key or not req_url:
+        if not req_url:
             continue
 
         url = req_url.rstrip("/")
-        if not url.endswith("/chat/completions") and not url.endswith("/messages"):
+        if not url.endswith("/chat/completions") and not url.endswith("/messages") and not url.endswith("/api/proxy/zen"):
             url += "/chat/completions"
 
         try:
             import urllib.request
             headers = {
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {req_key}",
+                # OpenCode Zen chặn User-Agent Python-urllib mặc định (403 Forbidden)
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
             }
+            if req_key:
+                headers["Authorization"] = f"Bearer {req_key}"
             if p["key_type"] == "claude" and "anthropic.com" in url:
                 headers["x-api-key"] = req_key
                 headers["anthropic-version"] = "2023-06-01"
@@ -3943,7 +4622,12 @@ def call_multi_ai_completion(system_prompt: str, user_msg: str, preferred_model:
                     res_data = json.loads(resp.read().decode("utf-8"))
                     text = ""
                     if "choices" in res_data and len(res_data["choices"]) > 0:
-                        text = res_data["choices"][0]["message"]["content"]
+                        msg = res_data["choices"][0].get("message", {})
+                        text = msg.get("content") or ""
+                        if not text.strip():
+                            # Model free (reasoning) trả suy luận trong reasoning_content
+                            # khi content chưa kịp sinh -> chấp nhận làm output dự phòng.
+                            text = msg.get("reasoning_content") or ""
                     elif "content" in res_data and isinstance(res_data["content"], list):
                         text = res_data["content"][0]["text"]
 
@@ -3957,7 +4641,13 @@ def call_multi_ai_completion(system_prompt: str, user_msg: str, preferred_model:
                 AI_MODEL_COOLDOWN[p["model"]] = time.time() + AI_COOLDOWN_SECONDS
                 log_event(LogEvent.WARNING, component="ai-provider", message=f"Provider {p['name']} ({p['model']}) rate-limited (429). Cooling down {AI_COOLDOWN_SECONDS // 60} min, trying next...")
             else:
-                log_event(LogEvent.WARNING, component="ai-provider", message=f"Provider {p['name']} ({p['model']}) at {url[:30]}... failed: {exc}. Trying fallback...")
+                if p.get("is_free") or p["key_type"] == "opencode":
+                    # Model free lỗi (400/401/404/...): cooldown ngắn 5 phút để
+                    # AUTO-SWITCH sang model free dự phòng tiếp theo trong pool.
+                    AI_MODEL_COOLDOWN[p["model"]] = time.time() + 300
+                    log_event(LogEvent.WARNING, component="ai-provider", message=f"OpenCode free model {p['model']} failed: {exc}. Auto-switching to next free model...")
+                else:
+                    log_event(LogEvent.WARNING, component="ai-provider", message=f"Provider {p['name']} ({p['model']}) at {url[:30]}... failed: {exc}. Trying fallback...")
             continue
 
     return "", "System Fallback Engine", "deterministic", True

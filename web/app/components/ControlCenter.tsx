@@ -12,6 +12,8 @@ import {
   updateTelegramConfig,
   fetchAIConfig,
   updateAIConfig,
+  testAIConnection,
+  createStreamSocket,
   type ControlCenterStatus,
 } from '../../lib/api';
 
@@ -264,11 +266,24 @@ export default function ControlCenter({
   const [loginId, setLoginId] = useState('');
   const [loginPw, setLoginPw] = useState('');
   const [loginSrv, setLoginSrv] = useState('');
+  const [terminalPath, setTerminalPath] = useState('');
+  const [deploySymbol, setDeploySymbol] = useState('XAUUSDm');
+  const [deployTf, setDeployTf] = useState('M15');
+  const [deployLog, setDeployLog] = useState<string | null>(null);
+
+  // AI provider test
+  const [aiTestKeyType, setAiTestKeyType] = useState('openai');
+  const [aiTestModel, setAiTestModel] = useState('');
+  const [aiTestUrl, setAiTestUrl] = useState('');
+  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; message: string; latency_ms?: number; error_code?: string | null } | null>(null);
+  const [aiTestBusy, setAiTestBusy] = useState(false);
 
   // Risk form
   const [riskFrac, setRiskFrac] = useState(0.01);
   const [maxPos, setMaxPos] = useState(5);
   const [maxSpr, setMaxSpr] = useState(0.5);
+
+  const [aiTestKeyValue, setAiTestKeyValue] = useState('');
 
   // Telegram form
   const [teleToken, setTeleToken] = useState('');
@@ -276,7 +291,7 @@ export default function ControlCenter({
   const [teleEnabled, setTeleEnabled] = useState(true);
 
   // AI Engine form
-  const [activeAiModel, setActiveAiModel] = useState('gemini-2.0-flash');
+  const [activeAiModel, setActiveAiModel] = useState('deepseek-v4-flash-free');
   const [customModelId, setCustomModelId] = useState('');
   const [geminiKey, setGeminiKey] = useState('');
   const [claudeKey, setClaudeKey] = useState('');
@@ -340,9 +355,15 @@ export default function ControlCenter({
     };
     void refresh();
     const t = setInterval(refresh, 4000);
+
+    const stream = createStreamSocket((ev) => {
+      if (ev.type === 'config_updated') void refresh();
+    });
+
     return () => {
       ctrl.abort();
       clearInterval(t);
+      stream.close();
     };
   }, [open]);
 
@@ -398,10 +419,25 @@ export default function ControlCenter({
       return;
     }
     setBusy('login');
-    const res = await loginMT5Account(parseInt(loginId, 10), loginPw, loginSrv);
+    setDeployLog(null);
+    const res = await loginMT5Account(parseInt(loginId, 10), loginPw, loginSrv, {
+      terminal_path: terminalPath.trim() || undefined,
+      symbol: deploySymbol.trim() || undefined,
+      timeframe: deployTf.trim() || undefined,
+      auto_deploy: true,
+    });
     setBusy(null);
     if (res.status === 'SUCCESS') {
       showToast(res.message || 'Đăng nhập MT5 thành công.');
+      if (res.symbol) {
+        showToast(`Symbol: ${res.symbol.requested} -> ${res.symbol.resolved} (${res.symbol.reason})`);
+      }
+      if (res.deploy) {
+        const lines = (res.deploy.steps || []).map(
+          (s: { name: string; ok: boolean; message: string }) => `[${s.ok ? 'OK' : '!!'}] ${s.name}: ${s.message}`,
+        );
+        setDeployLog(lines.join('\n') || 'Deploy hoàn tất.');
+      }
       const snap = await fetchControlCenterStatus();
       if (snap) setCc(snap);
     } else {
@@ -419,6 +455,42 @@ export default function ControlCenter({
       if (snap) setCc(snap);
     } else {
       showToast('Lưu Risk Guard thất bại.', true);
+    }
+  };
+
+  const handleTestAI = async () => {
+    if (!aiTestModel.trim()) {
+      showToast('Nhập model ID cần test trước.', true);
+      return;
+    }
+    setAiTestBusy(true);
+    setAiTestResult(null);
+    const keyForTest =
+      aiTestKeyType === 'gemini' && !aiTestKeyValue.trim() ? geminiKey :
+      aiTestKeyType === 'claude' && !aiTestKeyValue.trim() ? claudeKey :
+      aiTestKeyType === 'deepseek' && !aiTestKeyValue.trim() ? deepseekKey :
+      aiTestKeyType === 'openai' && !aiTestKeyValue.trim() ? openaiKey :
+      aiTestKeyType === 'zplay' && !aiTestKeyValue.trim() ? zplayKey :
+      aiTestKeyType === 'grok' && !aiTestKeyValue.trim() ? grokKey :
+      aiTestKeyType === 'qwen' && !aiTestKeyValue.trim() ? qwenKey :
+      aiTestKeyValue;
+    const urlForTest =
+      aiTestKeyType === 'gemini' && !aiTestUrl.trim() ? '' :
+      aiTestKeyType === 'claude' && !aiTestUrl.trim() ? '' :
+      aiTestKeyType === 'gateway' ? gatewayUrl : aiTestUrl;
+    const res = await testAIConnection({
+      key_type: aiTestKeyType,
+      api_key: keyForTest,
+      model: aiTestModel.trim(),
+      base_url: urlForTest || undefined,
+    });
+    setAiTestBusy(false);
+    if (res && res.result) {
+      setAiTestResult(res.result);
+      showToast(res.result.ok ? `AI OK! ${res.result.latency_ms ?? ''}ms` : `Lỗi: ${res.result.message}`, !res.result.ok);
+    } else {
+      setAiTestResult({ ok: false, message: 'Không nhận được kết quả test (kiểm tra token đăng nhập).' });
+      showToast('Không test được. Có thể phiên đăng nhập đã hết hạn.', true);
     }
   };
 
@@ -739,6 +811,56 @@ export default function ControlCenter({
                 </div>
               </div>
 
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1.5fr', gap: 10, marginTop: 10 }}>
+                <div>
+                  <label style={label}>Symbol (Subscribe)</label>
+                  <input className="cc-input" type="text" value={deploySymbol} onChange={(e) => setDeploySymbol(e.target.value)} style={input} placeholder="XAUUSDm" />
+                  <div style={{ fontSize: 9, color: C.muted, fontFamily: C.mono, marginTop: 4 }}>tự fallback XAUUSD nếu không có</div>
+                </div>
+                <div>
+                  <label style={label}>Timeframe</label>
+                  <select className="cc-input" value={deployTf} onChange={(e) => setDeployTf(e.target.value)} style={{ ...input, background: '#0d111a', color: C.gold, cursor: 'pointer' }}>
+                    {['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1', 'W1'].map((tf) => (
+                      <option key={tf} value={tf}>{tf}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={label}>Auto deploy EA</label>
+                  <input className="cc-input" type="text" value="ON" disabled style={{ ...input, color: C.green, fontWeight: 700 }} />
+                  <div style={{ fontSize: 9, color: C.muted, fontFamily: C.mono, marginTop: 4 }}>mở MT5 → gắn .ex5 → bật Algo Trading</div>
+                </div>
+                <div>
+                  <label style={label}>Terminal64 Path (để trống = tự dò)</label>
+                  <input
+                    className="cc-input"
+                    type="text"
+                    value={terminalPath}
+                    onChange={(e) => setTerminalPath(e.target.value)}
+                    style={{ ...input, color: C.blue }}
+                    placeholder="C:\Program Files\...\terminal64.exe"
+                  />
+                </div>
+              </div>
+
+              {deployLog && (
+                <pre
+                  style={{
+                    marginTop: 12,
+                    padding: '10px 12px',
+                    background: 'rgba(0,0,0,0.45)',
+                    border: `1px solid ${C.border}`,
+                    borderRadius: 8,
+                    fontFamily: C.mono,
+                    fontSize: 10,
+                    color: C.dim,
+                    whiteSpace: 'pre-wrap',
+                    maxHeight: 160,
+                    overflowY: 'auto',
+                  }}
+                >{deployLog}</pre>
+              )}
+
               <button
                 type="button"
                 onClick={handleLogin}
@@ -941,7 +1063,7 @@ export default function ControlCenter({
               <SectionHeader
                 num="5"
                 title="AI PROVIDER & MULTI-MODEL ENGINE"
-                sub="Tự chọn mô hình AI ưu tiên, thêm API key cá nhân và tự động đổi model khi hết token."
+                sub="Mặc định dùng model FREE của OpenCode Zen (không cần key). Nhập API key/model/gateway riêng để ưu tiên hơn model mặc định; tự động đổi model khi hết token/lỗi."
               />
 
               <div style={{ marginBottom: 12 }}>
@@ -958,6 +1080,17 @@ export default function ControlCenter({
                     cursor: 'pointer',
                   }}
                 >
+                  <optgroup label="🆓 OpenCode Zen Free (Mặc định - Không cần API Key)">
+                    <option value="deepseek-v4-flash-free">OpenCode DeepSeek V4 Flash Free ⭐ (Mặc định)</option>
+                    <option value="big-pickle">OpenCode Big Pickle Free (Reasoning)</option>
+                    <option value="mimo-v2.5-free">OpenCode MiMo V2.5 Free</option>
+                    <option value="nemotron-3-ultra-free">OpenCode Nemotron 3 Ultra Free</option>
+                    <option value="north-mini-code-free">OpenCode North Mini Code Free</option>
+                    <option value="laguna-s-2.1-free">OpenCode Laguna S 2.1 Free</option>
+                    <option value="longcat-2.0-free">OpenCode LongCat 2.0 Free</option>
+                    <option value="ling-3.0-flash-free">OpenCode Ling 3.0 Flash Free (Deprecated)</option>
+                  </optgroup>
+
                   <optgroup label="✨ OpenAI (GPT-5.6 / GPT-5.x / o-Series)">
                     <option value="gpt-5.6-sol">OpenAI GPT-5.6 Sol ⭐ (Flagship 07/2026)</option>
                     <option value="gpt-5.6-terra">OpenAI GPT-5.6 Terra</option>
@@ -1145,6 +1278,109 @@ export default function ControlCenter({
                     />
                   </div>
                 </div>
+              </div>
+
+              {/* ── AI Provider Connection Test ── */}
+              <div style={{ marginTop: 12, background: 'rgba(34,211,160,0.05)', padding: '10px 12px', borderRadius: 8, border: `1px solid ${C.greenDim}` }}>
+                <div style={{ fontSize: 10, color: C.green, fontFamily: C.mono, fontWeight: 700, marginBottom: 6 }}>
+                  🧪 TEST KẾT NỐI NHÀ CUNG CẤP AI (key + model + url) — trước khi lưu
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.2fr 1fr', gap: 8 }}>
+                  <div>
+                    <label style={label}>Provider</label>
+                    <select
+                      className="cc-input"
+                      value={aiTestKeyType}
+                      onChange={(e) => { setAiTestKeyType(e.target.value); setAiTestResult(null); }}
+                      style={{ ...input, background: '#0d111a', color: C.green, cursor: 'pointer' }}
+                    >
+                      <option value="openai">OpenAI</option>
+                      <option value="gemini">Gemini / Google</option>
+                      <option value="claude">Anthropic Claude</option>
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="zplay">ZPlay / FlatKey</option>
+                      <option value="grok">xAI Grok</option>
+                      <option value="qwen">Alibaba Qwen</option>
+                      <option value="gateway">Custom Gateway (URL bên dưới)</option>
+                      <option value="opencode">OpenCode Zen Free</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label style={label}>Model ID</label>
+                    <input
+                      className="cc-input"
+                      type="text"
+                      placeholder="vd: gpt-4o, gemini-2.5-pro, claude-3-5-sonnet..."
+                      value={aiTestModel}
+                      onChange={(e) => setAiTestModel(e.target.value)}
+                      style={input}
+                    />
+                  </div>
+                  <div>
+                    <label style={label}>{aiTestKeyType === 'opencode' ? 'Base URL (tùy chọn)' : 'API Key / Base URL'}</label>
+                    <input
+                      className="cc-input"
+                      type="password"
+                      placeholder={aiTestKeyType === 'gateway' ? 'để trống = dùng gateway URL' : 'API key...'}
+                      value={aiTestKeyValue}
+                      onChange={(e) => setAiTestKeyValue(e.target.value)}
+                      style={input}
+                    />
+                  </div>
+                </div>
+                {aiTestKeyType === 'gateway' && (
+                  <div style={{ marginTop: 6 }}>
+                    <label style={label}>Base URL</label>
+                    <input
+                      className="cc-input"
+                      type="text"
+                      placeholder="https://openrouter.ai/api/v1"
+                      value={aiTestUrl}
+                      onChange={(e) => setAiTestUrl(e.target.value)}
+                      style={input}
+                    />
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={handleTestAI}
+                  disabled={busy !== null || aiTestBusy}
+                  className="cc-btn"
+                  style={{
+                    ...btnBase,
+                    width: '100%',
+                    marginTop: 10,
+                    padding: '10px 0',
+                    background: `linear-gradient(135deg, ${C.greenDim}, rgba(34,211,160,0.05))`,
+                    border: `1.5px solid ${C.green}`,
+                    color: C.green,
+                    fontSize: 12,
+                  }}
+                >
+                  {aiTestBusy ? <Spinner /> : '⚡ '}
+                  {aiTestBusy ? 'ĐANG TEST…' : 'TEST KẾT NỐI AI' }
+                </button>
+                {aiTestResult && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      fontFamily: C.mono,
+                      fontSize: 10.5,
+                      whiteSpace: 'pre-wrap',
+                      lineHeight: 1.5,
+                      background: aiTestResult.ok ? 'rgba(34,211,160,0.08)' : 'rgba(244,63,94,0.08)',
+                      border: `1px solid ${aiTestResult.ok ? C.green : C.red}`,
+                      color: aiTestResult.ok ? C.green : C.red,
+                    }}
+                  >
+                    {aiTestResult.ok ? '✅ KẾT NỐI OK' : `⚠️ LỖI [${aiTestResult.error_code || 'UNKNOWN'}]`}
+                    {'\n'}
+                    {aiTestResult.message}
+                    {aiTestResult.latency_ms ? `\nLatency: ${aiTestResult.latency_ms}ms` : ''}
+                  </div>
+                )}
               </div>
 
               <div style={{ marginTop: 10, background: 'rgba(212,180,131,0.06)', padding: '10px 12px', borderRadius: 8, border: `1px solid ${C.borderGold}` }}>
