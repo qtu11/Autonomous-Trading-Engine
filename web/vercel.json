@@ -5,11 +5,11 @@
   "rewrites": [
     {
       "source": "/api/v1/:path*",
-      "destination": "http://113.173.29.210:8848/api/v1/:path*"
+      "destination": "http://113.173.192.226:8848/api/v1/:path*"
     },
     {
       "source": "/backend/:path*",
-      "destination": "http://113.173.29.210:8848/backend/:path*"
+      "destination": "http://113.173.192.226:8848/backend/:path*"
     }
   ],
   "headers": [
