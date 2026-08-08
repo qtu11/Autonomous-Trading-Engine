@@ -2,53 +2,8 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "framework": "nextjs",
-  "rewrites": [
-    {
-      "source": "/api/v1/:path*",
-      "destination": "http://113.173.192.226:8848/api/v1/:path*"
-    },
-    {
-      "source": "/backend/:path*",
-      "destination": "http://113.173.192.226:8848/backend/:path*"
-    }
-  ],
-  "headers": [
-    {
-      "source": "/api/v1/(.*)",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "https://autonomous-trading-engine.vercel.app"
-        },
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "GET, POST, PUT, DELETE, PATCH, OPTIONS"
-        },
-        {
-          "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type, Authorization, X-API-Key, X-Bridge-Token, X-Requested-With"
-        }
-      ]
-    },
-    {
-      "source": "/backend/(.*)",
-      "headers": [
-        {
-          "key": "Access-Control-Allow-Origin",
-          "value": "https://autonomous-trading-engine.vercel.app"
-        },
-        {
-          "key": "Access-Control-Allow-Methods",
-          "value": "GET, POST, PUT, DELETE, PATCH, OPTIONS"
-        },
-        {
-          "key": "Access-Control-Allow-Headers",
-          "value": "Content-Type, Authorization, X-API-Key, X-Bridge-Token, X-Requested-With"
-        }
-      ]
-    }
-  ],
   "env": {
+    "ATE_BACKEND_URL": "http://113.173.192.226:8848",
     "NEXT_PUBLIC_ATE_API_ORIGIN": "https://autonomous-trading-engine.vercel.app",
     "NEXT_PUBLIC_QUANTAI_API_ORIGIN": "https://autonomous-trading-engine.vercel.app",
     "NEXT_PUBLIC_FIREBASE_API_KEY": "AIzaSyDRmJ294aBZhVEcTliP86D19qM3tJbhgDI",

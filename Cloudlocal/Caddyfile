@@ -1,0 +1,36 @@
+{
+  admin off
+}
+
+# Port 8848 for public access (VNPT router port forward)
+:8848 {
+  reverse_proxy localhost:8005
+  encode gzip
+  
+  # Health check
+  @health {
+    path /health
+  }
+  respond @health "healthy" 200
+  
+  # API endpoints
+  @api {
+    path /api/*
+  }
+  reverse_proxy @api localhost:8005
+  
+  # Backend endpoints
+  @backend {
+    path /backend/*
+  }
+  reverse_proxy @backend localhost:8005
+  
+  log {
+    output file /var/log/caddy/access.log
+  }
+}
+
+# Port 80 redirect to HTTPS
+:80 {
+  respond "HTTPS redirect - use port 8848" 301
+}
