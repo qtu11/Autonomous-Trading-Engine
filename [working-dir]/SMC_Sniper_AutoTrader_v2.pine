@@ -1,0 +1,609 @@
+//@version=6
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║       SMC + ICT + PRICE ACTION + SNIPER AUTO TRADING ENGINE                ║
+// ║              Pine Script v6 - Strategy with Risk Management               ║
+// ║                                                                              ║
+// ║  This is a COMPLETE AUTO-TRADING STRATEGY that:                             ║
+// ║  ├── Reads all SMC/ICT/PA signals from the indicator                       ║
+// ║  ├── Auto-generates entry orders when confluence criteria met                ║
+// ║  ├── Auto-manages positions with partial TP                                 ║
+// ║  ├── Auto-adjusts SL based on OB/FVG/OTE zones                            ║
+// ║  ├── Auto-exits with trailing stop                                          ║
+// ║  └── Generates webhook alerts for broker integration                        ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+strategy(
+  title="Qtus SMC-Sniper AutoTrader v2",
+  overlay=true,
+  default_qty_type=strategy.percent_of_equity,
+  default_qty_value=2.0,
+  initial_capital=10000,
+  commission_type=strategy.commission.percent,
+  commission_value=0.075,
+  slippage=1,
+  pyramiding=1,
+  max_boxes_count=500,
+  max_lines_count=500,
+  max_labels_count=500,
+  max_bars_back=1000,
+  precision=4
+)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 1: INPUTS - TRADING PARAMETERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── STRATEGY SETTINGS ───
+groupStrategy = "1. STRATEGY SETTINGS"
+enableAutoTrade    = input.bool(true, "Enable Auto Trading", group=groupStrategy)
+minScoreToTrade    = input.int(7, "Min Combined Score to Enter", minval=5, maxval=15, group=groupStrategy)
+requireAllFilters  = input.bool(false, "Require ALL Filter Agreement", group=groupStrategy)
+htfConfluenceReq   = input.bool(true, "Require HTF Bias Confluence", group=groupStrategy)
+
+// ─── RISK MANAGEMENT ───
+groupRM = "2. RISK MANAGEMENT"
+riskPerTrade       = input.float(1.0, "Risk Per Trade %", minval=0.1, maxval=5.0, step=0.1, group=groupRM)
+atrMultiplierSL    = input.float(1.5, "Stop Loss ATR Multiplier", minval=0.5, maxval=4.0, step=0.1, group=groupRM)
+tp1Percent         = input.float(0.5, "TP1 Risk Multiplier (R)", minval=0.3, maxval=3.0, step=0.1, group=groupRM)
+tp2Percent         = input.float(1.0, "TP2 Risk Multiplier (R)", minval=0.5, maxval=5.0, step=0.1, group=groupRM)
+tp3Percent         = input.float(2.0, "TP3 Risk Multiplier (R)", minval=1.0, maxval=10.0, step=0.1, group=groupRM)
+tp4Percent         = input.float(3.0, "TP4 Risk Multiplier (R)", minval=1.5, maxval=15.0, step=0.1, group=groupRM)
+tp5Percent         = input.float(5.0, "TP5 Risk Multiplier (R)", minval=2.0, maxval=25.0, step=0.1, group=groupRM)
+partialTP1Percent  = input.float(0.25, "Partial TP at TP1 (%)", minval=0.0, maxval=0.8, step=0.05, group=groupRM)
+partialTP2Percent  = input.float(0.25, "Partial TP at TP2 (%)", minval=0.0, maxval=0.5, step=0.05, group=groupRM)
+trailingStart      = input.float(2.0, "Trailing Start (R)", minval=0.5, maxval=5.0, step=0.1, group=groupRM)
+trailingDistance   = input.float(1.0, "Trailing Distance (R)", minval=0.3, maxval=3.0, step=0.1, group=groupRM)
+
+// ─── SMC FILTERS ───
+groupFilters = "3. SIGNAL FILTERS"
+requireFVG         = input.bool(false, "Require FVG Confirmation", group=groupFilters)
+requireOB          = input.bool(false, "Require Order Block Confirmation", group=groupFilters)
+requireLiqSweep    = input.bool(false, "Require Liquidity Sweep", group=groupFilters)
+requirePattern     = input.bool(true, "Require Price Action Pattern", group=groupFilters)
+requireMSBreak     = input.bool(false, "Require BOS/CHoCH Break", group=groupFilters)
+requireADX         = input.bool(true, "Require ADX > 25", group=groupFilters)
+requireVolume      = input.bool(true, "Require Above-Average Volume", group=groupFilters)
+killzoneOnly       = input.bool(false, "Trade Only in Killzones", group=groupFilters)
+
+// ─── OTE FIBONACCI SETTINGS ───
+groupOTE = "4. OTE ENTRY SETTINGS"
+useOTEEntry        = input.bool(false, "Wait for OTE Retracement (62-79%)", group=groupOTE)
+oteMinPerc         = input.float(0.62, "OTE Min Retracement %", minval=0.38, maxval=0.70, step=0.01, group=groupOTE)
+oteMaxPerc         = input.float(0.79, "OTE Max Retracement %", minval=0.70, maxval=0.90, step=0.01, group=groupOTE)
+waitOTE            = input.int(3, "Bars to Wait for OTE (0=immediate)", minval=0, maxval=20, group=groupOTE)
+
+// ─── POSITION MANAGEMENT ───
+groupPosMgmt = "5. POSITION MANAGEMENT"
+moveSLToBE        = input.bool(true, "Move SL to Break-Even at TP1", group=groupPosMgmt)
+slToBEPercent     = input.float(0.0, "BE Move Offset (%)", minval=0.0, maxval=1.0, step=0.05, group=groupPosMgmt)
+closeOnReverse     = input.bool(true, "Close on Reverse Signal", group=groupPosMgmt)
+maxOpenTrades     = input.int(2, "Max Concurrent Trades", minval=1, maxval=5, group=groupPosMgmt)
+maxDailyLoss      = input.float(3.0, "Max Daily Loss %", minval=0.5, maxval=10.0, step=0.5, group=groupPosMgmt)
+maxConsecLoss     = input.int(3, "Max Consecutive Losses Before Stop", minval=1, maxval=10, group=groupPosMgmt)
+
+// ─── ALERTS & WEBHOOK ───
+groupAlert = "6. ALERTS & AUTOMATION"
+enableWebhook     = input.bool(true, "Enable Webhook Alerts for AutoTrade", group=groupAlert)
+webhookURL        = input.string("", "Webhook URL (for broker)", group=groupAlert)
+alertOnEntry      = input.bool(true, "Alert on Entry", group=groupAlert)
+alertOnExit       = input.bool(true, "Alert on Exit", group=groupAlert)
+alertOnSL         = input.bool(true, "Alert on Stop Loss", group=groupAlert)
+alertOnTP         = input.bool(true, "Alert on Take Profit", group=groupAlert)
+alertOnPartialTP  = input.bool(true, "Alert on Partial TP", group=groupAlert)
+
+// ─── BACKTEST LIMITS ───
+groupBT = "7. BACKTEST"
+startDate          = input.time(timestamp("1 Jan 2024"), "Start Date", group=groupBT)
+endDate            = input.time(timestamp("31 Dec 2099"), "End Date", group=groupBT)
+useDateFilter      = input.bool(true, "Use Date Range Filter", group=groupBT)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 2: INDICATOR FUNCTIONS (EMBEDDED)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── CANDLE METRICS ───
+float body     = math.abs(close - open)
+float rangeCand = high - low
+float uwick   = high - math.max(open, close)
+float lwick   = math.min(open, close) - low
+bool  isBull  = close > open
+bool  isBear  = close < open
+
+// ─── EMA 9/21 ───
+float ema9  = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+bool  emaBullCross = ta.crossover(ema9, ema21)
+bool  emaBearCross = ta.crossunder(ema9, ema21)
+
+// ─── VWAP ───
+float vwapVal = ta.vwap(hlc3)
+
+// ─── ADX ───
+float adxVal = ta.dmi(14, 14)[1]
+
+// ─── RSI ───
+float rsi14 = ta.rsi(close, 14)
+float rsi5m = request.security(syminfo.tickerid, "5", ta.rsi(close, 14))
+
+// ─── MACD ───
+float [macdM, macdS, macdH] = ta.macd(close, 12, 26, 9)
+
+// ─── ATR ───
+float atr14 = ta.atr(14)
+
+// ─── VOLUME ───
+float volAvg = ta.sma(volume, 20)
+
+// ─── HTF BIAS ───
+string htfTF = "240"
+float htfClose = request.security(syminfo.tickerid, htfTF, close)
+float htfEma9  = request.security(syminfo.tickerid, htfTF, ta.ema(close, 9))
+float htfEma21 = request.security(syminfo.tickerid, htfTF, ta.ema(close, 21))
+bool  htfBull  = htfClose > htfEma9 and htfEma9 > htfEma21
+bool  htfBear  = htfClose < htfEma9 and htfEma9 < htfEma21
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 3: SMC DETECTION FUNCTIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── SWING DETECTION ───
+int swingLookback = 20
+float swingHigh   = ta.highest(high, swingLookback)
+float swingLow    = ta.lowest(low, swingLookback)
+int swingHighBars = ta.highestbars(high, swingLookback)
+int swingLowBars  = ta.lowestbars(low, swingLookback)
+
+// ─── MARKET STRUCTURE ───
+bool bullMS = close > swingHigh
+bool bearMS = close < swingLow
+
+// ─── FVG DETECTION ───
+bool bullFVG = low > high[2]
+bool bearFVG = high < low[2]
+
+// ─── DISPLACEMENT ───
+float avgR = ta.sma(rangeCand, 14)
+bool dplBull = isBull and body/rangeCand >= 0.65 and rangeCand > avgR
+bool dplBear = isBear and body/rangeCand >= 0.65 and rangeCand > avgR
+
+// ─── ORDER BLOCK ───
+bool bullOB = isBear[1] and dplBull
+bool bearOB = isBull[1] and dplBear
+
+// ─── PIN BAR ───
+bool bullPin = lwick >= 2.0 * body and uwick <= body * 0.5 and isBull
+bool bearPin = uwick >= 2.0 * body and lwick <= body * 0.5 and isBear
+
+// ─── ENGULFING ───
+bool bullEng = isBear[1] and isBull and open <= close[1] and close >= open[1] and body > avgR * 1.5
+bool bearEng = isBull[1] and isBear and open >= close[1] and close <= open[1] and body > avgR * 1.5
+
+// ─── LIQUIDITY SWEEP ───
+bool bullLS = close < swingLow and close > swingLow - atr14 * 0.5
+bool bearLS = close > swingHigh and close < swingHigh + atr14 * 0.5
+
+// ─── MSS ───
+bool bullMSS = bullLS and dplBull
+bool bearMSS = bearLS and dplBear
+
+// ─── OTE RETRACEMENT CHECK ───
+bool inOTEZone = false
+float oteLevel62 = swingLow + (swingHigh - swingLow) * oteMinPerc
+float oteLevel79 = swingLow + (swingHigh - swingLow) * oteMaxPerc
+
+if useOTEEntry
+    inOTEZone := low >= oteLevel62 and low <= oteLevel79
+
+// ─── KILLZONE CHECK ───
+int minuteOfDay = hour * 60 + minute
+bool inLondonKZ = minuteOfDay >= 480 and minuteOfDay <= 540   // 08:00-09:00 UTC
+bool inNYKZ     = minuteOfDay >= 810 and minuteOfDay <= 870   // 13:30-14:30 UTC-5
+
+bool inKillzone = inLondonKZ or inNYKZ
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 4: SCORING ENGINE
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── SNIPER BULL SCORE ───
+float snBull = 0.0
+snBull += close > vwapVal       ? 1.0 : 0.0
+snBull += rsi14 > 50           ? 1.0 : 0.0
+snBull += macdM > macdS         ? 1.0 : 0.0
+snBull += ema9 > ema21         ? 1.0 : 0.0
+snBull += adxVal > 25 and close > ema9  ? 1.0 : 0.0
+snBull += volume > volAvg and isBull   ? 1.0 : 0.0
+snBull += rsi5m > 50           ? 1.0 : 0.0
+
+// ─── SNIPER BEAR SCORE ───
+float snBear = 0.0
+snBear += close < vwapVal       ? 1.0 : 0.0
+snBear += rsi14 < 50           ? 1.0 : 0.0
+snBear += macdM < macdS         ? 1.0 : 0.0
+snBear += ema9 < ema21         ? 1.0 : 0.0
+snBear += adxVal > 25 and close < ema9  ? 1.0 : 0.0
+snBear += volume > volAvg and isBear   ? 1.0 : 0.0
+snBear += rsi5m < 50           ? 1.0 : 0.0
+
+// ─── SMC BUY SCORE (13 FACTORS) ───
+int smcBuy = 0
+smcBuy += htfBull           ? 1 : 0
+smcBuy += close < (swingHigh + swingLow)/2  ? 1 : 0  // Discount
+smcBuy += bullLS            ? 1 : 0
+smcBuy += bullEng            ? 1 : 0
+smcBuy += bullPin            ? 1 : 0
+smcBuy += dplBull            ? 1 : 0
+smcBuy += bullMSS            ? 1 : 0
+smcBuy += bullMS             ? 1 : 0
+smcBuy += bullFVG            ? 1 : 0
+smcBuy += bullOB             ? 1 : 0
+smcBuy += volume > volAvg    ? 1 : 0
+smcBuy += adxVal > 25        ? 1 : 0
+smcBuy += inOTEZone          ? 1 : 0
+
+// ─── SMC SELL SCORE (13 FACTORS) ───
+int smcSell = 0
+smcSell += htfBear           ? 1 : 0
+smcSell += close > (swingHigh + swingLow)/2  ? 1 : 0  // Premium
+smcSell += bearLS            ? 1 : 0
+smcSell += bearEng           ? 1 : 0
+smcSell += bearPin           ? 1 : 0
+smcSell += dplBear           ? 1 : 0
+smcSell += bearMSS           ? 1 : 0
+smcSell += bearMS            ? 1 : 0
+smcSell += bearFVG           ? 1 : 0
+smcSell += bearOB            ? 1 : 0
+smcSell += volume > volAvg   ? 1 : 0
+smcSell += adxVal > 25       ? 1 : 0
+smcSell += inOTEZone         ? 1 : 0
+
+// ─── COMBINED SCORE ───
+int totalBuyScore  = int(snBull) + smcBuy
+int totalSellScore = int(snBear) + smcSell
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 5: ENTRY CONDITIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── BUY CONDITIONS ───
+bool baseBuy = emaBullCross and adxVal > 25
+bool smcBuyConf = smcBuy >= 6
+bool paBuyConf = bullPin or bullEng or dplBull
+
+bool filterFVG      = requireFVG      ? bullFVG        : true
+bool filterOB       = requireOB       ? bullOB         : true
+bool filterLS       = requireLiqSweep  ? bullLS         : true
+bool filterPattern  = requirePattern  ? paBuyConf      : true
+bool filterMS       = requireMSBreak  ? bullMS         : true
+bool filterADX      = requireADX      ? adxVal > 25    : true
+bool filterVol      = requireVolume   ? volume > volAvg : true
+bool filterHTF      = htfConfluenceReq ? htfBull        : true
+bool filterKZ       = killzoneOnly    ? inKillzone     : true
+bool filterOTE      = useOTEEntry     ? inOTEZone      : true
+bool filterScore    = totalBuyScore >= minScoreToTrade
+
+bool fullBuyCond = baseBuy and filterFVG and filterOB and filterLS
+  and filterPattern and filterMS and filterADX and filterVol
+  and filterHTF and filterKZ and filterOTE and filterScore
+
+// ─── SELL CONDITIONS ───
+bool baseSell = emaBearCross and adxVal > 25
+bool smcSellConf = smcSell >= 6
+bool paSellConf = bearPin or bearEng or dplBear
+
+bool filterFVG2      = requireFVG      ? bearFVG        : true
+bool filterOB2       = requireOB       ? bearOB         : true
+bool filterLS2       = requireLiqSweep  ? bearLS         : true
+bool filterPattern2  = requirePattern  ? paSellConf      : true
+bool filterMS2       = requireMSBreak  ? bearMS         : true
+bool filterADX2      = requireADX      ? adxVal > 25    : true
+bool filterVol2      = requireVolume   ? volume > volAvg : true
+bool filterHTF2      = htfConfluenceReq ? htfBear        : true
+bool filterKZ2       = killzoneOnly    ? inKillzone     : true
+bool filterOTE2      = useOTEEntry     ? inOTEZone      : true
+bool filterScore2    = totalSellScore >= minScoreToTrade
+
+bool fullSellCond = baseSell and filterFVG2 and filterOB2 and filterLS2
+  and filterPattern2 and filterMS2 and filterADX2 and filterVol2
+  and filterHTF2 and filterKZ2 and filterOTE2 and filterScore2
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 6: POSITION MANAGEMENT STATE
+// ══════════════════════════════════════════════════════════════════════════════
+
+var float entryPrice    = 0.0
+var float stopLoss      = 0.0
+var float takeProfit1   = 0.0
+var float takeProfit2   = 0.0
+var float takeProfit3   = 0.0
+var float takeProfit4   = 0.0
+var float takeProfit5   = 0.0
+var float riskAmount    = 0.0
+var float partialClose1 = 0.0
+var float partialClose2 = 0.0
+var bool  tp1Reached   = false
+var bool  tp2Reached   = false
+var bool  tp3Reached   = false
+var bool  tp4Reached   = false
+var bool  tp5Reached   = false
+var bool  tradeActive  = false
+var int   tradeDirection = 0   // 1=long, -1=short
+var int   tradeCount   = 0
+var float trailStop    = 0.0
+var int   barsSinceEntry = 0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 7: TRADE EXECUTION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── DATE FILTER ───
+bool withinDate = true
+if useDateFilter
+    withinDate := time >= startDate and time <= endDate
+
+// ─── MAX CONCURRENT TRADES ───
+bool canEnter = strategy.opentrades < maxOpenTrades
+
+// ─── DAILY LOSS TRACKING ───
+var float dailyLoss = 0.0
+var int lastTradeDay = 0
+int currentDay = int(time / 86400000)
+
+if currentDay != lastTradeDay
+    dailyLoss := 0.0
+    lastTradeDay := currentDay
+
+bool dailyLossOk = dailyLoss < maxDailyLoss * strategy.equity / 100
+
+// ─── ENTRY LOGIC ───
+if enableAutoTrade and withinDate and canEnter and dailyLossOk
+    // ── LONG ENTRY ──
+    if fullBuyCond
+        entryPrice   := close
+        riskAmount   := atr14 * atrMultiplierSL
+        stopLoss     := entryPrice - riskAmount
+        takeProfit1  := entryPrice + riskAmount * tp1Percent
+        takeProfit2  := entryPrice + riskAmount * tp2Percent
+        takeProfit3  := entryPrice + riskAmount * tp3Percent
+        takeProfit4  := entryPrice + riskAmount * tp4Percent
+        takeProfit5  := entryPrice + riskAmount * tp5Percent
+        trailStop    := stopLoss
+        tp1Reached   := false
+        tp2Reached   := false
+        tp3Reached   := false
+        tp4Reached   := false
+        tp5Reached   := false
+        tradeActive  := true
+        tradeDirection := 1
+        barsSinceEntry := 0
+        
+        // Calculate position size based on risk
+        float riskPct = riskPerTrade / 100
+        float positionSize = (strategy.equity * riskPct) / riskAmount
+        
+        strategy.entry("SniperLong", strategy.long, qty=positionSize,
+          stop=close, comment="SNIPER BUY | Score:" + str.tostring(totalBuyScore))
+        
+        // Webhook alert for entry
+        if enableWebhook and alertOnEntry
+            alert("BUY," + str.tostring(close) + "," + str.tostring(stopLoss) + "," 
+              + str.tostring(takeProfit3) + "," + str.tostring(positionSize)
+              + ",SNIPER_BUY|Score:" + str.tostring(totalBuyScore) 
+              + "|FVG:" + (bullFVG ? "1" : "0") + "|OB:" + (bullOB ? "1" : "0")
+              + "|LS:" + (bullLS ? "1" : "0") + "|MSS:" + (bullMSS ? "1" : "0"), alert.freq_once_per_bar)
+    
+    // ── SHORT ENTRY ──
+    if fullSellCond
+        entryPrice   := close
+        riskAmount   := atr14 * atrMultiplierSL
+        stopLoss     := entryPrice + riskAmount
+        takeProfit1  := entryPrice - riskAmount * tp1Percent
+        takeProfit2  := entryPrice - riskAmount * tp2Percent
+        takeProfit3  := entryPrice - riskAmount * tp3Percent
+        takeProfit4  := entryPrice - riskAmount * tp4Percent
+        takeProfit5  := entryPrice - riskAmount * tp5Percent
+        trailStop    := stopLoss
+        tp1Reached   := false
+        tp2Reached   := false
+        tp3Reached   := false
+        tp4Reached   := false
+        tp5Reached   := false
+        tradeActive  := true
+        tradeDirection := -1
+        barsSinceEntry := 0
+        
+        float riskPct2 = riskPerTrade / 100
+        float positionSize2 = (strategy.equity * riskPct2) / riskAmount
+        
+        strategy.entry("SniperShort", strategy.short, qty=positionSize2,
+          stop=close, comment="SNIPER SELL | Score:" + str.tostring(totalSellScore))
+        
+        if enableWebhook and alertOnEntry
+            alert("SELL," + str.tostring(close) + "," + str.tostring(stopLoss) + "," 
+              + str.tostring(takeProfit3) + "," + str.tostring(positionSize2)
+              + ",SNIPER_SELL|Score:" + str.tostring(totalSellScore) 
+              + "|FVG:" + (bearFVG ? "1" : "0") + "|OB:" + (bearOB ? "1" : "0")
+              + "|LS:" + (bearLS ? "1" : "0") + "|MSS:" + (bearMSS ? "1" : "0"), alert.freq_once_per_bar)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 8: EXIT MANAGEMENT
+// ══════════════════════════════════════════════════════════════════════════════
+
+if tradeActive
+    barsSinceEntry += 1
+    
+    // ─── LONG EXIT MANAGEMENT ───
+    if tradeDirection == 1
+        // Check TP1
+        if high >= takeProfit1 and not tp1Reached
+            tp1Reached := true
+            if partialTP1Percent > 0
+                strategy.close("SniperLong", qty=strategy.position_size * partialTP1Percent, 
+                  comment="PTP1:" + str.tostring(partialTP1Percent * 100) + "%")
+                if enableWebhook and alertOnPartialTP
+                    alert("PARTIAL_TP1_LONG," + str.tostring(takeProfit1), alert.freq_once_per_bar)
+        
+        // Check TP2
+        if high >= takeProfit2 and not tp2Reached
+            tp2Reached := true
+            if partialTP2Percent > 0
+                strategy.close("SniperLong", qty=strategy.position_size * partialTP2Percent,
+                  comment="PTP2:" + str.tostring(partialTP2Percent * 100) + "%")
+                if enableWebhook and alertOnPartialTP
+                    alert("PARTIAL_TP2_LONG," + str.tostring(takeProfit2), alert.freq_once_per_bar)
+        
+        // Check TP3 - Final exit
+        if high >= takeProfit3 and not tp3Reached
+            tp3Reached := true
+            strategy.close("SniperLong", comment="TP3 HIT | R:" + str.tostring(tp3Percent))
+            tradeActive := false
+            if enableWebhook and alertOnTP
+                alert("TP3_LONG," + str.tostring(takeProfit3) + ",PROFIT", alert.freq_once_per_bar)
+        
+        // Trailing stop after TP2
+        if tp2Reached and moveSLToBE
+            float newTrail = entryPrice + riskAmount * slToBEPercent
+            if newTrail > trailStop
+                trailStop := newTrail
+                strategy.exit("TrailLong", "SniperLong", stop=trailStop, comment="TRAIL STOP")
+        
+        // Check SL
+        if low <= stopLoss
+            strategy.close("SniperLong", comment="SL HIT")
+            tradeActive := false
+            if enableWebhook and alertOnSL
+                alert("SL_LONG," + str.tostring(stopLoss) + ",LOSS", alert.freq_once_per_bar)
+        
+        // Close on reverse signal
+        if closeOnReverse and fullSellCond
+            strategy.close("SniperLong", comment="REVERSE TO SHORT")
+            tradeActive := false
+    
+    // ─── SHORT EXIT MANAGEMENT ───
+    if tradeDirection == -1
+        // Check TP1
+        if low <= takeProfit1 and not tp1Reached
+            tp1Reached := true
+            if partialTP1Percent > 0
+                strategy.close("SniperShort", qty=strategy.position_size * partialTP1Percent,
+                  comment="PTP1:" + str.tostring(partialTP1Percent * 100) + "%")
+                if enableWebhook and alertOnPartialTP
+                    alert("PARTIAL_TP1_SHORT," + str.tostring(takeProfit1), alert.freq_once_per_bar)
+        
+        // Check TP2
+        if low <= takeProfit2 and not tp2Reached
+            tp2Reached := true
+            if partialTP2Percent > 0
+                strategy.close("SniperShort", qty=strategy.position_size * partialTP2Percent,
+                  comment="PTP2:" + str.tostring(partialTP2Percent * 100) + "%")
+                if enableWebhook and alertOnPartialTP
+                    alert("PARTIAL_TP2_SHORT," + str.tostring(takeProfit2), alert.freq_once_per_bar)
+        
+        // Check TP3 - Final exit
+        if low <= takeProfit3 and not tp3Reached
+            tp3Reached := true
+            strategy.close("SniperShort", comment="TP3 HIT | R:" + str.tostring(tp3Percent))
+            tradeActive := false
+            if enableWebhook and alertOnTP
+                alert("TP3_SHORT," + str.tostring(takeProfit3) + ",PROFIT", alert.freq_once_per_bar)
+        
+        // Trailing stop after TP2
+        if tp2Reached and moveSLToBE
+            float newTrail2 = entryPrice - riskAmount * slToBEPercent
+            if newTrail2 < trailStop or trailStop == 0
+                trailStop := newTrail2
+                strategy.exit("TrailShort", "SniperShort", stop=trailStop, comment="TRAIL STOP")
+        
+        // Check SL
+        if high >= stopLoss
+            strategy.close("SniperShort", comment="SL HIT")
+            tradeActive := false
+            if enableWebhook and alertOnSL
+                alert("SL_SHORT," + str.tostring(stopLoss) + ",LOSS", alert.freq_once_per_bar)
+        
+        // Close on reverse signal
+        if closeOnReverse and fullBuyCond
+            strategy.close("SniperShort", comment="REVERSE TO LONG")
+            tradeActive := false
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 9: VISUAL PLOTS FOR STRATEGY TESTER
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── SNIPER SCORE PLOTS ───
+plot(totalBuyScore, "SMC-Sniper Buy Score", color=color.new(#00E676, 0), linewidth=2)
+plot(-totalSellScore, "SMC-Sniper Sell Score", color=color.new(#FF1744, 0), linewidth=2)
+
+// ─── TRADE ENTRY/EXIT LINES ───
+plot(tradeActive and tradeDirection == 1 ? entryPrice : na, "Entry Price LONG", 
+  color=color.new(#00E676, 40), style=plot.style_linebr, linewidth=2)
+plot(tradeActive and tradeDirection == 1 ? stopLoss : na, "Stop Loss LONG", 
+  color=color.new(#FF1744, 40), style=plot.style_linebr, linewidth=2)
+plot(tradeActive and tradeDirection == 1 ? takeProfit1 : na, "TP1 LONG", 
+  color=color.new(#FFEA00, 40), style=plot.style_linebr, linewidth=1)
+plot(tradeActive and tradeDirection == 1 ? takeProfit2 : na, "TP2 LONG", 
+  color=color.new(#FF9100, 40), style=plot.style_linebr, linewidth=1)
+plot(tradeActive and tradeDirection == 1 ? takeProfit3 : na, "TP3 LONG", 
+  color=color.new(#00E676, 40), style=plot.style_linebr, linewidth=2)
+
+plot(tradeActive and tradeDirection == -1 ? entryPrice : na, "Entry Price SHORT", 
+  color=color.new(#FF1744, 40), style=plot.style_linebr, linewidth=2)
+plot(tradeActive and tradeDirection == -1 ? stopLoss : na, "Stop Loss SHORT", 
+  color=color.new(#00E676, 40), style=plot.style_linebr, linewidth=2)
+plot(tradeActive and tradeDirection == -1 ? takeProfit1 : na, "TP1 SHORT", 
+  color=color.new(#FFEA00, 40), style=plot.style_linebr, linewidth=1)
+plot(tradeActive and tradeDirection == -1 ? takeProfit2 : na, "TP2 SHORT", 
+  color=color.new(#FF9100, 40), style=plot.style_linebr, linewidth=1)
+plot(tradeActive and tradeDirection == -1 ? takeProfit3 : na, "TP3 SHORT", 
+  color=color.new(#FF1744, 40), style=plot.style_linebr, linewidth=2)
+
+// ─── SIGNAL PLOTS ───
+plotshape(fullBuyCond, title="Buy Signal", text="BUY", style=shape.triangleup,
+  location=location.belowbar, color=color.new(#00E676, 30), textcolor=color.new(#00E676, 0), size=size.tiny)
+plotshape(fullSellCond, title="Sell Signal", text="SELL", style=shape.triangledown,
+  location=location.abovebar, color=color.new(#FF1744, 30), textcolor=color.new(#FF1744, 0), size=size.tiny)
+
+// ─── TRADE DIRECTION ───
+plotchar(tradeActive, "tradeActive", tradeDirection == 1 ? "LONG" : "SHORT", 
+  location=location.bottom, color=tradeDirection == 1 ? #00E676 : #FF1744, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 10: EQUITY DRAWDOWN TRACKING
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── MAX DRAWDOWN STOP ───
+var float peakEquity = strategy.equity
+var int consecLosses = 0
+var float tradeProfit = 0.0
+
+if strategy.closedtrades > 0
+    tradeProfit := strategy.closedtrades.profit(strategy.closedtrades - 1)
+    
+    if tradeProfit < 0
+        consecLosses += 1
+    else
+        consecLosses := 0
+
+// ─── STOP TRADING ON MAX CONSECUTIVE LOSSES ───
+bool stopOnConsecLosses = consecLosses >= maxConsecLoss
+
+if stopOnConsecLosses and tradeActive == false
+    strategy.close_all(comment="MAX CONSEC LOSSES:" + str.tostring(consecLosses))
+
+// ─── DAILY LOSS LIMIT ───
+if strategy.closedtrades > 0
+    float lastTradePL = strategy.closedtrades.profit(strategy.closedtrades - 1)
+    if lastTradePL < 0
+        dailyLoss += math.abs(lastTradePL)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 11: ALERT CONDITIONS
+// ══════════════════════════════════════════════════════════════════════════════
+
+alertcondition(fullBuyCond and enableAutoTrade, "BUY SIGNAL", 
+  "BUY {{ticker}} @ {{close}}\nScore: {{plot_0}}\nFVG: {{plot_1}} | OB: {{plot_2}} | LS: {{plot_3}}")
+alertcondition(fullSellCond and enableAutoTrade, "SELL SIGNAL", 
+  "SELL {{ticker}} @ {{close}}\nScore: {{plot_0}}\nFVG: {{plot_1}} | OB: {{plot_2}} | LS: {{plot_3}}")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// END OF AUTO TRADING ENGINE
+// ══════════════════════════════════════════════════════════════════════════════

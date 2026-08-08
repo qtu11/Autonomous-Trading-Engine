@@ -1,0 +1,1067 @@
+//@version=6
+indicator(
+     "Qtus Sniper Pro | SMC+ICT+PA | AutoTrade Ready",
+     overlay   = true,
+     max_labels_count = 1000,
+     max_boxes_count  = 500,
+     max_lines_count  = 500,
+     max_bars_back    = 500
+ )
+
+// ============================================================
+// ░░░ QTUS SNIPER PRO — FULL SYSTEM ░░░
+// Sniper + SMC + ICT + Price Action + JSON Auto-Trade Alert
+// ============================================================
+
+// ─────────────────────────────────────────────────────────────
+// GROUP: DISPLAY SETTINGS
+// ─────────────────────────────────────────────────────────────
+groupDisplay   = "Display Settings"
+dashPos        = input.string(defval=position.top_right,  title="Dashboard Position", options=[position.top_right, position.top_left, position.bottom_right, position.bottom_left], group=groupDisplay)
+dashSize       = input.string(defval="small", title="Dashboard Font", options=["tiny","small","normal","large"], group=groupDisplay)
+showRibbon     = input.bool(true,  title="Show EMA Ribbon", group=groupDisplay)
+showVWAP       = input.bool(true,  title="Show VWAP", group=groupDisplay)
+showSMC        = input.bool(true,  title="Show SMC Zones (OB/FVG/IFVG/BB)", group=groupDisplay)
+showPA         = input.bool(true,  title="Show Price Action Labels", group=groupDisplay)
+showICT        = input.bool(true,  title="Show ICT Levels (KZ/Swing/OTE)", group=groupDisplay)
+ribbonOpacity  = input.int(75, minval=10, maxval=95, title="EMA Ribbon Opacity %", group=groupDisplay)
+
+// ─────────────────────────────────────────────────────────────
+// GROUP: SNIPER SETTINGS
+// ─────────────────────────────────────────────────────────────
+groupSniper    = "Sniper Settings"
+atrMult        = input.float(1.5, title="SL ATR Multiplier", minval=0.5, step=0.1, group=groupSniper)
+tp2Mult        = input.float(2.0, title="TP2 ATR Multiple",  minval=0.5, step=0.1, group=groupSniper)
+tp3Mult        = input.float(3.0, title="TP3 ATR Multiple",  minval=1.0, step=0.1, group=groupSniper)
+tp4Mult        = input.float(4.0, title="TP4 ATR Multiple",  minval=1.5, step=0.1, group=groupSniper)
+tp5Mult        = input.float(5.0, title="TP5 ATR Multiple",  minval=2.0, step=0.1, group=groupSniper)
+sniperThresh   = input.int(7, minval=4, maxval=10, title="Min Sniper Score (out of 10)", group=groupSniper)
+
+// ─────────────────────────────────────────────────────────────
+// GROUP: SMC SETTINGS
+// ─────────────────────────────────────────────────────────────
+groupSMC       = "SMC Settings"
+obLookback     = input.int(50,  title="Swing Lookback (bars)", minval=10, group=groupSMC)
+eqhTol         = input.float(0.0015, title="EQH/EQL Tolerance (% of price)", minval=0.0001, step=0.0001, group=groupSMC)
+showMSS        = input.bool(true, title="Show MSS/CHoCH Labels", group=groupSMC)
+showLiquidity  = input.bool(true, title="Show BSL/SSL Zones", group=groupSMC)
+showPDHighLow  = input.bool(true, title="Show PDH/PDL Lines", group=groupSMC)
+showEQ         = input.bool(true, title="Show Equilibrium Line", group=groupSMC)
+showPremium    = input.bool(true, title="Show Premium/Discount Zones", group=groupSMC)
+
+// ─────────────────────────────────────────────────────────────
+// GROUP: ICT SETTINGS
+// ─────────────────────────────────────────────────────────────
+groupICT       = "ICT Settings"
+showKillZone   = input.bool(true, title="Show Kill Zones", group=groupICT)
+kzAsiaStart    = input.int(0,  title="Asia KZ Start Hour (UTC)", minval=0, maxval=23, group=groupICT)
+kzAsiaEnd      = input.int(9,  title="Asia KZ End Hour (UTC)",   minval=0, maxval=23, group=groupICT)
+kzLondonStart  = input.int(8,  title="London KZ Start Hour (UTC)", minval=0, maxval=23, group=groupICT)
+kzLondonEnd    = input.int(11, title="London KZ End Hour (UTC)",   minval=0, maxval=23, group=groupICT)
+kzNYStart      = input.int(13, title="NY KZ Start Hour (UTC)",  minval=0, maxval=23, group=groupICT)
+kzNZEnd        = input.int(16, title="NY KZ End Hour (UTC)",    minval=0, maxval=23, group=groupICT)
+showOTE        = input.bool(true, title="Show OTE Fibonacci (62%-79%)", group=groupICT)
+showJudas     = input.bool(true, title="Show Judas Swing Markers", group=groupICT)
+showDisplace  = input.bool(true, title="Show Displacement Candles", group=groupICT)
+
+// ─────────────────────────────────────────────────────────────
+// GROUP: PA SETTINGS
+// ─────────────────────────────────────────────────────────────
+groupPA        = "PA Settings"
+showPinBar     = input.bool(true,  title="Show Pin Bars", group=groupPA)
+showEngulfing  = input.bool(true,  title="Show Engulfing", group=groupPA)
+showStar       = input.bool(true,  title="Show Morning/Evening Star", group=groupPA)
+showTweezer    = input.bool(true,  title="Show Tweezer Patterns", group=groupPA)
+showInsideBar  = input.bool(true,  title="Show Inside Bar", group=groupPA)
+showOutsideBar = input.bool(true,  title="Show Outside Bar", group=groupPA)
+showOrderBlock = input.bool(true,  title="Show Order Block Candles", group=groupPA)
+
+// ─────────────────────────────────────────────────────────────
+// GROUP: ALERT & AUTOTRADE
+// ─────────────────────────────────────────────────────────────
+groupAlert     = "Alert Settings"
+enableAlert    = input.bool(true, title="Enable JSON Auto-Trade Alerts", group=groupAlert)
+alertWebhook    = input.string("", title="Webhook URL (for external execution)", group=groupAlert)
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 1: SNIPER CORE INDICATORS
+// ═══════════════════════════════════════════════════════════
+
+// EMA Ribbon
+ema9   = ta.ema(close, 9)
+ema21  = ta.ema(close, 21)
+ema50  = ta.ema(close, 50)
+ema200 = ta.ema(close, 200)
+
+// VWAP
+vwapV  = ta.vwap(hlc3)
+
+// ATR
+atr14  = ta.atr(14)
+atrVol = atr14 * atrMult
+
+// RSI
+rsi14  = ta.rsi(close, 14)
+rsi5m  = request.security(syminfo.tickerid, "5", ta.rsi(close, 14))
+
+// MACD
+[macdMain, macdSig, macdHist] = ta.macd(close, 12, 26, 9)
+
+// ADX
+[diPlus, diMinus, adxVal] = ta.dmi(14, 14)
+
+// Volume
+volAvg   = ta.sma(volume, 20)
+volRatio = volume / volAvg
+
+// ─── Candle Properties ───────────────────────────────────────
+candleBody    = math.abs(close - open)
+candleRange   = high - low
+candleBodyR   = candleRange > 0 ? candleBody / candleRange : 0
+upperWick     = high - math.max(open, close)
+lowerWick     = math.min(open, close) - low
+upperWickR    = candleRange > 0 ? upperWick / candleRange : 0
+lowerWickR    = candleRange > 0 ? lowerWick / candleRange : 0
+
+isBull       = close > open
+isBear       = close < open
+isDoji       = candleBodyR <= 0.10
+
+// Displacement Candle (strong momentum)
+avgRange     = ta.sma(candleRange, 14)
+isDPLBull    = isBull and candleBodyR >= 0.65 and candleRange > avgRange and close >= high - (high - low) * 0.15
+isDPLBear    = isBear and candleBodyR >= 0.65 and candleRange > avgRange and close <= low + (high - low) * 0.15
+
+// ─── SNIPER SCORE ───────────────────────────────────────────
+float sniperScore = 0.0
+float smcScore    = 0.0
+float paScore     = 0.0
+
+// Sniper Momentum Indicators (0-10)
+sniperScore += (close > vwapV)      ? 1 : 0
+sniperScore += (rsi14 > 50)         ? 1 : 0
+sniperScore += (macdMain > macdSig) ? 1 : 0
+sniperScore += (ema9 > ema21)       ? 1 : 0
+sniperScore += (adxVal > 25 and close > ema9) ? 1 : 0
+sniperScore += (volRatio > 1.0)     ? 1 : 0
+sniperScore += (rsi5m > 50)         ? 1 : 0
+sniperScore += (isDPLBull)          ? 1 : 0
+sniperScore += (adxVal > 30)        ? 1 : 0
+sniperScore += (close > ema50)      ? 1 : 0
+
+float bullPct  = (sniperScore / 10) * 100
+float bearPct  = (10 - sniperScore) / 10 * 100
+
+string biasText  = bullPct >= 80 ? "STRONG BULL" :
+                   bearPct >= 80 ? "STRONG BEAR" :
+                   bullPct > 60  ? "BULL" :
+                   bearPct > 60  ? "BEAR" : "NEUTRAL"
+
+bool isBullish = sniperScore >= 7
+bool isBearish = sniperScore <= 3
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 2: SMC — MARKET STRUCTURE (MS)
+// ═══════════════════════════════════════════════════════════
+
+// ─── Swing Highs/Lows ───────────────────────────────────────
+float swingHigh = ta.highest(high, obLookback)
+float swingLow  = ta.lowest(low,  obLookback)
+int   shBar     = ta.highestbars(high, obLookback)
+int   slBar     = ta.lowestbars(low,  obLookback)
+
+// ─── Higher High / Higher Low ───────────────────────────────
+bool hh = close > swingHigh[1] and high > high[1]
+bool hl = close > swingLow[1]  and low  > low[1]
+bool lh = close < swingHigh[1] and high < high[1]
+bool ll = close < swingLow[1]  and low  < low[1]
+
+// ─── BOS — Break of Structure ───────────────────────────────
+bool bullBOS = close > ta.valuewhen(hh, high[1], 0) and hh
+bool bearBOS = close < ta.valuewhen(ll, low[1],  0) and ll
+
+// ─── CHoCH — Change of Character ───────────────────────────
+bool bullCHoCH = hl and close > ta.valuewhen(hh, high[1], 0)
+bool bearCHoCH = lh and close < ta.valuewhen(ll, low[1],  0)
+
+// ─── MSS — Market Structure Shift ──────────────────────────
+// Bullish MSS: SSL Sweep → bullish displacement → BOS
+bool bullMSS = bearCHoCH or (bullCHoCH and isDPLBull)
+// Bearish MSS: BSL Sweep → bearish displacement → BOS
+bool bearMSS = bullCHoCH or (bearCHoCH and isDPLBear)
+
+// ─── Equal Highs / Equal Lows (Liquidity) ───────────────────
+float eqhDist = math.abs(high - high[1]) / close
+float eqlDist = math.abs(low  - low[1])  / close
+bool eqh = eqhDist <= eqhTol
+bool eql = eqlDist <= eqhTol
+
+// ─── Liquidity Sweep ────────────────────────────────────────
+bool bullLiquiditySweep = low  < ta.valuewhen(eql, low[1],  0) - ta.valuewhen(eql, low[1], 1) * eqhTol * 10
+bool bearLiquiditySweep = high > ta.valuewhen(eqh, high[1], 0) + ta.valuewhen(eqh, high[1], 1) * eqhTol * 10
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 3: SMC — ZONES (OB / FVG / IFVG / BB / MB)
+// ═══════════════════════════════════════════════════════════
+
+// ─── Fair Value Gap (FVG) ───────────────────────────────────
+// Bullish FVG: Low[0] > High[2] → gap between candle-2 high and candle-0 low
+// Bearish FVG: High[0] < Low[2] → gap between candle-2 low and candle-0 high
+bullFVG = low[0]  > high[2]
+bearFVG = high[0] < low[2]
+
+// Bullish FVG zone: from High[2] to Low[0] (rectangle fill between)
+float fvgBullTop = high[2]
+float fvgBullBot = low[0]
+
+// Bearish FVG zone: from Low[2] to High[0]
+float fvgBearTop = high[0]
+float fvgBearBot = low[2]
+
+// ─── Inverse Fair Value Gap (IFVG) ─────────────────────────
+bool bullIFVG = bullFVG and not bullFVG[1] and close > high[2]
+bool bearIFVG = bearFVG and not bearFVG[1] and close < low[2]
+
+// ─── Order Block (OB) ──────────────────────────────────────
+// Bullish OB: last bearish candle before bullish displacement
+bool bullOB = isBear[1] and isDPLBull and close > high[1]
+float obBullTop = open[1]
+float obBullBot = low[1]
+
+// Bearish OB: last bullish candle before bearish displacement
+bool bearOB = isBull[1] and isDPLBear and close < low[1]
+float obBearTop = high[1]
+float obBearBot = open[1]
+
+// ─── Breaker Block (BB) ────────────────────────────────────
+// Bullish BB: Bearish OB gets broken → becomes support
+bool bullBB = bullOB and close > obBullTop
+// Bearish BB: Bullish OB gets broken → becomes resistance
+bool bearBB = bearOB and close < obBearBot
+
+// ─── Mitigation Block (MB) ──────────────────────────────────
+// Bullish MB: price returns to a broken bearish structure
+// Bearish MB: price returns to a broken bullish structure
+
+// ─── Volume Imbalance (VI) ─────────────────────────────────
+bool bullVI = isDPLBull and (low[0] > high[2])
+bool bearVI = isDPLBear and (high[0] < low[2])
+
+// ─── Liquidity Void (LV) ───────────────────────────────────
+bool bullLV = candleRange > avgRange * 2.0 and isDPLBull
+bool bearLV = candleRange > avgRange * 2.0 and isDPLBear
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 4: ICT — KILL ZONES / SWEEP / OTE / JUDAS
+// ═══════════════════════════════════════════════════════════
+
+// ─── Session Times (UTC) ────────────────────────────────────
+int  sessHour = hour(time, "UTC")
+bool inAsiaKZ  = sessHour >= kzAsiaStart  and sessHour < kzAsiaEnd
+bool inLondonKZ = sessHour >= kzLondonStart and sessHour < kzLondonEnd
+bool inNYKZ     = sessHour >= kzNYStart    and sessHour < kzNZEnd
+
+// ─── Previous Day High/Low ─────────────────────────────────
+float pdHigh   = request.security(syminfo.tickerid, "D", high[1])
+float pdLow    = request.security(syminfo.tickerid, "D", low[1])
+float pdOpen   = request.security(syminfo.tickerid, "D", open[1])
+float pdClose  = request.security(syminfo.tickerid, "D", close[1])
+bool pdhBreach = high > pdHigh
+bool pdlBreach = low  < pdLow
+
+// ─── OTE — Optimal Trade Entry (Fibonacci 62%-79%) ────────
+float swingRange = swingHigh - swingLow
+float ote62 = swingLow  + swingRange * 0.618
+float ote79 = swingLow  + swingRange * 0.786
+float ote62R = swingHigh - swingRange * 0.618
+float ote79R = swingHigh - swingRange * 0.786
+
+bool inBullOTEZone = close >= ote62 and close <= ote79
+bool inBearOTEZone = close <= ote62R and close >= ote79R
+
+// ─── Displacement Candle ───────────────────────────────────
+bool isDisplaceBull = isDPLBull and bullBOS
+bool isDisplaceBear = isDPLBear and bearBOS
+
+// ─── Judas Swing ───────────────────────────────────────────
+// Price extends against trend → sweeps liquidity → rejection → MSS → displacement
+bool bullJudas = bearLiquiditySweep and isDPLBull and bullMSS
+bool bearJudas = bullLiquiditySweep and isDPLBear and bearMSS
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 5: PRICE ACTION — CANDLESTICK PATTERNS
+// ═══════════════════════════════════════════════════════════
+
+// ─── Pin Bar / Rejection ──────────────────────────────────
+bool bullPinBar = lowerWickR >= 2 * candleBodyR and upperWickR <= candleBodyR and close > open
+bool bearPinBar = upperWickR >= 2 * candleBodyR and lowerWickR <= candleBodyR and close < open
+
+// Bullish Rejection (hammer-like)
+bool bullRejection = lowerWick >= 2 * candleBody and close > open and close > (high + low) / 2
+// Bearish Rejection (shooting star-like)
+bool bearRejection = upperWick >= 2 * candleBody and close < open and close < (high + low) / 2
+
+// ─── Engulfing ─────────────────────────────────────────────
+bool bullEng = isBear[1] and isBull[0] and open <= close[1] and close >= open[1]
+bool bearEng = isBull[1] and isBear[0] and open >= close[1] and close <= open[1]
+
+// ─── Inside Bar ────────────────────────────────────────────
+bool insideBar   = high < high[1] and low > low[1]
+bool bullIBBreak = insideBar and close > high[1]
+bool bearIBBreak = insideBar and close < low[1]
+
+// ─── Outside Bar ──────────────────────────────────────────
+bool outsideBar   = high > high[1] and low < low[1]
+bool bullOBAR     = outsideBar and close > open
+bool bearOBAR     = outsideBar and close < open
+
+// ─── Tweezer ───────────────────────────────────────────────
+float twTol = close * 0.0005
+bool tweezerTop = math.abs(high - high[1]) <= twTol * 5 and isBear[0]
+bool tweezerBot = math.abs(low  - low[1])  <= twTol * 5 and isBull[0]
+
+// ─── Morning / Evening Star ───────────────────────────────
+bool morningStar = isBear[2] and candleBodyR[2] > 0.5
+                 and candleBodyR[1] < 0.3
+                 and isBull[0] and close > (open[2] + close[2]) / 2
+
+bool eveningStar = isBull[2] and candleBodyR[2] > 0.5
+                 and candleBodyR[1] < 0.3
+                 and isBear[0] and close < (open[2] + close[2]) / 2
+
+// ─── Three White Soldiers / Black Crows ────────────────────
+bool threeWS = isBull[2] and isBull[1] and isBull[0]
+             and close[2] > close[1] and close[1] > close[0]
+             and upperWickR[2] < 0.15 and upperWickR[1] < 0.15 and upperWickR[0] < 0.15
+
+bool threeBC = isBear[2] and isBear[1] and isBear[0]
+             and close[2] < close[1] and close[1] < close[0]
+             and lowerWickR[2] < 0.15 and lowerWickR[1] < 0.15 and lowerWickR[0] < 0.15
+
+// ─── Double Top / Double Bottom ────────────────────────────
+bool doubleTop   = eqh and isBear
+bool doubleBot   = eql and isBull
+
+// ─── PA Score ─────────────────────────────────────────────
+paScore += bullPinBar or bullRejection ? 1 : 0
+paScore += bullEng ? 1 : 0
+paScore += morningStar ? 1 : 0
+paScore += tweezerBot ? 1 : 0
+paScore += bullIBBreak ? 1 : 0
+paScore += bullOBAR ? 1 : 0
+paScore += bullFVG ? 1 : 0
+
+paScore += bearPinBar or bearRejection ? 1 : 0
+paScore += bearEng ? 1 : 0
+paScore += eveningStar ? 1 : 0
+paScore += tweezerTop ? 1 : 0
+paScore += bearIBBreak ? 1 : 0
+paScore += bearOBAR ? 1 : 0
+paScore += bearFVG ? 1 : 0
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 6: CONFLUENCE SCORE (FULL SYSTEM)
+// ═══════════════════════════════════════════════════════════
+
+// ─── Bullish Confluence ────────────────────────────────────
+float bullConf = 0.0
+bullConf += (biasText == "STRONG BULL" or biasText == "BULL") ? 2 : 0
+bullConf += bullMSS or bullCHoCH       ? 2 : 0
+bullConf += bullBOS                    ? 1 : 0
+bullConf += bullLiquiditySweep         ? 1 : 0
+bullConf += bullFVG                    ? 1 : 0
+bullConf += bullEng or bullPinBar      ? 1 : 0
+bullConf += bullOB                     ? 1 : 0
+bullConf += bullJudas                  ? 2 : 0
+bullConf += bullLV                     ? 1 : 0
+bullConf += bullVI                     ? 1 : 0
+bullConf += bullIFVG                   ? 1 : 0
+bullConf += bullBB                     ? 1 : 0
+bullConf += bullPinBar                 ? 1 : 0
+bullConf += bullEng                    ? 1 : 0
+bullConf += inBullOTEZone              ? 1 : 0
+bullConf += isDPLBull                  ? 1 : 0
+bullConf += pdlBreach                  ? 1 : 0
+bullConf += volRatio > 1.2             ? 1 : 0
+bullConf += close > ema50              ? 1 : 0
+bullConf += adxVal > 25                ? 1 : 0
+
+// ─── Bearish Confluence ─────────────────────────────────────
+float bearConf = 0.0
+bearConf += (biasText == "STRONG BEAR" or biasText == "BEAR") ? 2 : 0
+bearConf += bearMSS or bearCHoCH       ? 2 : 0
+bearConf += bearBOS                    ? 1 : 0
+bearConf += bearLiquiditySweep         ? 1 : 0
+bearConf += bearFVG                    ? 1 : 0
+bearConf += bearEng or bearPinBar      ? 1 : 0
+bearConf += bearOB                     ? 1 : 0
+bearConf += bearJudas                  ? 2 : 0
+bearConf += bearLV                     ? 1 : 0
+bearConf += bearVI                     ? 1 : 0
+bearConf += bearIFVG                   ? 1 : 0
+bearConf += bearBB                     ? 1 : 0
+bearConf += bearPinBar                 ? 1 : 0
+bearConf += bearEng                    ? 1 : 0
+bearConf += inBearOTEZone              ? 1 : 0
+bearConf += isDPLBear                  ? 1 : 0
+bearConf += pdhBreach                  ? 1 : 0
+bearConf += volRatio > 1.2             ? 1 : 0
+bearConf += close < ema50              ? 1 : 0
+bearConf += adxVal > 25                ? 1 : 0
+
+string confLabel  = bullConf >= 14 ? "STRONG BUY" :
+                   bearConf >= 14 ? "STRONG SELL" :
+                   bullConf >= 9  ? "BUY" :
+                   bearConf >= 9  ? "SELL" :
+                   bullConf >= 5  ? "CAUTIOUS BUY" :
+                   bearConf >= 5  ? "CAUTIOUS SELL" : "NEUTRAL"
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 7: TRADE SETUP — SNIPER ENTRY
+// ═══════════════════════════════════════════════════════════
+
+var int lastSignal  = 0
+var float entryPx  = na
+var float slPx     = na
+var float tp1Px    = na
+var float tp2Px    = na
+var float tp3Px    = na
+var float tp4Px    = na
+var float tp5Px    = na
+var bool slHit     = false
+var bool tp1Hit    = false
+var bool tp2Hit    = false
+var bool tp3Hit    = false
+var bool tp4Hit    = false
+var bool tp5Hit    = false
+var string confAtEntry = ""
+var string structureAtEntry = ""
+var string patternAtEntry = ""
+var string ictAtEntry = ""
+
+// ─── SNIPER BUY CONDITIONS ─────────────────────────────────
+bool sniperBuy = bullConf >= 9
+               and (bullMSS or bullCHoCH)
+               and (bullFVG or bullOB or bullJudas or bullEng or bullPinBar)
+               and isDPLBull
+               and adxVal > 20
+               and volRatio > 0.8
+               and lastSignal != 1
+
+// ─── SNIPER SELL CONDITIONS ────────────────────────────────
+bool sniperSell = bearConf >= 9
+                and (bearMSS or bearCHoCH)
+                and (bearFVG or bearOB or bearJudas or bearEng or bearPinBar)
+                and isDPLBear
+                and adxVal > 20
+                and volRatio > 0.8
+                and lastSignal != -1
+
+// ─── TRIGGER ───────────────────────────────────────────────
+bool triggerBuy  = sniperBuy  and lastSignal != 1
+bool triggerSell = sniperSell and lastSignal != -1
+
+if triggerBuy
+    lastSignal := 1
+    entryPx  := close
+    slPx     := entryPx - atrVol
+    tp1Px    := entryPx + atrVol
+    tp2Px    := entryPx + atrVol * tp2Mult
+    tp3Px    := entryPx + atrVol * tp3Mult
+    tp4Px    := entryPx + atrVol * tp4Mult
+    tp5Px    := entryPx + atrVol * tp5Mult
+    slHit := false, tp1Hit := false, tp2Hit := false, tp3Hit := false, tp4Hit := false, tp5Hit := false
+
+    // Capture confluence at entry
+    confAtEntry      := confLabel
+    structureAtEntry := bullMSS ? "MSS" : bullCHoCH ? "CHoCH" : "BOS"
+    patternAtEntry    := bullFVG ? "FVG" : bullOB ? "OB" : bullEng ? "Engulfing" : bullPinBar ? "PinBar" : "Other"
+    ictAtEntry        := bullJudas ? "Judas" : inBullOTEZone ? "OTE Zone" : pdlBreach ? "PDL Sweep" : "None"
+
+if triggerSell
+    lastSignal := -1
+    entryPx  := close
+    slPx     := entryPx + atrVol
+    tp1Px    := entryPx - atrVol
+    tp2Px    := entryPx - atrVol * tp2Mult
+    tp3Px    := entryPx - atrVol * tp3Mult
+    tp4Px    := entryPx - atrVol * tp4Mult
+    tp5Px    := entryPx - atrVol * tp5Mult
+    slHit := false, tp1Hit := false, tp2Hit := false, tp3Hit := false, tp4Hit := false, tp5Hit := false
+
+    confAtEntry      := confLabel
+    structureAtEntry := bearMSS ? "MSS" : bearCHoCH ? "CHoCH" : "BOS"
+    patternAtEntry    := bearFVG ? "FVG" : bearOB ? "OB" : bearEng ? "Engulfing" : bearPinBar ? "PinBar" : "Other"
+    ictAtEntry        := bearJudas ? "Judas" : inBearOTEZone ? "OTE Zone" : pdhBreach ? "PDH Sweep" : "None"
+
+// ─── TARGET HIT DETECTION ──────────────────────────────────
+if lastSignal == 1
+    if high >= tp1Px and not tp1Hit  { tp1Hit := true }
+    if high >= tp2Px and not tp2Hit  { tp2Hit := true }
+    if high >= tp3Px and not tp3Hit  { tp3Hit := true }
+    if high >= tp4Px and not tp4Hit  { tp4Hit := true }
+    if high >= tp5Px and not tp5Hit  { tp5Hit := true }
+    if low  <= slPx                  { slHit  := true }
+
+if lastSignal == -1
+    if low  <= tp1Px and not tp1Hit  { tp1Hit := true }
+    if low  <= tp2Px and not tp2Hit  { tp2Hit := true }
+    if low  <= tp3Px and not tp3Hit  { tp3Hit := true }
+    if low  <= tp4Px and not tp4Hit  { tp4Hit := true }
+    if low  <= tp5Px and not tp5Hit  { tp5Hit := true }
+    if high >= slPx                  { slHit  := true }
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 8: VISUALS — LINES & LABELS
+// ═══════════════════════════════════════════════════════════
+
+// ─── EMA Ribbon ────────────────────────────────────────────
+pEMA9  = plot(showRibbon ? ema9  : na, "EMA 9",  color=color.new(#00E676, 30), linewidth=1)
+pEMA21 = plot(showRibbon ? ema21 : na, "EMA 21", color=color.new(#FF5252, 30), linewidth=1)
+pEMA50 = plot(showRibbon ? ema50 : na, "EMA 50", color=color.new(#FFEB3B, 30), linewidth=1)
+
+if showRibbon
+    fill(pEMA9, pEMA21,
+         color = ema9 > ema21
+             ? color.new(#00E676, 100 - ribbonOpacity)
+             : color.new(#FF5252, 100 - ribbonOpacity))
+
+// ─── VWAP ─────────────────────────────────────────────────
+plot(showVWAP ? vwapV : na, "VWAP", color=color.new(#40C4FF, isBullish ? 10 : 50), linewidth=2)
+
+// ─── FVG ZONES (Bullish = green box, Bearish = red box) ───
+if showSMC and bullFVG
+    box.new(left  = bar_index - 2,
+            right = bar_index,
+            top   = fvgBullTop,
+            bottom= fvgBullBot,
+            border_color = color.new(#00E676, 0),
+            border_width = 1,
+            bgcolor      = color.new(#00E676, 85),
+            extend       = extend.none)
+
+    // Label on chart
+    label.new(bar_index - 1,
+              (fvgBullTop + fvgBullBot) / 2,
+              "FVG",
+              color  = color.new(#00E676, 0),
+              textcolor = color.white,
+              style  = label.style_label_center,
+              size   = size.tiny)
+
+if showSMC and bearFVG
+    box.new(left  = bar_index - 2,
+            right = bar_index,
+            top   = fvgBearTop,
+            bottom= fvgBearBot,
+            border_color = color.new(#FF5252, 0),
+            border_width = 1,
+            bgcolor      = color.new(#FF5252, 85),
+            extend       = extend.none)
+
+    label.new(bar_index - 1,
+              (fvgBearTop + fvgBearBot) / 2,
+              "FVG",
+              color  = color.new(#FF5252, 0),
+              textcolor = color.white,
+              style  = label.style_label_center,
+              size   = size.tiny)
+
+// ─── ORDER BLOCK ZONES ────────────────────────────────────
+if showSMC and bullOB
+    box.new(left  = bar_index - 1,
+            right = bar_index,
+            top   = obBullTop,
+            bottom= obBullBot,
+            border_color = color.new(#00BCD4, 0),
+            border_width = 1,
+            bgcolor      = color.new(#00BCD4, 80),
+            extend       = extend.right)
+
+    label.new(bar_index,
+              (obBullTop + obBullBot) / 2,
+              "BOB",
+              color  = color.new(#00BCD4, 0),
+              textcolor = color.white,
+              style  = label.style_label_center,
+              size   = size.tiny)
+
+if showSMC and bearOB
+    box.new(left  = bar_index - 1,
+            right = bar_index,
+            top   = obBearTop,
+            bottom= obBearBot,
+            border_color = color.new(#FF9800, 0),
+            border_width = 1,
+            bgcolor      = color.new(#FF9800, 80),
+            extend       = extend.right)
+
+    label.new(bar_index,
+              (obBearTop + obBearBot) / 2,
+              "BRB",
+              color  = color.new(#FF9800, 0),
+              textcolor = color.white,
+              style  = label.style_label_center,
+              size   = size.tiny)
+
+// ─── IFVG LABELS ───────────────────────────────────────────
+if showSMC and bullIFVG
+    label.new(bar_index, low, "IFVG+",
+              color=color.new(#00E676,0), textcolor=color.white,
+              style=label.style_label_up, size=size.tiny)
+
+if showSMC and bearIFVG
+    label.new(bar_index, high, "IFVG-",
+              color=color.new(#FF5252,0), textcolor=color.white,
+              style=label.style_label_down, size=size.tiny)
+
+// ─── MSS / CHoCH Labels ────────────────────────────────────
+if showMSS and bullMSS
+    label.new(bar_index, low, "MSS+",
+              color=color.new(#7C4DFF,0), textcolor=color.white,
+              style=label.style_label_up, size=size.small)
+
+if showMSS and bearMSS
+    label.new(bar_index, high, "MSS-",
+              color=color.new(#7C4DFF,0), textcolor=color.white,
+              style=label.style_label_down, size=size.small)
+
+if showMSS and bullCHoCH
+    label.new(bar_index, low, "CHoCH+",
+              color=color.new(#9C27B0,0), textcolor=color.white,
+              style=label.style_label_up, size=size.small)
+
+if showMSS and bearCHoCH
+    label.new(bar_index, high, "CHoCH-",
+              color=color.new(#9C27B0,0), textcolor=color.white,
+              style=label.style_label_down, size=size.small)
+
+// ─── PDH / PDL Lines ───────────────────────────────────────
+plot(showPDHighLow ? pdHigh : na, "PDH", color=color.new(#FF9800, 60), linewidth=1, style=plot.style_linebr)
+plot(showPDHighLow ? pdLow  : na, "PDL", color=color.new(#00BCD4, 60), linewidth=1, style=plot.style_linebr)
+
+// ─── Equilibrium ───────────────────────────────────────────
+float eqLine = (swingHigh + swingLow) / 2
+plot(showEQ ? eqLine : na, "EQ", color=color.new(#9E9E9E, 50), linewidth=1, style=plot.style_linebr)
+
+// ─── Kill Zones ────────────────────────────────────────────
+plotchar(showKillZone and inAsiaKZ  ? low  - atr14 * 0.5 : na, "AKZ",  "", location.absolute, color.new(#FFF176, 0), size=size.tiny)
+plotchar(showKillZone and inLondonKZ ? low - atr14 * 0.5 : na, "LKZ",  "", location.absolute, color.new(#69F0AE, 0), size=size.tiny)
+plotchar(showKillZone and inNYKZ     ? low - atr14 * 0.5 : na, "NYKZ", "", location.absolute, color.new(#40C4FF, 0), size=size.tiny)
+
+// ─── OTE Lines ─────────────────────────────────────────────
+plot(showOTE and inBullOTEZone ? ote62 : na, "OTE 62%", color=color.new(#00E676, 40), linewidth=1, style=plot.style_line)
+plot(showOTE and inBullOTEZone ? ote79 : na, "OTE 79%", color=color.new(#00E676, 40), linewidth=1, style=plot.style_line)
+plot(showOTE and inBearOTEZone ? ote62R : na, "OTE 62%R", color=color.new(#FF5252, 40), linewidth=1, style=plot.style_line)
+plot(showOTE and inBearOTEZone ? ote79R : na, "OTE 79%R", color=color.new(#FF5252, 40), linewidth=1, style=plot.style_line)
+
+// ─── Displacement Markers ──────────────────────────────────
+plotshape(showDisplace and isDPLBull, text="DPL+", style=shape.triangleup, location=location.abovebar, color=color.new(#00E676, 0), size=size.tiny, textcolor=color.white)
+plotshape(showDisplace and isDPLBear, text="DPL-", style=shape.triangledown, location=location.belowbar, color=color.new(#FF5252, 0), size=size.tiny, textcolor=color.white)
+
+// ─── Judas Swing ───────────────────────────────────────────
+plotshape(showJudas and bullJudas, text="JUDAS", style=shape.labelup, location=location.belowbar, color=color.new(#FFEB3B, 0), size=size.tiny, textcolor=color.black)
+plotshape(showJudas and bearJudas, text="JUDAS", style=shape.labeldown, location=location.abovebar, color=color.new(#FFEB3B, 0), size=size.tiny, textcolor=color.black)
+
+// ─── Liquidity Sweep ────────────────────────────────────────
+plotshape(showLiquidity and bullLiquiditySweep, text="SSL", style=shape.labeldown, location=location.abovebar, color=color.new(#F44336, 0), size=size.tiny, textcolor=color.white)
+plotshape(showLiquidity and bearLiquiditySweep, text="BSL", style=shape.labelup, location=location.belowbar, color=color.new(#F44336, 0), size=size.tiny, textcolor=color.white)
+
+// ─── Price Action Patterns ──────────────────────────────────
+if showPA
+    if showPinBar and bullPinBar
+        label.new(bar_index, low, "BPB", color=color.new(#4CAF50,0), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showPinBar and bearPinBar
+        label.new(bar_index, high, "SPB", color=color.new(#F44336,0), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if showEngulfing and bullEng
+        label.new(bar_index, low, "BE", color=color.new(#00E676,0), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showEngulfing and bearEng
+        label.new(bar_index, high, "BEE", color=color.new(#FF5252,0), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if showStar and morningStar
+        label.new(bar_index, low, "MS", color=color.new(#00BCD4,0), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showStar and eveningStar
+        label.new(bar_index, high, "ES", color=color.new(#FF9800,0), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if showTweezer and tweezerTop
+        label.new(bar_index, high, "TT", color=color.new(#FF9800,0), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if showTweezer and tweezerBot
+        label.new(bar_index, low, "TB", color=color.new(#00BCD4,0), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showInsideBar and bullIBBreak
+        label.new(bar_index, low, "IB+", color=color.new(#7C4DFF,0), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if showInsideBar and bearIBBreak
+        label.new(bar_index, high, "IB-", color=color.new(#7C4DFF,0), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if showOutsideBar and bullOBAR
+        label.new(bar_index, low, "OBAR+", color=color.new(#FFEB3B,0), textcolor=color.black, style=label.style_label_up, size=size.tiny)
+    if showOutsideBar and bearOBAR
+        label.new(bar_index, high, "OBAR-", color=color.new(#FFEB3B,0), textcolor=color.black, style=label.style_label_down, size=size.tiny)
+
+// ─── SNIPER ENTRY SIGNALS ─────────────────────────────────
+plotshape(triggerBuy,  text="SNIPER BUY",  style=shape.labelup,   location=location.belowbar, color=color.new(#00E676,0), textcolor=color.white, size=size.normal)
+plotshape(triggerSell, text="SNIPER SELL", style=shape.labeldown, location=location.abovebar, color=color.new(#FF5252,0), textcolor=color.white, size=size.normal)
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 9: TRADE MANAGEMENT LINES
+// ═══════════════════════════════════════════════════════════
+
+var line lnEntry = na
+var line lnSL    = na
+var line lnTP1   = na
+var line lnTP2   = na
+var line lnTP3   = na
+var line lnTP4   = na
+var line lnTP5   = na
+
+var label lbEntry = na
+var label lbSL    = na
+var label lbTP1   = na
+var label lbTP2   = na
+var label lbTP3   = na
+var label lbTP4   = na
+var label lbTP5   = na
+var label lbConf  = na
+
+if triggerBuy or triggerSell
+    // Delete old lines
+    line.delete(lnEntry), line.delete(lnSL)
+    line.delete(lnTP1), line.delete(lnTP2), line.delete(lnTP3)
+    line.delete(lnTP4), line.delete(lnTP5)
+    label.delete(lbEntry), label.delete(lbSL)
+    label.delete(lbTP1), label.delete(lbTP2), label.delete(lbTP3)
+    label.delete(lbTP4), label.delete(lbTP5), label.delete(lbConf)
+
+    // New lines
+    lnEntry := line.new(bar_index - 1, entryPx, bar_index + 25, entryPx,
+                        color=color.new(#2196F3, 0), width=2, extend=extend.right)
+    lnSL    := line.new(bar_index - 1, slPx,    bar_index + 25, slPx,
+                        color=color.new(#F44336, 0), width=2, extend=extend.right)
+    lnTP1   := line.new(bar_index - 1, tp1Px,   bar_index + 25, tp1Px,
+                        color=color.new(#4CAF50, 0), width=1, style=line.style_dashed, extend=extend.right)
+    lnTP2   := line.new(bar_index - 1, tp2Px,   bar_index + 25, tp2Px,
+                        color=color.new(#4CAF50, 0), width=1, style=line.style_dashed, extend=extend.right)
+    lnTP3   := line.new(bar_index - 1, tp3Px,   bar_index + 25, tp3Px,
+                        color=color.new(#4CAF50, 0), width=2, extend=extend.right)
+    lnTP4   := line.new(bar_index - 1, tp4Px,   bar_index + 25, tp4Px,
+                        color=color.new(#00796B, 0), width=2, extend=extend.right)
+    lnTP5   := line.new(bar_index - 1, tp5Px,   bar_index + 25, tp5Px,
+                        color=color.new(#004D40, 0), width=3, extend=extend.right)
+
+    int labelX = bar_index + 2
+
+    lbConf  := label.new(labelX, triggerBuy ? slPx : slPx,
+                        "CONF: " + confLabel + "\nPattern: " + patternAtEntry + "\nStructure: " + structureAtEntry + "\nICT: " + ictAtEntry,
+                        color=color.new(#1A237E, 0), textcolor=color.white,
+                        style=label.style_label_left, size=size.small)
+
+    lbEntry := label.new(labelX, entryPx,
+                        "ENTRY: " + str.tostring(entryPx, format.mintick),
+                        color=color.new(#1565C0, 0), textcolor=color.white,
+                        style=label.style_label_left, size=size.small)
+
+    lbSL    := label.new(labelX, slPx,
+                        "SL: " + str.tostring(slPx, format.mintick),
+                        color=color.new(#C62828, 0), textcolor=color.white,
+                        style=label.style_label_left, size=size.small)
+
+    lbTP1   := label.new(labelX, tp1Px,
+                        "TP1: " + str.tostring(tp1Px, format.mintick) + (tp1Hit ? " HIT" : ""),
+                        color=color.new(#2E7D32, 0), textcolor=color.white,
+                        style=label.style_label_left, size=size.small)
+
+    lbTP2   := label.new(labelX, tp2Px,
+                        "TP2: " + str.tostring(tp2Px, format.mintick) + (tp2Hit ? " HIT" : ""),
+                        color=color.new(#2E7D32, 0), textcolor=color.white,
+                        style=label.style_label_left, size=size.small)
+
+    lbTP3   := label.new(labelX, tp3Px,
+                        "TP3: " + str.tostring(tp3Px, format.mintick) + (tp3Hit ? " HIT" : ""),
+                        color=color.new(#1B5E20, 0), textcolor=color.white,
+                        style=label.style_label_left, size=size.small)
+
+    lbTP4   := label.new(labelX, tp4Px,
+                        "TP4: " + str.tostring(tp4Px, format.mintick) + (tp4Hit ? " HIT" : ""),
+                        color=color.new(#004D40, 0), textcolor=color.white,
+                        style=label.style_label_left, size=size.small)
+
+    lbTP5   := label.new(labelX, tp5Px,
+                        "TP5: " + str.tostring(tp5Px, format.mintick) + (tp5Hit ? " HIT" : ""),
+                        color=color.new(#004D40, 0), textcolor=color.white,
+                        style=label.style_label_left, size=size.small)
+
+// Update line colors when TP hit
+if not (triggerBuy or triggerSell) and lastSignal != 0
+    line.set_color(lnTP1, tp1Hit ? color.new(#40C4FF, 0) : na)
+    line.set_color(lnTP2, tp2Hit ? color.new(#40C4FF, 0) : na)
+    line.set_color(lnTP3, tp3Hit ? color.new(#40C4FF, 0) : na)
+    line.set_color(lnTP4, tp4Hit ? color.new(#40C4FF, 0) : na)
+    line.set_color(lnTP5, tp5Hit ? color.new(#40C4FF, 0) : na)
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 10: DASHBOARD
+// ═══════════════════════════════════════════════════════════
+
+var table dash = table.new(
+     dashPos,
+     2,
+     26,
+     bgcolor=color.new(#1A1A2E, 90),
+     border_width=1,
+     border_color=color.new(color.white, 80)
+ )
+
+if barstate.islast
+    // Row 0: Title
+    table.cell(dash, 0, 0, "SNIPER PRO", text_color=color.white, bgcolor=color.new(#1A237E, 0), text_size=dashSize, text_halign=text.align_left)
+    table.cell(dash, 1, 0, syminfo.ticker + " | " + timeframe.period,
+               text_color=color.new(#90CAF9, 0), text_size=dashSize, text_halign=text.align_right)
+
+    // Row 1: Bull/Bear Score
+    table.cell(dash, 0, 1, "BULL SCORE", text_color=color.white, bgcolor=color.new(#2E7D32, 0), text_size=dashSize)
+    table.cell(dash, 1, 1, str.tostring(bullPct, "#") + "%",
+               text_color=color.white, bgcolor=color.new(#2E7D32, 0), text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 2, "BEAR SCORE", text_color=color.white, bgcolor=color.new(#C62828, 0), text_size=dashSize)
+    table.cell(dash, 1, 2, str.tostring(bearPct, "#") + "%",
+               text_color=color.white, bgcolor=color.new(#C62828, 0), text_size=dashSize, text_halign=text.align_right)
+
+    // Row 3: Market Bias
+    color biasBg = biasText == "STRONG BULL" ? color.new(#00E676, 0) :
+                   biasText == "STRONG BEAR" ? color.new(#FF5252, 0) :
+                   biasText == "BULL"        ? color.new(#4CAF50, 0) :
+                   biasText == "BEAR"        ? color.new(#F44336, 0) : color.new(#757575, 0)
+
+    table.cell(dash, 0, 3, "BIAS", text_color=color.white, bgcolor=color.new(#1A1A2E, 0), text_size=dashSize)
+    table.cell(dash, 1, 3, biasText, text_color=color.white, bgcolor=biasBg, text_size=dashSize, text_halign=text.align_right)
+
+    // Row 4: Confluence
+    color confBg = confLabel == "STRONG BUY"  ? color.new(#00E676, 0) :
+                   confLabel == "STRONG SELL" ? color.new(#FF5252, 0) :
+                   confLabel == "BUY"         ? color.new(#66BB6A, 0) :
+                   confLabel == "SELL"         ? color.new(#EF5350, 0) :
+                   confLabel == "CAUTIOUS BUY" ? color.new(#FFD54F, 0) :
+                   confLabel == "CAUTIOUS SELL"? color.new(#FF8A65, 0) : color.new(#757575, 0)
+
+    table.cell(dash, 0, 4, "CONFLUENCE", text_color=color.white, bgcolor=color.new(#1A1A2E, 0), text_size=dashSize)
+    table.cell(dash, 1, 4, confLabel + " (" + str.tostring(math.round(bullConf), "#") + "/" + str.tostring(math.round(bearConf), "#") + ")",
+               text_color=color.white, bgcolor=confBg, text_size=dashSize, text_halign=text.align_right)
+
+    // Row 5: Sniper Score
+    table.cell(dash, 0, 5, "SNIPER", text_color=color.white, bgcolor=color.new(#1A1A2E, 0), text_size=dashSize)
+    table.cell(dash, 1, 5, str.tostring(sniperScore, "#.#") + "/10",
+               text_color=color.white,
+               bgcolor = sniperScore >= 7 ? color.new(#00E676, 0) :
+                         sniperScore <= 3 ? color.new(#FF5252, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    // Separator
+    table.cell(dash, 0, 6, "───────", text_color=color.new(#757575, 0), text_size=dashSize, text_halign=text.align_left)
+    table.cell(dash, 1, 6, "───────", text_color=color.new(#757575, 0), text_size=dashSize, text_halign=text.align_right)
+
+    // Rows 7-11: Sniper Components
+    table.cell(dash, 0, 7,  "Price/VWAP",  text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 7,  close > vwapV ? "ABOVE" : "BELOW",
+               text_color=close > vwapV ? color.new(#00E676, 0) : color.new(#FF5252, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 8,  "RSI(14)",    text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 8,  str.tostring(rsi14, "#.#"),
+               text_color=rsi14 > 50 ? color.new(#00E676, 0) : color.new(#FF5252, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 9,  "MACD",       text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 9,  macdMain > macdSig ? "BULL" : "BEAR",
+               text_color=macdMain > macdSig ? color.new(#00E676, 0) : color.new(#FF5252, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 10, "ADX",        text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 10, str.tostring(adxVal, "#.#") + " (" + (adxVal > 25 ? "STRONG" : "WEAK") + ")",
+               text_color=adxVal > 25 ? color.new(#00E676, 0) : color.new(#FF5252, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 11, "Volume",     text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 11, str.tostring(volRatio, "#.#") + "x",
+               text_color=volRatio > 1 ? color.new(#00E676, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    // Separator
+    table.cell(dash, 0, 12, "───────", text_color=color.new(#757575, 0), text_size=dashSize, text_halign=text.align_left)
+    table.cell(dash, 1, 12, "───────", text_color=color.new(#757575, 0), text_size=dashSize, text_halign=text.align_right)
+
+    // Rows 13-17: SMC
+    table.cell(dash, 0, 13, "MSS/CHoCH",  text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 13, bullMSS ? "BULL+": bearMSS ? "BEAR-" : "NONE",
+               text_color=bullMSS ? color.new(#7C4DFF, 0) : bearMSS ? color.new(#7C4DFF, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 14, "BOS",        text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 14, bullBOS ? "BULL+" : bearBOS ? "BEAR-" : "NONE",
+               text_color=bullBOS ? color.new(#00E676, 0) : bearBOS ? color.new(#FF5252, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 15, "FVG",        text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 15, bullFVG ? "BULL+" : bearFVG ? "BEAR-" : "NONE",
+               text_color=bullFVG ? color.new(#00E676, 0) : bearFVG ? color.new(#FF5252, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 16, "OrderBlock", text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 16, bullOB ? "BOB" : bearOB ? "BRB" : "NONE",
+               text_color=bullOB ? color.new(#00BCD4, 0) : bearOB ? color.new(#FF9800, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 17, "Liquidity",  text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 17, bullLiquiditySweep ? "SSL SWEEP" : bearLiquiditySweep ? "BSL SWEEP" : "NONE",
+               text_color=bullLiquiditySweep ? color.new(#F44336, 0) : bearLiquiditySweep ? color.new(#F44336, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    // Separator
+    table.cell(dash, 0, 18, "───────", text_color=color.new(#757575, 0), text_size=dashSize, text_halign=text.align_left)
+    table.cell(dash, 1, 18, "───────", text_color=color.new(#757575, 0), text_size=dashSize, text_halign=text.align_right)
+
+    // Rows 19-22: ICT
+    table.cell(dash, 0, 19, "KillZone",   text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 19, inAsiaKZ ? "ASIA" : inLondonKZ ? "LONDON" : inNYKZ ? "NY" : "NONE",
+               text_color=inAsiaKZ ? color.new(#FFF176, 0) :
+                            inLondonKZ ? color.new(#69F0AE, 0) :
+                            inNYKZ ? color.new(#40C4FF, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 20, "OTE Zone",   text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 20, inBullOTEZone ? "BULL 62-79%" : inBearOTEZone ? "BEAR 62-79%" : "NONE",
+               text_color=inBullOTEZone ? color.new(#00E676, 0) : inBearOTEZone ? color.new(#FF5252, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 21, "Displace",  text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 21, isDPLBull ? "BULL+" : isDPLBear ? "BEAR-" : "NONE",
+               text_color=isDPLBull ? color.new(#00E676, 0) : isDPLBear ? color.new(#FF5252, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 22, "Judas",     text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 22, bullJudas ? "JUDAS+" : bearJudas ? "JUDAS-" : "NONE",
+               text_color=bullJudas ? color.new(#FFEB3B, 0) : bearJudas ? color.new(#FFEB3B, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    // Separator
+    table.cell(dash, 0, 23, "───────", text_color=color.new(#757575, 0), text_size=dashSize, text_halign=text.align_left)
+    table.cell(dash, 1, 23, "───────", text_color=color.new(#757575, 0), text_size=dashSize, text_halign=text.align_right)
+
+    // Rows 24-25: Trade Status
+    table.cell(dash, 0, 24, "Signal",     text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 24, lastSignal == 1 ? "LONG ACTIVE" : lastSignal == -1 ? "SHORT ACTIVE" : "NO TRADE",
+               text_color=lastSignal == 1 ? color.new(#00E676, 0) :
+                         lastSignal == -1 ? color.new(#FF5252, 0) : color.new(#757575, 0),
+               text_size=dashSize, text_halign=text.align_right)
+
+    table.cell(dash, 0, 25, "Trade @",    text_color=color.white, text_size=dashSize)
+    table.cell(dash, 1, 25, lastSignal != 0 ? str.tostring(entryPx, format.mintick) : "-",
+               text_color=color.new(#90CAF9, 0), text_size=dashSize, text_halign=text.align_right)
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 11: JSON AUTO-TRADE ALERTS
+// ═══════════════════════════════════════════════════════════
+
+// Format Risk-Reward string
+string fmtRR(float risk) =>
+    "1:" + str.tostring(math.round((tp5Px - entryPx) / risk, 1))
+
+// ─── JSON BUY ALERT ────────────────────────────────────────
+if enableAlert and triggerBuy
+    string jsonBuy = '{"action":"BUY","symbol":"' + syminfo.tickerid + '","entry":' + str.tostring(entryPx, format.mintick)
+                   + ',"sl":' + str.tostring(slPx, format.mintick)
+                   + ',"tp1":' + str.tostring(tp1Px, format.mintick)
+                   + ',"tp2":' + str.tostring(tp2Px, format.mintick)
+                   + ',"tp3":' + str.tostring(tp3Px, format.mintick)
+                   + ',"tp4":' + str.tostring(tp4Px, format.mintick)
+                   + ',"tp5":' + str.tostring(tp5Px, format.mintick)
+                   + ',"risk":' + str.tostring(atrVol, format.mintick)
+                   + ',"rr":"' + fmtRR(atrVol) + '"'
+                   + ',"conf_score":' + str.tostring(bullConf, "#.#")
+                   + ',"pattern":"' + patternAtEntry + '"'
+                   + ',"structure":"' + structureAtEntry + '"'
+                   + ',"ict":"' + ictAtEntry + '"'
+                   + ',"bias":"' + biasText + '"'
+                   + ',"sniper_score":' + str.tostring(sniperScore, "#.#")
+                   + ',"adx":' + str.tostring(adxVal, "#.#")
+                   + ',"rsi":' + str.tostring(rsi14, "#.#")
+                   + ',"volume_ratio":' + str.tostring(volRatio, "#.#")
+                   + ',"time":"' + str.tostring(time, "yyyy-MM-dd'T'HH:mm:ss") + 'Z"'
+                   + ',"exchange":"' + syminfo.exchange + '"'
+                   + ',"timeframe":"' + timeframe.period + '"}'
+
+    alert(jsonBuy, alert.freq_once_per_bar)
+
+// ─── JSON SELL ALERT ───────────────────────────────────────
+if enableAlert and triggerSell
+    string jsonSell = '{"action":"SELL","symbol":"' + syminfo.tickerid + '","entry":' + str.tostring(entryPx, format.mintick)
+                    + ',"sl":' + str.tostring(slPx, format.mintick)
+                    + ',"tp1":' + str.tostring(tp1Px, format.mintick)
+                    + ',"tp2":' + str.tostring(tp2Px, format.mintick)
+                    + ',"tp3":' + str.tostring(tp3Px, format.mintick)
+                    + ',"tp4":' + str.tostring(tp4Px, format.mintick)
+                    + ',"tp5":' + str.tostring(tp5Px, format.mintick)
+                    + ',"risk":' + str.tostring(atrVol, format.mintick)
+                    + ',"rr":"' + fmtRR(atrVol) + '"'
+                    + ',"conf_score":' + str.tostring(bearConf, "#.#")
+                    + ',"pattern":"' + patternAtEntry + '"'
+                    + ',"structure":"' + structureAtEntry + '"'
+                    + ',"ict":"' + ictAtEntry + '"'
+                    + ',"bias":"' + biasText + '"'
+                    + ',"sniper_score":' + str.tostring(10 - sniperScore, "#.#")
+                    + ',"adx":' + str.tostring(adxVal, "#.#")
+                    + ',"rsi":' + str.tostring(rsi14, "#.#")
+                    + ',"volume_ratio":' + str.tostring(volRatio, "#.#")
+                    + ',"time":"' + str.tostring(time, "yyyy-MM-dd'T'HH:mm:ss") + 'Z"'
+                    + ',"exchange":"' + syminfo.exchange + '"'
+                    + ',"timeframe":"' + timeframe.period + '"}'
+
+    alert(jsonSell, alert.freq_once_per_bar)
+
+// ─── TP/SL HIT ALERTS ─────────────────────────────────────
+if enableAlert and lastSignal == 1
+    if tp1Hit
+        alert('{"event":"TP1_HIT","symbol":"' + syminfo.tickerid + '","tp":' + str.tostring(tp1Px, format.mintick) + ',"action":"BUY"}', alert.freq_once_per_bar)
+    if tp2Hit
+        alert('{"event":"TP2_HIT","symbol":"' + syminfo.tickerid + '","tp":' + str.tostring(tp2Px, format.mintick) + ',"action":"BUY"}', alert.freq_once_per_bar)
+    if tp3Hit
+        alert('{"event":"TP3_HIT","symbol":"' + syminfo.tickerid + '","tp":' + str.tostring(tp3Px, format.mintick) + ',"action":"BUY"}', alert.freq_once_per_bar)
+    if tp4Hit
+        alert('{"event":"TP4_HIT","symbol":"' + syminfo.tickerid + '","tp":' + str.tostring(tp4Px, format.mintick) + ',"action":"BUY"}', alert.freq_once_per_bar)
+    if slHit
+        alert('{"event":"SL_HIT","symbol":"' + syminfo.tickerid + '","sl":' + str.tostring(slPx, format.mintick) + ',"action":"BUY"}', alert.freq_once_per_bar)
+
+if enableAlert and lastSignal == -1
+    if tp1Hit
+        alert('{"event":"TP1_HIT","symbol":"' + syminfo.tickerid + '","tp":' + str.tostring(tp1Px, format.mintick) + ',"action":"SELL"}', alert.freq_once_per_bar)
+    if tp2Hit
+        alert('{"event":"TP2_HIT","symbol":"' + syminfo.tickerid + '","tp":' + str.tostring(tp2Px, format.mintick) + ',"action":"SELL"}', alert.freq_once_per_bar)
+    if tp3Hit
+        alert('{"event":"TP3_HIT","symbol":"' + syminfo.tickerid + '","tp":' + str.tostring(tp3Px, format.mintick) + ',"action":"SELL"}', alert.freq_once_per_bar)
+    if tp4Hit
+        alert('{"event":"TP4_HIT","symbol":"' + syminfo.tickerid + '","tp":' + str.tostring(tp4Px, format.mintick) + ',"action":"SELL"}', alert.freq_once_per_bar)
+    if slHit
+        alert('{"event":"SL_HIT","symbol":"' + syminfo.tickerid + '","sl":' + str.tostring(slPx, format.mintick) + ',"action":"SELL"}', alert.freq_once_per_bar)
+
+// ═══════════════════════════════════════════════════════════
+// SECTION 12: PLOTSHAPES SUMMARY
+// ═══════════════════════════════════════════════════════════
+
+// Candle coloring
+isRetestBuy  = lastSignal ==  1 and low  <= ema9 and low  > ema21
+isRetestSell = lastSignal == -1 and high >= ema9 and high < ema21
+
+barcolor(
+     triggerBuy          ? color.new(#00E676, 0) :
+     triggerSell         ? color.new(#FF5252, 0) :
+     isRetestBuy         ? color.new(#00BCD4, 0) :
+     isRetestSell        ? color.new(#FF9800, 0) :
+     bullFVG             ? color.new(#00E676, 80) :
+     bearFVG             ? color.new(#FF5252, 80) :
+     bullOB              ? color.new(#00BCD4, 80) :
+     bearOB              ? color.new(#FF9800, 80) :
+     bullMSS             ? color.new(#7C4DFF, 60) :
+     bearMSS             ? color.new(#7C4DFF, 60) :
+     bullJudas           ? color.new(#FFEB3B, 60) :
+     bearJudas           ? color.new(#FFEB3B, 60) :
+     bullEng or bullPinBar ? color.new(#00E676, 70) :
+     bearEng or bearPinBar ? color.new(#FF5252, 70) : na
+)
+
+// Debug plot (invisible — for data extraction)
+plotchar(close, "close", "", false, location.top_right, color.transparent, 0, tooltip="")

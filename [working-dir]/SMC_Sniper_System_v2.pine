@@ -1,0 +1,1306 @@
+//@version=6
+// ╔══════════════════════════════════════════════════════════════════════════════╗
+// ║           SMC + ICT + PRICE ACTION + SNIPER TRADING SYSTEM                 ║
+// ║                    by QtusDev | Pine Script v6                             ║
+// ║                                                                              ║
+// ║  Components:                                                                 ║
+// ║  ├── SMC: Market Structure, FVG, OB, Liquidity (BSL/SSL), IFVG            ║
+// ║  ├── ICT: Killzones, Displacement, OTE, Judas Swing, PO3/AMD               ║
+// ║  ├── Price Action: Pinbar, Engulfing, Inside/Outside Bar, Tweezer         ║
+// ║  └── Sniper: EMA Ribbon 9/21, VWAP, ADX, RSI(14), MACD, Score System      ║
+// ╚══════════════════════════════════════════════════════════════════════════════╝
+indicator(
+  title="Qtus SMC-Sniper System v2",
+  overlay=true,
+  max_labels_count=500,
+  max_boxes_count=500,
+  max_lines_count=500,
+  max_bars_back=1000,
+  precision=4
+)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 1: INPUTS & CONFIGURATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── VISUAL GROUP ───
+groupVis = "1. VISUALS & UI"
+showDashboard    = input.bool(true, "Show Dashboard", group=groupVis)
+dashboardPos     = input.string(title="Dashboard Position", defval="top_right",
+                     options=["top_left","top_right","bottom_left","bottom_right","middle_left","middle_right"], group=groupVis)
+dashTextSize     = input.string("small", "Dashboard Font Size", options=["tiny","small","normal","large","huge"], group=groupVis)
+labelTextSize    = input.string("tiny", "Label Size", options=["tiny","small","normal","large","huge"], group=groupVis)
+labelOffsetBars  = input.int(10, "Label Right Offset (Bars)", minval=1, group=groupVis)
+
+// ─── SMC CONFIGURATION ───
+groupSMC = "2. SMC - SMART MONEY CONCEPTS"
+showFVG         = input.bool(true, "Show Fair Value Gap (FVG)", group=groupSMC)
+showOB          = input.bool(true, "Show Order Blocks (OB)", group=groupSMC)
+showOBText      = input.bool(true, "Show OB Labels", group=groupSMC)
+showBreaker     = input.bool(true, "Show Breaker Blocks", group=groupSMC)
+showIFVG        = input.bool(true, "Show Inverse FVG (IFVG)", group=groupSMC)
+showLiquidity   = input.bool(true, "Show Liquidity Zones (BSL/SSL)", group=groupSMC)
+showEQH_EQL     = input.bool(true, "Show Equal Highs/Lows", group=groupSMC)
+showSwingLevels = input.bool(true, "Show Swing High/Low Lines", group=groupSMC)
+showBOS_CHoCH   = input.bool(true, "Show BOS/CHoCH Markers", group=groupSMC)
+showMSS         = input.bool(true, "Show MSS Markers", group=groupSMC)
+showSMTDiv      = input.bool(true, "Show SMT Divergence", group=groupSMC)
+fvgOpacity      = input.int(85, "FVG Box Opacity", minval=0, maxval=100, group=groupSMC)
+obOpacity       = input.int(80, "OB Box Opacity", minval=0, maxval=100, group=groupSMC)
+liqOpacity      = input.int(80, "Liquidity Zone Opacity", minval=0, maxval=100, group=groupSMC)
+
+// ─── ICT CONFIGURATION ───
+groupICT = "3. ICT - INNER CIRCLE TRADER"
+showKillzones     = input.bool(true, "Show Killzones", group=groupICT)
+showKillzoneLines = input.bool(true, "Show KZ High/Low Lines", group=groupICT)
+kzLondonStart     = input.string("08:00", "London Kill Zone Start (UTC)", group=groupICT)
+kzLondonEnd       = input.string("09:00", "London Kill Zone End (UTC)", group=groupICT)
+kzNyStart         = input.string("13:30", "NY Kill Zone Start (UTC-5)", group=groupICT)
+kzNyEnd           = input.string("14:30", "NY Kill Zone End (UTC-5)", group=groupICT)
+showOTE           = input.bool(true, "Show OTE Fib Zones (62%-79%)", group=groupICT)
+showDisplacement  = input.bool(true, "Show Displacement Candles", group=groupICT)
+showJudasSwing    = input.bool(true, "Show Judas Swing Zones", group=groupICT)
+showPO3           = input.bool(true, "Show PO3/AMD Model", group=groupICT)
+showDailyLevels   = input.bool(true, "Show Daily/Weekly Levels (PDH/PDL/S1-S2/R1-R2)", group=groupICT)
+showSessionLevels = input.bool(true, "Show Session High/Low", group=groupICT)
+
+// ─── PRICE ACTION CONFIGURATION ───
+groupPA = "4. PRICE ACTION"
+showPinbars     = input.bool(true, "Show Pin Bars", group=groupPA)
+showEngulfing   = input.bool(true, "Show Engulfing Patterns", group=groupPA)
+showInsideBar   = input.bool(true, "Show Inside Bars", group=groupPA)
+showOutsideBar  = input.bool(true, "Show Outside Bars", group=groupPA)
+showTweezer     = input.bool(true, "Show Tweezer Patterns", group=groupPA)
+showStarPatterns = input.bool(true, "Show Morning/Evening Star", group=groupPA)
+show3Soldiers   = input.bool(true, "Show 3 White Soldiers / 3 Black Crows", group=groupPA)
+showCandleConf  = input.bool(true, "Show Candle Confirmation Signals", group=groupPA)
+pinbarStrength  = input.float(2.0, "Pinbar Wick/Body Ratio (min)", minval=1.0, step=0.1, group=groupPA)
+engulfMinBody   = input.float(1.5, "Engulfing Min Body/AvgRange (ratio)", minval=0.5, step=0.1, group=groupPA)
+
+// ─── SNIPER CONFIGURATION ───
+groupSniper = "5. SNIPER TRADING"
+showRibbon      = input.bool(true, "Show EMA Ribbon (9/21)", group=groupSniper)
+showVWAP        = input.bool(true, "Show VWAP", group=groupSniper)
+showADX         = input.bool(true, "Show ADX Filter", group=groupSniper)
+showMACD        = input.bool(false, "Show MACD Histogram", group=groupSniper)
+showDashboardSn = input.bool(true, "Show Sniper Dashboard", group=groupSniper)
+ribbonOpacity   = input.int(80, "Ribbon Opacity", minval=0, maxval=100, group=groupSniper)
+ema9Color       = input.color(color.new(#00C853, 0), "EMA 9 Color", group=groupSniper)
+ema21Color      = input.color(color.new(#FF1744, 0), "EMA 21 Color", group=groupSniper)
+
+// ─── RISK MANAGEMENT ───
+groupRisk = "6. RISK MANAGEMENT"
+atrMultiplier   = input.float(1.5, "SL ATR Multiplier", minval=0.1, step=0.1, group=groupRisk)
+tp1Mult        = input.float(1.0, "TP1 Distance (ATR)", minval=0.5, step=0.1, group=groupRisk)
+tp2Mult        = input.float(2.0, "TP2 Distance (ATR)", minval=0.5, step=0.1, group=groupRisk)
+tp3Mult        = input.float(3.0, "TP3 Distance (ATR)", minval=0.5, step=0.1, group=groupRisk)
+tp4Mult        = input.float(4.0, "TP4 Distance (ATR)", minval=0.5, step=0.1, group=groupRisk)
+tp5Mult        = input.float(5.0, "TP5 Distance (ATR)", minval=0.5, step=0.1, group=groupRisk)
+partialTPScale = input.float(0.5, "Partial TP Scale (0.2-0.8)", minval=0.1, maxval=0.9, step=0.05, group=groupRisk)
+maxRiskPerTrade = input.float(2.0, "Max Risk Per Trade %", minval=0.1, maxval=10.0, step=0.1, group=groupRisk)
+
+// ─── SCORING CONFIGURATION ───
+groupScore = "7. SIGNAL SCORING"
+scoreMinStrong = input.int(8, "Strong Signal Threshold (score)", minval=5, maxval=11, group=groupScore)
+scoreMinValid  = input.int(6, "Valid Signal Threshold (score)", minval=3, maxval=10, group=groupScore)
+useConfluence  = input.bool(true, "Require HTF Confluence", group=groupScore)
+htfTimeframe   = input.string("240", "HTF for Bias (15/60/240/D)", options=["15","60","240","D"], group=groupScore)
+
+// ─── TRADING ALERTS ───
+groupAlerts = "8. ALERTS & AUTOMATION"
+enableAlerts   = input.bool(true, "Enable Alerts", group=groupAlerts)
+alertBuySetup  = input.bool(true, "Alert on BUY Setup", group=groupAlerts)
+alertSellSetup = input.bool(true, "Alert on SELL Setup", group=groupAlerts)
+alertSLHit     = input.bool(true, "Alert on SL Hit", group=groupAlerts)
+alertTPHit     = input.bool(true, "Alert on TP Hit", group=groupAlerts)
+alertTPC       = input.bool(true, "Alert on TP+Candle Confirmation", group=groupAlerts)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 2: UTILITY FUNCTIONS & VARIABLES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── COLOR PALETTE ───
+var color C_BULL      = #00E676    // Bright Green
+var color C_BEAR      = #FF1744    // Bright Red
+var color C_BLUE      = #2979FF    // Blue
+var color C_ORANGE    = #FF9100    // Orange
+var color C_YELLOW    = #FFEA00    // Yellow
+var color C_PURPLE    = #AA00FF    // Purple
+var color C_TURQ      = #00E5FF    // Turquoise
+var color C_WHITE     = #FFFFFF
+var color C_GRAY      = #9E9E9E
+var color C_DARKGRAY  = #424242
+
+// ─── SMC COLORS ───
+var color C_FVG_BULL  = color.new(#00E676, fvgOpacity)
+var color C_FVG_BEAR  = color.new(#FF1744, fvgOpacity)
+var color C_OB_BULL   = color.new(#00BFFF, obOpacity)
+var color C_OB_BEAR   = color.new(#FF6D00, obOpacity)
+var color C_BB_BULL   = color.new(#76FF03, obOpacity)
+var color C_BB_BEAR   = color.new(#FF3D00, obOpacity)
+var color C_LIQ_BULL  = color.new(#00E676, liqOpacity)
+var color C_LIQ_BEAR  = color.new(#FF1744, liqOpacity)
+var color C_EQH_COLOR = color.new(#FFEA00, 60)
+var color C_EQL_COLOR = color.new(#00E5FF, 60)
+
+// ─── ICT KILLZONE COLORS ───
+var color C_LKZ_FILL  = color.new(#FFD600, 85)
+var color C_NYKZ_FILL = color.new(#FF1744, 85)
+var color C_AKZ_FILL  = color.new(#00E5FF, 85)
+
+// ─── GLOBAL STATE ───
+var int   g_barIdx     = bar_index
+var float g_close      = close
+var float g_open       = open
+var float g_high       = high
+var float g_low       = low
+var float g_volume    = volume
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 3: CANDLESTICK BASICS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── CANDLE METRICS ───
+float candle_body     = math.abs(close - open)
+float candle_range    = high - low
+float candle_upwick   = high - math.max(open, close)
+float candle_lw       = math.min(open, close) - low
+float candle_wick_ratio = candle_range > 0 ? candle_body / candle_range : 0
+float candle_uw_ratio   = candle_range > 0 ? candle_upwick / candle_range : 0
+float candle_lw_ratio   = candle_range > 0 ? candle_lw / candle_range : 0
+
+bool  is_bullish     = close > open
+bool  is_bearish     = close < open
+bool  is_strong_bull = is_bullish and candle_wick_ratio >= 0.60 and close > high - candle_range * 0.1
+bool  is_strong_bear = is_bearish and candle_wick_ratio >= 0.60 and close < low + candle_range * 0.1
+bool  is_doji        = candle_body <= candle_range * 0.10
+bool  is_hammer      = candle_lw_ratio >= 2.0 * candle_wick_ratio and candle_uw_ratio <= candle_wick_ratio * 0.5
+bool  is_sstar       = candle_uw_ratio >= 2.0 * candle_wick_ratio and candle_lw_ratio <= candle_wick_ratio * 0.5
+
+// ─── BULLISH/BEARISH DISPLACEMENT ───
+bool dpl_bull = is_bullish and candle_wick_ratio >= 0.65 and candle_range > ta.sma(candle_range, 14) and close > high - candle_range * 0.15
+bool dpl_bear = is_bearish and candle_wick_ratio >= 0.65 and candle_range > ta.sma(candle_range, 14) and close < low + candle_range * 0.15
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 4: PRICE ACTION PATTERNS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ══ 4.1 PIN BAR / REJECTION ══
+bool bullish_pinbar = showPinbars and candle_lw_ratio >= pinbarStrength * candle_wick_ratio and candle_uw_ratio <= candle_wick_ratio * 0.5 and is_bullish
+bool bearish_pinbar = showPinbars and candle_uw_ratio >= pinbarStrength * candle_wick_ratio and candle_lw_ratio <= candle_wick_ratio * 0.5 and is_bearish
+bool bull_rejection = candle_lw_ratio > candle_uw_ratio and close > open and close > low + candle_range * 0.65
+bool bear_rejection = candle_uw_ratio > candle_lw_ratio and close < open and close < high - candle_range * 0.65
+
+// ══ 4.2 ENGULFING ══
+float avgRange = ta.sma(candle_range, 10)
+bool bull_engulfing = showEngulfing
+  ? is_bullish[1] and is_bearish[0]
+  and open <= close[1] and close >= open[1]
+  and candle_body > avgRange * engulfMinBody
+  : false
+bool bear_engulfing = showEngulfing
+  ? is_bearish[1] and is_bullish[0]
+  and open >= close[1] and close <= open[1]
+  and candle_body > avgRange * engulfMinBody
+  : false
+
+// ══ 4.3 INSIDE BAR ══
+bool inside_bar = showInsideBar ? high < high[1] and low > low[1] : false
+bool ib_bull_break = inside_bar and close > high[1]
+bool ib_bear_break = inside_bar and close < low[1]
+
+// ══ 4.4 OUTSIDE BAR ══
+bool outside_bar = showOutsideBar ? high > high[1] and low < low[1] : false
+bool obar_bull   = outside_bar and is_bullish
+bool obar_bear   = outside_bar and is_bearish
+
+// ══ 4.5 TWEEZER ══
+float eq_tolerance = candle_range * 0.001
+bool tweezer_top = showTweezer and math.abs(high - high[1]) <= eq_tolerance and is_bearish[0] and is_bullish[1] == false
+bool tweezer_bot = showTweezer and math.abs(low - low[1]) <= eq_tolerance and is_bullish[0] and is_bearish[1] == false
+
+// ══ 4.6 MORNING / EVENING STAR ══
+bool morning_star = showStarPatterns
+  ? is_bearish[2] and math.abs(close[1] - open[1]) < candle_range[2] * 0.30
+    and is_bullish[0] and close[0] > open[2] + candle_range[2] * 0.50
+  : false
+bool evening_star = showStarPatterns
+  ? is_bullish[2] and math.abs(close[1] - open[1]) < candle_range[2] * 0.30
+    and is_bearish[0] and close[0] < open[2] - candle_range[2] * 0.50
+  : false
+
+// ══ 4.7 THREE WHITE SOLDIERS / THREE BLACK CROWS ══
+bool three_ws = show3Soldiers
+  ? is_bullish[2] and is_bullish[1] and is_bullish[0]
+    and close[0] > close[1] and close[1] > close[2]
+    and close[0] > high[2] - candle_range[2] * 0.10
+  : false
+bool three_bc = show3Soldiers
+  ? is_bearish[2] and is_bearish[1] and is_bearish[0]
+    and close[0] < close[1] and close[1] < close[2]
+    and close[0] < low[2] + candle_range[2] * 0.10
+  : false
+
+// ══ 4.8 CANDLE CONFIRMATION SCORE ══
+int candle_conf_score = 0
+candle_conf_score += bullish_pinbar or bull_rejection  ? 1 : 0
+candle_conf_score += bull_engulfing                     ? 1 : 0
+candle_conf_score += dpl_bull                          ? 1 : 0
+candle_conf_score += bull_engulfing and dpl_bull       ? 1 : 0
+candle_conf_score += ib_bull_break                    ? 1 : 0
+candle_conf_score += obar_bull                        ? 1 : 0
+candle_conf_score += morning_star                     ? 1 : 0
+candle_conf_score += tweezer_bot                      ? 1 : 0
+candle_conf_score += three_ws                          ? 2 : 0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 5: SMC - MARKET STRUCTURE
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── SWING DETECTION ───
+var int   swingLookback = 20
+var float swingHigh     = high
+var float swingLow      = low
+var float prevSwingHigh = high
+var float prevSwingLow  = low
+var int   swingHighBar  = bar_index
+var int   swingLowBar  = bar_index
+var int   prevSwingHighBar = bar_index
+var int   prevSwingLowBar  = bar_index
+
+if bar_index > swingLookback
+    swingHigh := ta.highest(high, swingLookback)
+    swingLow  := ta.lowest(low, swingLookback)
+    swingHighBar := ta.highestbars(high, swingLookback)
+    swingLowBar  := ta.lowestbars(low, swingLookback)
+    prevSwingHighBar := ta.highestbars(high[swingLookback+1], swingLookback)
+    prevSwingLowBar  := ta.lowestbars(low[swingLookback+1], swingLookback)
+    prevSwingHigh := high[prevSwingHighBar]
+    prevSwingLow  := low[prevSwingLowBar]
+
+// ─── MARKET STRUCTURE ───
+bool hh = close > prevSwingHigh and high == swingHigh
+bool hl = low > prevSwingLow and high < prevSwingHigh
+bool lh = high < prevSwingHigh and low == swingLow
+bool ll = close < prevSwingLow and low == swingLow
+
+// Bullish Structure: HH > HL > HH > HL
+// Bearish Structure: LH > LL > LH > LL
+bool bullMS = hh or (hl and close > prevSwingHigh * 0.998)
+bool bearMS = lh or (ll and close < prevSwingHigh * 1.002)
+
+// ─── BOS - BREAK OF STRUCTURE ───
+var bool bullBOS = false
+var bool bearBOS = false
+var float bosLevel = na
+
+if bar_index > swingLookback
+    if showBOS_CHoCH and close > prevSwingHigh
+        bullBOS := true
+        bosLevel := prevSwingHigh
+        bearBOS := false
+    else if showBOS_CHoCH and close < prevSwingLow
+        bearBOS := true
+        bosLevel := prevSwingLow
+        bullBOS := false
+    else
+        bullBOS := bullBOS[1]
+        bearBOS := bearBOS[1]
+
+// ─── CHoCH - CHANGE OF CHARACTER ───
+var bool bullCHoCH = false
+var bool bearCHoCH = false
+
+if bar_index > swingLookback
+    if showBOS_CHoCH
+        // Bullish CHoCH: downtrend (LL→LH) then close breaks LH
+        bullCHoCH := ll and close > prevSwingHigh
+        bearCHoCH := hh and close < prevSwingLow
+    else
+        bullCHoCH := bullCHoCH[1]
+        bearCHoCH := bearCHoCH[1]
+
+// ─── MSS - MARKET STRUCTURE SHIFT ───
+var bool bullMSS = false
+var bool bearMSS = false
+
+if bar_index > swingLookback
+    if showMSS
+        // Bullish MSS: SSL Sweep + Bullish Displacement + Break LH
+        bullMSS := close < prevSwingLow and dpl_bull and close > prevSwingLow
+        bearMSS := close > prevSwingHigh and dpl_bear and close < prevSwingHigh
+    else
+        bullMSS := bullMSS[1]
+        bearMSS := bearMSS[1]
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 6: SMC - LIQUIDITY
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── SWING HIGH / LOW DETECTION ───
+var float[] swingHighs = array.new_float()
+var float[] swingLows  = array.new_float()
+var int[]   swingHighIdx = array.new_int()
+var int[]   swingLowIdx  = array.new_int()
+
+if bar_index > swingLookback and high == swingHigh
+    array.unshift(swingHighs, high)
+    array.unshift(swingHighIdx, bar_index)
+    if array.size(swingHighs) > 20
+        array.pop(swingHighs)
+        array.pop(swingHighIdx)
+    for i = 0 to array.size(swingHighs) - 2
+        if math.abs(array.get(swingHighs, 0) - array.get(swingHighs, i)) < atr(14) * 0.5
+            // Equal Highs = BSL (Buy Side Liquidity)
+            if showEQH_EQL
+                // Label at EQH
+                label.new(array.get(swingHighIdx, 0), array.get(swingHighs, 0),
+                  "BSL", color=C_LIQ_BEAR, textcolor=C_WHITE,
+                  style=label.style_label_down, size=size.tiny)
+
+if bar_index > swingLookback and low == swingLow
+    array.unshift(swingLows, low)
+    array.unshift(swingLowIdx, bar_index)
+    if array.size(swingLows) > 20
+        array.pop(swingLows)
+        array.pop(swingLowIdx)
+    for i = 0 to array.size(swingLows) - 2
+        if math.abs(array.get(swingLows, 0) - array.get(swingLows, i)) < atr(14) * 0.5
+            if showEQH_EQL
+                label.new(array.get(swingLowIdx, 0), array.get(swingLows, 0),
+                  "SSL", color=C_LIQ_BULL, textcolor=C_WHITE,
+                  style=label.style_label_up, size=size.tiny)
+
+// ─── LIQUIDITY SWEEP ───
+bool bullLS = false  // Price sweeps SSL then rejects UP
+bool bearLS = false  // Price sweeps BSL then rejects DOWN
+
+if showLiquidity and bar_index > swingLookback
+    if close < prevSwingLow and close > prevSwingLow - atr(14) * 0.5
+        bullLS := true
+    if close > prevSwingHigh and close < prevSwingHigh + atr(14) * 0.5
+        bearLS := true
+
+// ─── EQUAL HIGHS / LOWS ───
+bool eqh = false  // Equal Highs = BSL target
+bool eql = false  // Equal Lows  = SSL target
+if array.size(swingHighs) >= 2 and showEQH_EQL
+    eqh := math.abs(array.get(swingHighs, 0) - array.get(swingHighs, 1)) < atr(14) * 0.3
+if array.size(swingLows) >= 2 and showEQH_EQL
+    eql := math.abs(array.get(swingLows, 0) - array.get(swingLows, 1)) < atr(14) * 0.3
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 7: SMC - FAIR VALUE GAP (FVG)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── FVG DETECTION ───
+var box  bullFVGbox = na
+var box  bearFVGbox = na
+var line bullFVGmid = na
+var line bearFVGmid = na
+var float[] bullFVGtops  = array.new_float()
+var float[] bullFVGbots  = array.new_float()
+var float[] bearFVGtops  = array.new_float()
+var float[] bearFVGbots  = array.new_float()
+
+bool bullFVG = showFVG and low > high[2]  // Low[0] > High[2]
+bool bearFVG = showFVG and high < low[2]  // High[0] < Low[2]
+
+// Bullish FVG: Gap between High[2] and Low[0]
+if bullFVG
+    float fvgTop = low
+    float fvgBot = high[2]
+    float fvgMid = (fvgTop + fvgBot) / 2
+    
+    bullFVGbox := box.new(bar_index - 2, fvgTop, bar_index, fvgBot,
+      bgcolor=C_FVG_BULL, border_color=color.new(C_BULL, 30), border_width=1)
+    
+    bullFVGmid := line.new(bar_index - 2, fvgMid, bar_index, fvgMid,
+      color=color.new(C_BULL, 50), style=line.style_dashed, width=1)
+    
+    array.unshift(bullFVGtops, fvgTop)
+    array.unshift(bullFVGbots, fvgBot)
+    
+    if showOBText
+        label.new(bar_index - 1, fvgMid, "FVG+",
+          color=C_FVG_BULL, textcolor=C_WHITE, style=label.style_label_left, size=size.tiny)
+
+// Bearish FVG: Gap between Low[2] and High[0]
+if bearFVG
+    float fvgTop = low[2]
+    float fvgBot = high
+    float fvgMid = (fvgTop + fvgBot) / 2
+    
+    bearFVGbox := box.new(bar_index - 2, fvgTop, bar_index, fvgBot,
+      bgcolor=C_FVG_BEAR, border_color=color.new(C_BEAR, 30), border_width=1)
+    
+    bearFVGmid := line.new(bar_index - 2, fvgMid, bar_index, fvgMid,
+      color=color.new(C_BEAR, 50), style=line.style_dashed, width=1)
+    
+    array.unshift(bearFVGtops, fvgTop)
+    array.unshift(bearFVGbots, fvgBot)
+    
+    if showOBText
+        label.new(bar_index - 1, fvgMid, "FVG-",
+          color=C_FVG_BEAR, textcolor=C_WHITE, style=label.style_label_left, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 8: SMC - ORDER BLOCKS (OB)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── ORDER BLOCK DETECTION ───
+var box bullOBbox = na
+var box bearOBbox = na
+var float bullOBtop = na
+var float bullOBbot = na
+var float bearOBtop = na
+var float bearOBbot = na
+
+bool bullOB = showOB and is_bearish[1] and dpl_bull  // Bearish candle before bullish displacement
+bool bearOB = showOB and is_bullish[1] and dpl_bear  // Bullish candle before bearish displacement
+
+if bullOB
+    bullOBtop := open[1]
+    bullOBbot := low[1]
+    bullOBbox := box.new(bar_index - 1, bullOBtop, bar_index, bullOBbot,
+      bgcolor=C_OB_BULL, border_color=color.new(C_BLUE, 40), border_width=1)
+    if showOBText
+        label.new(bar_index - 1, (bullOBtop + bullOBbot) / 2, "OB+",
+          color=C_OB_BULL, textcolor=C_WHITE, style=label.style_label_left, size=size.tiny)
+
+if bearOB
+    bearOBtop := high[1]
+    bearOBbot := open[1]
+    bearOBbox := box.new(bar_index - 1, bearOBtop, bar_index, bearOBbot,
+      bgcolor=C_OB_BEAR, border_color=color.new(C_ORANGE, 40), border_width=1)
+    if showOBText
+        label.new(bar_index - 1, (bearOBtop + bearOBbot) / 2, "OB-",
+          color=C_OB_BEAR, textcolor=C_WHITE, style=label.style_label_left, size=size.tiny)
+
+// ─── BREAKER BLOCK ───
+var box bullBBbox = na
+var box bearBBbox = na
+
+// Bullish Breaker: Bearish OB broken to upside, becomes support
+if showBreaker and showOB and not na(bullOBbox)
+    if close > bullOBtop
+        bullBBbox := box.new(bar_index - 1, bullOBtop, bar_index, bullOBbot,
+          bgcolor=C_BB_BULL, border_color=color.new(C_BULL, 50), border_width=2)
+        if showOBText
+            label.new(bar_index - 1, (bullOBtop + bullOBbot) / 2, "BB+",
+              color=C_BB_BULL, textcolor=C_WHITE, style=label.style_label_left, size=size.tiny)
+
+// Bearish Breaker: Bullish OB broken to downside, becomes resistance
+if showBreaker and showOB and not na(bearOBbox)
+    if close < bearOBbot
+        bearBBbox := box.new(bar_index - 1, bearOBtop, bar_index, bearOBbot,
+          bgcolor=C_BB_BEAR, border_color=color.new(C_BEAR, 50), border_width=2)
+        if showOBText
+            label.new(bar_index - 1, (bearOBtop + bearOBbot) / 2, "BB-",
+              color=C_BB_BEAR, textcolor=C_WHITE, style=label.style_label_left, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 9: SMC - INVERSE FVG (IFVG)
+// ══════════════════════════════════════════════════════════════════════════════
+
+var box bullIFVGbox = na
+var box bearIFVGbox = na
+
+// Bullish IFVG: Bearish FVG gets swept and price returns above it
+if showIFVG and array.size(bullFVGbots) > 0 and close > array.get(bullFVGbots, 0)
+    float ifvgTop = array.get(bullFVGbots, 0)
+    float ifvgBot = array.get(bullFVGtops, 0)
+    bullIFVGbox := box.new(bar_index - 3, ifvgTop, bar_index, ifvgBot,
+      bgcolor=color.new(C_TURQ, 80), border_color=color.new(C_TURQ, 40), border_width=1)
+    if showOBText
+        label.new(bar_index - 2, (ifvgTop + ifvgBot) / 2, "IFVG+",
+          color=C_TURQ, textcolor=C_WHITE, style=label.style_label_left, size=size.tiny)
+
+// Bearish IFVG: Bullish FVG gets swept and price returns below it
+if showIFVG and array.size(bearFVGtops) > 0 and close < array.get(bearFVGtops, 0)
+    float ifvgTop2 = array.get(bearFVGtops, 0)
+    float ifvgBot2 = array.get(bearFVGbots, 0)
+    bearIFVGbox := box.new(bar_index - 3, ifvgTop2, bar_index, ifvgBot2,
+      bgcolor=color.new(C_PURPLE, 80), border_color=color.new(C_PURPLE, 40), border_width=1)
+    if showOBText
+        label.new(bar_index - 2, (ifvgTop2 + ifvgBot2) / 2, "IFVG-",
+          color=C_PURPLE, textcolor=C_WHITE, style=label.style_label_left, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 10: ICT - KILLZONES
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── SESSION TIME DETECTION ───
+var int sess_london_start = na
+var int sess_london_end   = na
+var int sess_ny_start    = na
+var int sess_ny_end      = na
+var int sess_asia_start  = na
+var int sess_asia_end    = na
+
+if barstate.isfirst
+    // Parse time strings - simplified for demo
+    sess_london_start := 8 * 60   // 08:00 UTC
+    sess_london_end   := 9 * 60   // 09:00 UTC
+    sess_ny_start     := 13 * 60 + 30  // 13:30 UTC-5 = 18:30 UTC
+    sess_ny_end       := 14 * 60 + 30  // 14:30 UTC-5 = 19:30 UTC
+    sess_asia_start   := 0 * 60   // 00:00 UTC
+    sess_asia_end     := 9 * 60   // 09:00 UTC
+
+int minuteOfDay = (hour * 60 + minute)
+bool inLondonKZ = showKillzones and minuteOfDay >= sess_london_start and minuteOfDay <= sess_london_end
+bool inNYKZ     = showKillzones and minuteOfDay >= sess_ny_start and minuteOfDay <= sess_ny_end
+bool inAsiaKZ    = showKillzones and minuteOfDay >= sess_asia_start and minuteOfDay <= sess_asia_end
+
+// ─── KILLZONE RANGE LINES ───
+var line londonHigh = na
+var line londonLow  = na
+var line nyHigh     = na
+var line nyLow      = na
+
+float londonRangeHigh = 0.0
+float londonRangeLow  = 0.0
+float nyRangeHigh     = 0.0
+float nyRangeLow      = 0.0
+
+// Track London KZ range
+if inLondonKZ
+    londonRangeHigh := math.max(high, nz(londonRangeHigh))
+    londonRangeLow  := math.min(low, nz(londonRangeLow, high))
+    
+    if showKillzoneLines
+        line.new(bar_index, londonRangeHigh, bar_index + 1, londonRangeHigh,
+          color=color.new(C_LKZ_FILL, 40), style=line.style_dashed, width=1)
+        line.new(bar_index, londonRangeLow, bar_index + 1, londonRangeLow,
+          color=color.new(C_LKZ_FILL, 40), style=line.style_dashed, width=1)
+
+// Track NY KZ range
+if inNYKZ
+    nyRangeHigh := math.max(high, nz(nyRangeHigh))
+    nyRangeLow  := math.min(low, nz(nyRangeLow, high))
+    
+    if showKillzoneLines
+        line.new(bar_index, nyRangeHigh, bar_index + 1, nyRangeHigh,
+          color=color.new(C_NYKZ_FILL, 40), style=line.style_dashed, width=1)
+        line.new(bar_index, nyRangeLow, bar_index + 1, nyRangeLow,
+          color=color.new(C_NYKZ_FILL, 40), style=line.style_dashed, width=1)
+
+// ─── KILLZONE LABELS ───
+if barstate.islast and showKillzones
+    if not na(londonRangeHigh)
+        label.new(bar_index + 2, londonRangeHigh, "LKZ High",
+          color=C_LKZ_FILL, textcolor=color.black, style=label.style_label_up, size=size.tiny)
+        label.new(bar_index + 2, londonRangeLow, "LKZ Low",
+          color=C_LKZ_FILL, textcolor=color.black, style=label.style_label_down, size=size.tiny)
+    if not na(nyRangeHigh)
+        label.new(bar_index + 2, nyRangeHigh, "NYKZ High",
+          color=C_NYKZ_FILL, textcolor=C_WHITE, style=label.style_label_up, size=size.tiny)
+        label.new(bar_index + 2, nyRangeLow, "NYKZ Low",
+          color=C_NYKZ_FILL, textcolor=C_WHITE, style=label.style_label_down, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 11: ICT - OTE (OPTIMAL TRADE ENTRY) & FIBONACCI
+// ══════════════════════════════════════════════════════════════════════════════
+
+var line ote618 = na
+var line ote786 = na
+var line ote382 = na
+
+if showOTE and bar_index > swingLookback
+    float swingRange = swingHigh - swingLow
+    
+    // OTE Zones: 38.2%, 61.8%, 78.6% retracement
+    ote382 := swingLow + swingRange * 0.382
+    ote618 := swingLow + swingRange * 0.618
+    ote786 := swingLow + swingRange * 0.786
+    
+    color oteColor = color.new(C_BLUE, 60)
+    
+    line.new(bar_index, ote382, bar_index + 1, ote382,
+      color=oteColor, style=line.style_dotted, width=1)
+    line.new(bar_index, ote618, bar_index + 1, ote618,
+      color=color.new(C_BLUE, 40), style=line.style_dashed, width=2)
+    line.new(bar_index, ote786, bar_index + 1, ote786,
+      color=oteColor, style=line.style_dotted, width=1)
+    
+    if barstate.islast
+        label.new(bar_index + 2, ote618, "OTE 62%",
+          color=color.new(C_BLUE, 30), textcolor=C_BLUE, style=label.style_label_left, size=size.tiny)
+        label.new(bar_index + 2, ote786, "OTE 79%",
+          color=color.new(C_BLUE, 30), textcolor=C_BLUE, style=label.style_label_left, size=size.tiny)
+        label.new(bar_index + 2, ote382, "OTE 38%",
+          color=color.new(C_BLUE, 30), textcolor=C_BLUE, style=label.style_label_left, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 12: ICT - DAILY/WEEKLY LEVELS (PDH/PDL, S1-S2, R1-R2)
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── DAILY PIVOTS ───
+float dS1 = na, dS2 = na, dS3 = na
+float dR1 = na, dR2 = na, dR3 = na
+float dPP  = na
+float pdh  = na, pdl = na
+
+if showDailyLevels and barstate.isfirst
+    pdh := request.security(syminfo.tickerid, "D", high[1])
+    pdl := request.security(syminfo.tickerid, "D", low[1])
+    float pdClose = request.security(syminfo.tickerid, "D", close[1])
+    dPP := (pdh + pdl + pdClose) / 3
+    dR1 := 2 * dPP - pdl
+    dS1 := 2 * dPP - pdh
+    dR2 := dPP + (pdh - pdl)
+    dS2 := dPP - (pdh - pdl)
+    dR3 := pdh + 2 * (dPP - pdl)
+    dS3 := pdl - 2 * (pdh - dPP)
+
+// ─── DAILY LEVEL LINES ───
+if showDailyLevels and barstate.islast
+    // PDH/PDL
+    line.new(bar_index, pdh, bar_index + 50, pdh, color=color.new(C_BEAR, 50), style=line.style_dashed, width=1)
+    line.new(bar_index, pdl, bar_index + 50, pdl, color=color.new(C_BULL, 50), style=line.style_dashed, width=1)
+    // R1/S1
+    line.new(bar_index, dR1, bar_index + 50, dR1, color=color.new(C_BEAR, 60), style=line.style_dotted, width=1)
+    line.new(bar_index, dS1, bar_index + 50, dS1, color=color.new(C_BULL, 60), style=line.style_dotted, width=1)
+    // R2/S2
+    line.new(bar_index, dR2, bar_index + 50, dR2, color=color.new(C_BEAR, 70), style=line.style_dotted, width=1)
+    line.new(bar_index, dS2, bar_index + 50, dS2, color=color.new(C_BULL, 70), style=line.style_dotted, width=1)
+    // PP
+    line.new(bar_index, dPP, bar_index + 50, dPP, color=color.new(C_YELLOW, 50), style=line.style_solid, width=2)
+    
+    label.new(bar_index + 2, pdh, "PDH", color=color.new(C_BEAR, 20), textcolor=C_BEAR, style=label.style_label_up, size=size.tiny)
+    label.new(bar_index + 2, pdl, "PDL", color=color.new(C_BULL, 20), textcolor=C_BULL, style=label.style_label_down, size=size.tiny)
+    label.new(bar_index + 2, dR1, "R1", color=color.new(C_BEAR, 20), textcolor=C_BEAR, style=label.style_label_up, size=size.tiny)
+    label.new(bar_index + 2, dS1, "S1", color=color.new(C_BULL, 20), textcolor=C_BULL, style=label.style_label_down, size=size.tiny)
+    label.new(bar_index + 2, dPP, "PP", color=color.new(C_YELLOW, 20), textcolor=C_YELLOW, style=label.style_label_left, size=size.tiny)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 13: ICT - JUDAS SWING & PO3/AMD
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── JUDAS SWING DETECTION ───
+var bool bullJudas = false
+var bool bearJudas = false
+
+if showJudasSwing and bar_index > swingLookback
+    // Bullish Judas: Price extends down, sweeps SSL, then rejects with displacement
+    bullJudas := close < prevSwingLow and dpl_bull and close > prevSwingLow
+    // Bearish Judas: Price extends up, sweeps BSL, then rejects with displacement
+    bearJudas := close > prevSwingHigh and dpl_bear and close < prevSwingHigh
+
+// ─── PO3 / AMD DETECTION ───
+var int amdPhase = 0  // 0=Accumulation, 1=Manipulation, 2=Distribution
+var bool po3Bull = false
+var bool po3Bear = false
+
+if showPO3 and bar_index > swingLookback
+    // Phase detection for PO3
+    // Accumulation: low volume, tight range
+    // Manipulation: spike down (bull) or up (bear), sweep liquidity
+    // Distribution: strong move away with displacement
+    if amdPhase == 0 and volume < ta.sma(volume, 20) * 0.5
+        amdPhase := 1
+    if amdPhase == 1 and bullLS
+        amdPhase := 2
+    if amdPhase == 2 and dpl_bull
+        po3Bull := true
+        amdPhase := 0
+    if amdPhase == 1 and bearLS
+        amdPhase := 3
+    if amdPhase == 3 and dpl_bear
+        po3Bear := true
+        amdPhase := 0
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 14: SNIPER CORE - INDICATORS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── EMA RIBBON 9/21 ───
+float ema9  = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+bool  emaBull = ema9 > ema21
+bool  emaBear = ema9 < ema21
+
+// ─── VWAP ───
+float vwapVal = ta.vwap(hlc3)
+bool  vwapAbove = close > vwapVal
+bool  vwapBelow = close < vwapVal
+
+// ─── ADX ───
+float adxVal = ta.dmi(14, 14)[1]  // ADX from previous bar for signal stability
+bool  adxStrong = adxVal > 25
+
+// ─── RSI ───
+float rsi14 = ta.rsi(close, 14)
+float rsi5m = request.security(syminfo.tickerid, "5", ta.rsi(close, 14))
+bool  rsiBull = rsi14 > 50
+bool  rsiBear = rsi14 < 50
+
+// ─── MACD ───
+float [macdMain, macdSig, macdHist] = ta.macd(close, 12, 26, 9)
+bool  macdBull = macdMain > macdSig
+bool  macdBear = macdMain < macdSig
+
+// ─── ATR ───
+float atr14 = ta.atr(14)
+
+// ─── VOLUME ───
+float volAvg = ta.sma(volume, 20)
+bool  volHigh = volume > volAvg
+
+// ─── HTF BIAS ───
+float htfClose = request.security(syminfo.tickerid, htfTimeframe, close)
+float htfEma9  = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, 9))
+float htfEma21 = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, 21))
+bool  htfBullBias = htfClose > htfEma9 and htfEma9 > htfEma21
+bool  htfBearBias = htfClose < htfEma9 and htfEma9 < htfEma21
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 15: SNIPER - DUAL SCORE SYSTEM
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── SNIPER BULL SCORE (7 factors) ───
+float sniperBullScore = 0.0
+sniperBullScore += vwapAbove            ? 1.0 : 0.0
+sniperBullScore += rsiBull             ? 1.0 : 0.0
+sniperBullScore += macdBull            ? 1.0 : 0.0
+sniperBullScore += emaBull             ? 1.0 : 0.0
+sniperBullScore += adxStrong and close > ema9  ? 1.0 : 0.0
+sniperBullScore += volHigh and is_bullish  ? 1.0 : 0.0
+sniperBullScore += rsi5m > 50          ? 1.0 : 0.0
+
+float sniperBullPct = (sniperBullScore / 7.0) * 100
+
+// ─── SNIPER BEAR SCORE (7 factors) ───
+float sniperBearScore = 0.0
+sniperBearScore += vwapBelow            ? 1.0 : 0.0
+sniperBearScore += rsiBear             ? 1.0 : 0.0
+sniperBearScore += macdBear            ? 1.0 : 0.0
+sniperBearScore += emaBear             ? 1.0 : 0.0
+sniperBearScore += adxStrong and close < ema9  ? 1.0 : 0.0
+sniperBearScore += volHigh and is_bearish  ? 1.0 : 0.0
+sniperBearScore += rsi5m < 50          ? 1.0 : 0.0
+
+float sniperBearPct = (sniperBearScore / 7.0) * 100
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 16: SMC CONFLOW SCORE
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── SMC BUY SCORE (13 factors) ───
+int smcBuyScore = 0
+smcBuyScore += htfBullBias         ? 1 : 0   // HTF Bullish Bias
+smcBuyScore += close < (swingHigh + swingLow) / 2  ? 1 : 0  // Discount Zone
+smcBuyScore += bullLS              ? 1 : 0   // SSL Sweep
+smcBuyScore += eql                 ? 1 : 0   // Equal Lows
+smcBuyScore += bullEngulfing       ? 1 : 0   // Bullish Engulfing
+smcBuyScore += bullish_pinbar      ? 1 : 0   // Bullish Pinbar
+smcBuyScore += bull_rejection      ? 1 : 0   // Bullish Rejection
+smcBuyScore += dpl_bull            ? 1 : 0   // Bullish Displacement
+smcBuyScore += bullCHoCH           ? 1 : 0   // Bullish CHoCH
+smcBuyScore += bullMSS             ? 1 : 0   // Bullish MSS
+smcBuyScore += bullBOS             ? 1 : 0   // Bullish BOS
+smcBuyScore += bullFVG             ? 1 : 0   // Bullish FVG
+smcBuyScore += bullOB              ? 1 : 0   // Bullish OB
+
+// ─── SMC SELL SCORE (13 factors) ───
+int smcSellScore = 0
+smcSellScore += htfBearBias         ? 1 : 0  // HTF Bearish Bias
+smcSellScore += close > (swingHigh + swingLow) / 2  ? 1 : 0  // Premium Zone
+smcSellScore += bearLS              ? 1 : 0  // BSL Sweep
+smcSellScore += eqh                 ? 1 : 0  // Equal Highs
+smcSellScore += bearEngulfing       ? 1 : 0  // Bearish Engulfing
+smcSellScore += bearish_pinbar      ? 1 : 0  // Bearish Pinbar
+smcSellScore += bear_rejection      ? 1 : 0  // Bearish Rejection
+smcSellScore += dpl_bear            ? 1 : 0  // Bearish Displacement
+smcSellScore += bearCHoCH           ? 1 : 0  // Bearish CHoCH
+smcSellScore += bearMSS             ? 1 : 0  // Bearish MSS
+smcSellScore += bearBOS             ? 1 : 0  // Bearish BOS
+smcSellScore += bearFVG             ? 1 : 0  // Bearish FVG
+smcSellScore += bearOB              ? 1 : 0  // Bearish OB
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 17: COMBINED SIGNAL LOGIC
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── MARKET BIAS ───
+string marketBias = bullBOS ? "BULL TREND" : bearBOS ? "BEAR TREND" 
+  : sniperBullPct - sniperBearPct >= 40 ? "STRONG BULL" 
+  : sniperBearPct - sniperBullPct >= 40 ? "STRONG BEAR" 
+  : sniperBullPct > sniperBearPct ? "MILD BULL" : "MILD BEAR"
+
+color biasColor = marketBias == "STRONG BULL" or marketBias == "BULL TREND" ? C_BULL 
+  : marketBias == "STRONG BEAR" or marketBias == "BEAR TREND" ? C_BEAR : C_GRAY
+
+// ─── TRADE STATE ───
+var int   tradeState    = 0   // 0=none, 1=long, -1=short
+var float entryPrice     = 0.0
+var float stopLoss      = 0.0
+var float takeProfit1    = 0.0
+var float takeProfit2    = 0.0
+var float takeProfit3    = 0.0
+var float takeProfit4    = 0.0
+var float takeProfit5    = 0.0
+var bool  tp1Hit        = false
+var bool  tp2Hit        = false
+var bool  tp3Hit        = false
+var bool  tp4Hit        = false
+var bool  tp5Hit        = false
+var bool  slHit         = false
+var int   signalStrength = 0   // Combined score for AI decision
+var string signalLabel   = "WAIT"
+var string signalReason  = ""
+
+// ─── BUY CONDITIONS ───
+bool sniperBuy = ta.crossover(ema9, ema21) and adxStrong
+bool smcBuy    = smcBuyScore >= scoreMinValid
+bool paBuy      = bullish_pinbar or bull_engulfing or bull_rejection or dpl_bull
+bool fullBuy    = sniperBuy and smcBuy and paBuy and (useConfluence ? htfBullBias : true)
+
+if fullBuy and tradeState == 0
+    tradeState    := 1
+    signalStrength := smcBuyScore + int(sniperBullScore)
+    signalLabel   := smcBuyScore >= scoreMinStrong ? "SNIPER BUY" : "BUY"
+    entryPrice    := close
+    float risk    := atr14 * atrMultiplier
+    stopLoss      := entryPrice - risk
+    takeProfit1   := entryPrice + risk * tp1Mult
+    takeProfit2   := entryPrice + risk * tp2Mult
+    takeProfit3   := entryPrice + risk * tp3Mult
+    takeProfit4   := entryPrice + risk * tp4Mult
+    takeProfit5   := entryPrice + risk * tp5Mult
+    tp1Hit := false, tp2Hit := false, tp3Hit := false, tp4Hit := false, tp5Hit := false, slHit := false
+
+// ─── SELL CONDITIONS ───
+bool sniperSell = ta.crossunder(ema9, ema21) and adxStrong
+bool smcSell    = smcSellScore >= scoreMinValid
+bool paSell      = bearish_pinbar or bear_engulfing or bear_rejection or dpl_bear
+bool fullSell    = sniperSell and smcSell and paSell and (useConfluence ? htfBearBias : true)
+
+if fullSell and tradeState == 0
+    tradeState    := -1
+    signalStrength := smcSellScore + int(sniperBearScore)
+    signalLabel   := smcSellScore >= scoreMinStrong ? "SNIPER SELL" : "SELL"
+    entryPrice    := close
+    float risk    := atr14 * atrMultiplier
+    stopLoss      := entryPrice + risk
+    takeProfit1   := entryPrice - risk * tp1Mult
+    takeProfit2   := entryPrice - risk * tp2Mult
+    takeProfit3   := entryPrice - risk * tp3Mult
+    takeProfit4   := entryPrice - risk * tp4Mult
+    takeProfit5   := entryPrice - risk * tp5Mult
+    tp1Hit := false, tp2Hit := false, tp3Hit := false, tp4Hit := false, tp5Hit := false, slHit := false
+
+// ─── TARGET HIT DETECTION ───
+if tradeState == 1
+    if high >= takeProfit1 and not tp1Hit    := true
+    if high >= takeProfit2 and not tp2Hit    := true
+    if high >= takeProfit3 and not tp3Hit    := true
+    if high >= takeProfit4 and not tp4Hit    := true
+    if high >= takeProfit5 and not tp5Hit    := true
+    if low <= stopLoss                       := true
+    if slHit or tp5Hit
+        tradeState := 0
+
+if tradeState == -1
+    if low <= takeProfit1 and not tp1Hit    := true
+    if low <= takeProfit2 and not tp2Hit    := true
+    if low <= takeProfit3 and not tp3Hit    := true
+    if low <= takeProfit4 and not tp4Hit    := true
+    if low <= takeProfit5 and not tp5Hit    := true
+    if high >= stopLoss                     := true
+    if slHit or tp5Hit
+        tradeState := 0
+
+// ─── SIGNAL REASON CONSTRUCTION ───
+if fullBuy or fullSell
+    string parts = ""
+    if sniperBuy or sniperSell           parts += "SNIPER "
+    if bullFVG or bearFVG               parts += "|FVG "
+    if bullOB or bearOB                 parts += "|OB "
+    if bullEngulfing or bearEngulfing   parts += "|ENG "
+    if bullish_pinbar or bearish_pinbar  parts += "|PIN "
+    if bullMSS or bearMSS               parts += "|MSS "
+    if bullBOS or bearBOS               parts += "|BOS "
+    if bullLS or bearLS                 parts += "|LS "
+    if dpl_bull or dpl_bear             parts += "|DPL "
+    if po3Bull or po3Bear               parts += "|PO3 "
+    if bullJudas or bearJudas           parts += "|JS "
+    signalReason := parts
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 18: VISUALS - EMA RIBBON
+// ══════════════════════════════════════════════════════════════════════════════
+
+if showRibbon
+    plot(ema9, color=color.new(ema9Color, 100 - ribbonOpacity), title="EMA 9", linewidth=2)
+    plot(ema21, color=color.new(ema21Color, 100 - ribbonOpacity), title="EMA 21", linewidth=2)
+    plot(ema9, color=color.new(C_BULL, 0), title="EMA 9 Fill Ref", display=display.none)
+    plot(ema21, color=color.new(C_BEAR, 0), title="EMA 21 Fill Ref", display=display.none)
+
+    // Ribbon fill between EMAs
+    fill(plot(na, title=""), plot(na, title=""), 
+      color = emaBull ? color.new(C_BULL, 100 - ribbonOpacity) : color.new(C_BEAR, 100 - ribbonOpacity))
+
+if showVWAP
+    plot(vwapVal, color=vwapAbove ? C_BULL : C_BEAR, linewidth=3, title="VWAP")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 19: VISUALS - PATTERN LABELS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── PRICE ACTION LABELS ───
+if showPinbars
+    if bullish_pinbar
+        label.new(bar_index, low, "BPB", color=C_BULL, textcolor=C_WHITE, 
+          style=label.style_label_up, size=size.tiny)
+    if bearish_pinbar
+        label.new(bar_index, high, "SPB", color=C_BEAR, textcolor=C_WHITE, 
+          style=label.style_label_down, size=size.tiny)
+
+if showEngulfing
+    if bull_engulfing
+        label.new(bar_index, low, "BE", color=C_BULL, textcolor=C_WHITE, 
+          style=label.style_label_up, size=size.tiny)
+    if bear_engulfing
+        label.new(bar_index, high, "BEE", color=C_BEAR, textcolor=C_WHITE, 
+          style=label.style_label_down, size=size.tiny)
+
+if showInsideBar
+    if inside_bar
+        label.new(bar_index, high, "IB", color=C_BLUE, textcolor=C_WHITE, 
+          style=label.style_label_down, size=size.tiny)
+
+if showOutsideBar
+    if outside_bar
+        label.new(bar_index, high, "OBAR", color=C_ORANGE, textcolor=C_WHITE, 
+          style=label.style_label_down, size=size.tiny)
+
+if showTweezer
+    if tweezer_top
+        label.new(bar_index, high, "TT", color=C_BEAR, textcolor=C_WHITE, 
+          style=label.style_label_down, size=size.tiny)
+    if tweezer_bot
+        label.new(bar_index, low, "TB", color=C_BULL, textcolor=C_WHITE, 
+          style=label.style_label_up, size=size.tiny)
+
+// ─── SMC LABELS ───
+if showBOS_CHoCH
+    if bullBOS
+        label.new(bar_index, close, "BOS", color=C_BULL, textcolor=C_WHITE, 
+          style=label.style_label_up, size=size.small)
+    if bearBOS
+        label.new(bar_index, close, "BOS", color=C_BEAR, textcolor=C_WHITE, 
+          style=label.style_label_down, size=size.small)
+    if bullCHoCH
+        label.new(bar_index, close, "CHoCH", color=C_TURQ, textcolor=C_WHITE, 
+          style=label.style_label_up, size=size.small)
+    if bearCHoCH
+        label.new(bar_index, close, "CHoCH", color=C_PURPLE, textcolor=C_WHITE, 
+          style=label.style_label_down, size=size.small)
+
+if showMSS
+    if bullMSS
+        label.new(bar_index, close, "MSS", color=C_BULL, textcolor=C_WHITE, 
+          style=label.style_label_up, size=size.small)
+    if bearMSS
+        label.new(bar_index, close, "MSS", color=C_BEAR, textcolor=C_WHITE, 
+          style=label.style_label_down, size=size.small)
+
+if showLiquidity
+    if bullLS
+        label.new(bar_index, close, "SSL-SWEEP", color=C_BULL, textcolor=C_WHITE, 
+          style=label.style_label_up, size=size.tiny)
+    if bearLS
+        label.new(bar_index, close, "BSL-SWEEP", color=C_BEAR, textcolor=C_WHITE, 
+          style=label.style_label_down, size=size.tiny)
+
+if showJudasSwing
+    if bullJudas
+        label.new(bar_index, low, "JS-BULL", color=C_YELLOW, textcolor=color.black, 
+          style=label.style_label_up, size=size.tiny)
+    if bearJudas
+        label.new(bar_index, high, "JS-BEAR", color=C_YELLOW, textcolor=color.black, 
+          style=label.style_label_down, size=size.tiny)
+
+if showPO3
+    if po3Bull
+        label.new(bar_index, low, "AMD-BULL", color=C_TURQ, textcolor=color.black, 
+          style=label.style_label_up, size=size.tiny)
+    if po3Bear
+        label.new(bar_index, high, "AMD-BEAR", color=C_PURPLE, textcolor=C_WHITE, 
+          style=label.style_label_down, size=size.tiny)
+
+// ─── TRADE SIGNAL LABELS ───
+plotshape(fullBuy, title="BUY Signal", text="BUY", style=shape.labelup, 
+  location=location.belowbar, color=C_BULL, textcolor=C_WHITE, size=size.small)
+plotshape(fullSell, title="SELL Signal", text="SELL", style=shape.labeldown, 
+  location=location.abovebar, color=C_BEAR, textcolor=C_WHITE, size=size.small)
+
+// ─── CANDLE COLORS ───
+color candleColor = na
+if fullBuy or fullSell
+    candleColor := fullBuy ? C_BULL : C_BEAR
+else if bullLS or bearLS
+    candleColor := C_YELLOW
+else if bullFVG or bearFVG
+    candleColor := C_TURQ
+else if bullEngulfing or bearEngulfing
+    candleColor := C_ORANGE
+
+barcolor(candleColor)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 20: VISUALS - TRADE LINES & LABELS
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── TRADE LINE OBJECTS ───
+var line lineEntry  = na
+var line lineSL     = na
+var line lineTP1    = na
+var line lineTP2    = na
+var line lineTP3    = na
+var line lineTP4    = na
+var line lineTP5    = na
+
+var label lbEntry  = na
+var label lbSL     = na
+var label lbTP1    = na
+var label lbTP2    = na
+var label lbTP3    = na
+var label lbTP4    = na
+var label lbTP5    = na
+var label lbSignal = na
+
+if fullBuy or fullSell
+    // Delete previous lines
+    line.delete(lineEntry)
+    line.delete(lineSL)
+    line.delete(lineTP1)
+    line.delete(lineTP2)
+    line.delete(lineTP3)
+    line.delete(lineTP4)
+    line.delete(lineTP5)
+    
+    // Draw new lines
+    lineEntry := line.new(bar_index, entryPrice, bar_index + 30, entryPrice,
+      color=C_BLUE, width=2, extend=extend.right)
+    lineSL    := line.new(bar_index, stopLoss, bar_index + 30, stopLoss,
+      color=C_BEAR, width=2, extend=extend.right)
+    lineTP1   := line.new(bar_index, takeProfit1, bar_index + 30, takeProfit1,
+      color=color.new(C_BULL, 30), style=line.style_dashed, width=1, extend=extend.right)
+    lineTP2   := line.new(bar_index, takeProfit2, bar_index + 30, takeProfit2,
+      color=color.new(C_BULL, 30), style=line.style_dashed, width=1, extend=extend.right)
+    lineTP3   := line.new(bar_index, takeProfit3, bar_index + 30, takeProfit3,
+      color=color.new(C_BULL, 30), style=line.style_dashed, width=1, extend=extend.right)
+    lineTP4   := line.new(bar_index, takeProfit4, bar_index + 30, takeProfit4,
+      color=color.new(C_BULL, 50), width=2, extend=extend.right)
+    lineTP5   := line.new(bar_index, takeProfit5, bar_index + 30, takeProfit5,
+      color=color.new(C_BULL, 70), width=3, extend=extend.right)
+    
+    // Update label positions
+    int labelX = bar_index + labelOffsetBars
+    
+    label.delete(lbEntry)
+    label.delete(lbSL)
+    label.delete(lbTP1)
+    label.delete(lbTP2)
+    label.delete(lbTP3)
+    label.delete(lbTP4)
+    label.delete(lbTP5)
+    label.delete(lbSignal)
+    
+    string dirStr = fullBuy ? "LONG" : "SHORT"
+    string scoreStr = str.tostring(signalStrength) + "/20"
+    lbSignal := label.new(labelX, fullBuy ? entryPrice - atr14 * 2 : entryPrice + atr14 * 2,
+      signalLabel + " | " + scoreStr + "\n" + signalReason,
+      color=fullBuy ? C_BULL : C_BEAR, textcolor=C_WHITE,
+      style=label.style_label_left, size=labelTextSize, text_halign=text.align_left)
+    
+    lbEntry := label.new(labelX, entryPrice, "EP: " + str.tostring(entryPrice, "#.##"),
+      color=C_BLUE, textcolor=C_WHITE, style=label.style_label_left, size=labelTextSize)
+    lbSL    := label.new(labelX, stopLoss, "SL: " + str.tostring(stopLoss, "#.##"),
+      color=C_BEAR, textcolor=C_WHITE, style=label.style_label_left, size=labelTextSize)
+    lbTP1   := label.new(labelX, takeProfit1, "TP1: " + str.tostring(takeProfit1, "#.##"),
+      color=C_BULL, textcolor=C_WHITE, style=label.style_label_left, size=labelTextSize)
+    lbTP2   := label.new(labelX, takeProfit2, "TP2: " + str.tostring(takeProfit2, "#.##"),
+      color=C_BULL, textcolor=C_WHITE, style=label.style_label_left, size=labelTextSize)
+    lbTP3   := label.new(labelX, takeProfit3, "TP3: " + str.tostring(takeProfit3, "#.##"),
+      color=C_BULL, textcolor=C_WHITE, style=label.style_label_left, size=labelTextSize)
+    lbTP4   := label.new(labelX, takeProfit4, "TP4: " + str.tostring(takeProfit4, "#.##"),
+      color=C_BULL, textcolor=C_WHITE, style=label.style_label_left, size=labelTextSize)
+    lbTP5   := label.new(labelX, takeProfit5, "TP5: " + str.tostring(takeProfit5, "#.##"),
+      color=C_BULL, textcolor=C_WHITE, style=label.style_label_left, size=labelTextSize)
+    
+    // Highlight hit targets
+    line.set_color(lineTP1, tp1Hit ? C_TURQ : color.new(C_BULL, 30))
+    line.set_color(lineTP2, tp2Hit ? C_TURQ : color.new(C_BULL, 30))
+    line.set_color(lineTP3, tp3Hit ? C_TURQ : color.new(C_BULL, 30))
+    line.set_color(lineTP4, tp4Hit ? C_TURQ : color.new(C_BULL, 50))
+    line.set_color(lineTP5, tp5Hit ? C_TURQ : color.new(C_BULL, 70))
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 21: DASHBOARD
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ─── POSITION HELPER ───
+string posX = str.contains(dashboardPos, "left") ? "left" : "right"
+string posY = str.contains(dashboardPos, "top") ? "top" : "bottom"
+table_position dashPos = posX == "left" and posY == "top" ? position.top_left 
+  : posX == "right" and posY == "top" ? position.top_right
+  : posX == "left" and posY == "bottom" ? position.bottom_left 
+  : position.bottom_right
+
+var table dashboard = table.new(dashPos, 2, 30, 
+  bgcolor=color.new(#1E1E1E, 10), border_width=1, border_color=color.new(C_GRAY, 60))
+
+if barstate.islast and showDashboard
+    // Header row
+    table.cell(dashboard, 0, 0, "QTUS SMC-SNIPER SYSTEM", 
+      text_color=C_WHITE, bgcolor=color.new(C_BLUE, 20), text_size=dashTextSize, text_halign=text.align_left)
+    table.cell(dashboard, 1, 0, "v2.0", 
+      text_color=C_BLUE, bgcolor=color.new(C_BLUE, 20), text_size=dashTextSize, text_halign=text.align_right)
+    
+    // Market Bias
+    table.cell(dashboard, 0, 1, "MARKET BIAS", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 1, marketBias, text_color=biasColor, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    // SMC Scores
+    table.cell(dashboard, 0, 2, "SMC BUY SCORE", text_color=C_WHITE, bgcolor=color.new(C_BULL, 30), text_size=dashTextSize)
+    table.cell(dashboard, 1, 2, str.tostring(smcBuyScore) + "/13", text_color=C_BULL, bgcolor=color.new(C_BULL, 30), text_size=dashTextSize)
+    
+    table.cell(dashboard, 0, 3, "SMC SELL SCORE", text_color=C_WHITE, bgcolor=color.new(C_BEAR, 30), text_size=dashTextSize)
+    table.cell(dashboard, 1, 3, str.tostring(smcSellScore) + "/13", text_color=C_BEAR, bgcolor=color.new(C_BEAR, 30), text_size=dashTextSize)
+    
+    // Sniper Scores
+    table.cell(dashboard, 0, 4, "SNIPER BULL", text_color=C_WHITE, bgcolor=color.new(C_GRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 4, str.tostring(sniperBullPct, "#") + "%", text_color=C_BULL, bgcolor=color.new(C_GRAY, 50), text_size=dashTextSize)
+    
+    table.cell(dashboard, 0, 5, "SNIPER BEAR", text_color=C_WHITE, bgcolor=color.new(C_GRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 5, str.tostring(sniperBearPct, "#") + "%", text_color=C_BEAR, bgcolor=color.new(C_GRAY, 50), text_size=dashTextSize)
+    
+    // Signal Status
+    table.cell(dashboard, 0, 6, "SIGNAL", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 6, signalLabel, 
+      text_color=tradeState == 1 ? C_BULL : tradeState == -1 ? C_BEAR : C_GRAY, 
+      bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    // Indicators
+    string priceVWAP = vwapAbove ? "ABOVE" : "BELOW"
+    color priceVWAPCol = vwapAbove ? C_BULL : C_BEAR
+    table.cell(dashboard, 0, 7, "Price/VWAP", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 7, priceVWAP, text_color=priceVWAPCol, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    table.cell(dashboard, 0, 8, "RSI(14)", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 8, str.tostring(rsi14, "#.#"), 
+      text_color=rsiBull ? C_BULL : C_BEAR, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    table.cell(dashboard, 0, 9, "MACD", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 9, macdBull ? "BULL" : "BEAR", 
+      text_color=macdBull ? C_BULL : C_BEAR, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    table.cell(dashboard, 0, 10, "ADX", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 10, str.tostring(adxVal, "#.#") + " " + (adxStrong ? "STRONG" : "WEAK"), 
+      text_color=adxStrong ? C_BULL : C_BEAR, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    table.cell(dashboard, 0, 11, "EMA(9/21)", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 11, emaBull ? "BULL" : "BEAR", 
+      text_color=emaBull ? C_BULL : C_BEAR, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    table.cell(dashboard, 0, 12, "ATR(14)", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 12, str.tostring(atr14, "#.##"), 
+      text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    table.cell(dashboard, 0, 13, "Volume", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 13, volHigh ? "HIGH" : "LOW", 
+      text_color=volHigh ? C_BULL : C_GRAY, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    // Active Trade Info
+    if tradeState != 0
+        table.cell(dashboard, 0, 14, "ENTRY", text_color=C_WHITE, bgcolor=color.new(C_BLUE, 40), text_size=dashTextSize)
+        table.cell(dashboard, 1, 14, str.tostring(entryPrice, "#.##"), 
+          text_color=C_BLUE, bgcolor=color.new(C_BLUE, 40), text_size=dashTextSize)
+        
+        table.cell(dashboard, 0, 15, "STOP LOSS", text_color=C_WHITE, bgcolor=color.new(C_BEAR, 40), text_size=dashTextSize)
+        table.cell(dashboard, 1, 15, str.tostring(stopLoss, "#.##"), 
+          text_color=C_BEAR, bgcolor=color.new(C_BEAR, 40), text_size=dashTextSize)
+        
+        table.cell(dashboard, 0, 16, "TP1", text_color=C_WHITE, bgcolor=color.new(C_BULL, 30), text_size=dashTextSize)
+        table.cell(dashboard, 1, 16, str.tostring(takeProfit1, "#.##") + (tp1Hit ? " [HIT]" : ""), 
+          text_color=tp1Hit ? C_TURQ : C_BULL, bgcolor=color.new(C_BULL, 30), text_size=dashTextSize)
+        
+        table.cell(dashboard, 0, 17, "TP2", text_color=C_WHITE, bgcolor=color.new(C_BULL, 30), text_size=dashTextSize)
+        table.cell(dashboard, 1, 17, str.tostring(takeProfit2, "#.##") + (tp2Hit ? " [HIT]" : ""), 
+          text_color=tp2Hit ? C_TURQ : C_BULL, bgcolor=color.new(C_BULL, 30), text_size=dashTextSize)
+        
+        table.cell(dashboard, 0, 18, "TP3", text_color=C_WHITE, bgcolor=color.new(C_BULL, 30), text_size=dashTextSize)
+        table.cell(dashboard, 1, 18, str.tostring(takeProfit3, "#.##") + (tp3Hit ? " [HIT]" : ""), 
+          text_color=tp3Hit ? C_TURQ : C_BULL, bgcolor=color.new(C_BULL, 30), text_size=dashTextSize)
+    else
+        table.cell(dashboard, 0, 14, "TRADE STATUS", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize, text_halign=text.align_left)
+        table.cell(dashboard, 1, 14, "FLAT", text_color=C_GRAY, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    // HTF Bias
+    table.cell(dashboard, 0, 19, "HTF Bias", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    table.cell(dashboard, 1, 19, htfBullBias ? "BULL" : htfBearBias ? "BEAR" : "NEUTRAL", 
+      text_color=htfBullBias ? C_BULL : htfBearBias ? C_BEAR : C_GRAY, 
+      bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    // Candle Patterns
+    table.cell(dashboard, 0, 20, "PATTERN", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    string patStr = bullFVG ? "FVG+" : bearFVG ? "FVG-" 
+      : bullEngulfing ? "BE" : bearEngulfing ? "BEE"
+      : bullish_pinbar ? "BPB" : bearish_pinbar ? "SPB"
+      : bullLS ? "SSL-SWEEP" : bearLS ? "BSL-SWEEP"
+      : bullMSS ? "MSS+" : bearMSS ? "MSS-"
+      : bullBOS ? "BOS+" : bearBOS ? "BOS-"
+      : "NONE"
+    table.cell(dashboard, 1, 20, patStr, 
+      text_color=C_TURQ, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    // Risk/Reward
+    if tradeState != 0
+        float rr1 = (takeProfit1 - entryPrice) / (tradeState == 1 ? entryPrice - stopLoss : stopLoss - entryPrice)
+        float rr2 = (takeProfit2 - entryPrice) / (tradeState == 1 ? entryPrice - stopLoss : stopLoss - entryPrice)
+        float rr3 = (takeProfit3 - entryPrice) / (tradeState == 1 ? entryPrice - stopLoss : stopLoss - entryPrice)
+        table.cell(dashboard, 0, 21, "RR TP1", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+        table.cell(dashboard, 1, 21, "1:" + str.tostring(rr1, "#.#"), 
+          text_color=rr1 >= 1 ? C_BULL : C_BEAR, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+        table.cell(dashboard, 0, 22, "RR TP2", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+        table.cell(dashboard, 1, 22, "1:" + str.tostring(rr2, "#.#"), 
+          text_color=rr2 >= 2 ? C_BULL : C_BEAR, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+        table.cell(dashboard, 0, 23, "RR TP3", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+        table.cell(dashboard, 1, 23, "1:" + str.tostring(rr3, "#.#"), 
+          text_color=rr3 >= 3 ? C_BULL : C_BEAR, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    
+    // SMC Confluence
+    table.cell(dashboard, 0, 24, "CONFLUENCE", text_color=C_WHITE, bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+    string confStr = smcBuyScore >= scoreMinStrong ? "STRONG+" 
+      : smcSellScore >= scoreMinStrong ? "STRONG-"
+      : smcBuyScore >= scoreMinValid ? "VALID+" 
+      : smcSellScore >= scoreMinValid ? "VALID-"
+      : "WEAK"
+    table.cell(dashboard, 1, 24, confStr, 
+      text_color=smcBuyScore >= scoreMinStrong or smcSellScore >= scoreMinStrong ? C_TURQ 
+        : smcBuyScore >= scoreMinValid or smcSellScore >= scoreMinValid ? C_YELLOW 
+        : C_GRAY, 
+      bgcolor=color.new(C_DARKGRAY, 50), text_size=dashTextSize)
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECTION 22: ALERTS
+// ══════════════════════════════════════════════════════════════════════════════
+
+if enableAlerts
+    alertcondition(fullBuy and alertBuySetup, "SNIPER BUY SETUP", 
+      "SMC-Sniper BUY Signal | Score: {{plot_0}} | Price: {{close}}")
+    alertcondition(fullSell and alertSellSetup, "SNIPER SELL SETUP", 
+      "SMC-Sniper SELL Signal | Score: {{plot_0}} | Price: {{close}}")
+    alertcondition(slHit and alertSLHit, "STOP LOSS HIT", 
+      "Trade SL Hit | Direction: {{plot_0}}")
+    alertcondition((tp1Hit or tp2Hit or tp3Hit) and alertTPHit, "TAKE PROFIT HIT", 
+      "TP Hit | TP{{plot_0}}")
+    alertcondition(tp5Hit and alertTPC, "FINAL TARGET HIT", 
+      "Final TP Hit - Trade Closed")
+
+// ══════════════════════════════════════════════════════════════════════════════
+// END OF SMC-SNIPER SYSTEM
+// ══════════════════════════════════════════════════════════════════════════════

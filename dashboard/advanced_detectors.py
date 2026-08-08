@@ -243,21 +243,21 @@ def detect_breakouts(
         for i in range(idx, len(candles) - 1):
             c = candles[i]
             kind = zone.get("label", "SUPPORT")
-            if kind == "SUPPORT" and c.close > zone["top"] and c.volume > vol_ma:
-                results.append(
-                    _obj(
-                        "BREAKOUT", "BULLISH", candles, i,
-                        price=c.close, label="BREAKOUT_SUPPORT",
-                        status="ACTIVE", zone_level=round(zone["top"], 2),
-                    )
-                )
-                break
-            if kind == "RESISTANCE" and c.close < zone["bottom"] and c.volume > vol_ma:
+            if kind == "SUPPORT" and c.close < zone["bottom"] and c.volume > vol_ma:
                 results.append(
                     _obj(
                         "BREAKOUT", "BEARISH", candles, i,
-                        price=c.close, label="BREAKOUT_RESISTANCE",
+                        price=c.close, label="BREAKOUT_SUPPORT",
                         status="ACTIVE", zone_level=round(zone["bottom"], 2),
+                    )
+                )
+                break
+            if kind == "RESISTANCE" and c.close > zone["top"] and c.volume > vol_ma:
+                results.append(
+                    _obj(
+                        "BREAKOUT", "BULLISH", candles, i,
+                        price=c.close, label="BREAKOUT_RESISTANCE",
+                        status="ACTIVE", zone_level=round(zone["top"], 2),
                     )
                 )
                 break
@@ -325,8 +325,9 @@ def detect_candle_patterns(candles: List[Candle]) -> List[Dict[str, Any]]:
     """
     out: List[Dict[str, Any]] = []
     n = len(candles)
-    for i in range(2, n):
-        c, prev, prev2 = candles[i], candles[i - 1], candles[i - 2]
+    for i in range(1, n):
+        c, prev = candles[i], candles[i - 1]
+        prev2 = candles[i - 2] if i >= 2 else None
         rng = max(c.range_size, 1e-9)
         body = c.body_size
         up_w = c.upper_wick

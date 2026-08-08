@@ -29,7 +29,7 @@ from risk_gate import (
     evaluate_risk,
 )
 from risk_profiles import FOREX_RISK_PROFILES
-from strategy_core import StrategyConfig, decide_signal
+from strategy_core import DecisionProposal, SignalAction, StrategyConfig, decide_signal
 from signal_engines import run_signal_engine, SignalResult
 from chart_markup import build_chart_markup
 from ws_hub import WS_MANAGER
@@ -83,7 +83,7 @@ except ImportError:
 EXECUTION_MODE = (os.getenv("ATE_EXECUTION_MODE") or os.getenv("QUANTAI_EXECUTION_MODE") or "DISABLED").upper()
 DEMO_ARMED = (os.getenv("ATE_DEMO_ARMED") or os.getenv("QUANTAI_DEMO_ARMED") or "false").lower() == "true"
 KILL_SWITCH = (os.getenv("ATE_KILL_SWITCH") or os.getenv("QUANTAI_KILL_SWITCH") or "true").lower() == "true"
-DEMO_LOGIN = int(os.getenv("ATE_DEMO_LOGIN") or os.getenv("QUANTAI_DEMO_LOGIN") or os.getenv("MT5_LOGIN") or 0)
+DEMO_LOGIN = int(os.getenv("ATE_DEMO_LOGIN") or os.getenv("QUANTAI_DEMO_LOGIN") or os.getenv("MT5_LOGIN") or "0")
 DEMO_SERVER = os.getenv("ATE_DEMO_SERVER") or os.getenv("QUANTAI_DEMO_SERVER") or os.getenv("MT5_SERVER") or ""
 DEMO_BROKER_COMPANY = os.getenv("ATE_DEMO_BROKER_COMPANY") or os.getenv("QUANTAI_DEMO_BROKER_COMPANY", "")
 EXECUTION_SYMBOL = os.getenv("ATE_EXECUTION_SYMBOL") or os.getenv("QUANTAI_EXECUTION_SYMBOL", "XAUUSDm") or "XAUUSDm"
@@ -931,6 +931,8 @@ class CopilotChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     symbol: str = Field(default="XAUUSD", min_length=1, max_length=32)
     timeframe: str = Field(default="M15", min_length=1, max_length=8)
+    model_id: Optional[str] = None
+    truncation: Optional[str] = None
 
 _MT5_WAS_CONNECTED = False
 
@@ -2382,6 +2384,11 @@ async def get_control_center_status():
             "operator_auth_configured": bool(OPERATOR_TOKEN),
             "risk_policy_execution_enabled": bool(risk.execution_enabled),
         },
+        "telegram": {
+            "bot_token": _mask_field(TELEGRAM_BOT_TOKEN),
+            "chat_id": TELEGRAM_CHAT_ID,
+            "enabled": TELEGRAM_ENABLED,
+        },
         "realtime": {
             "ws_clients": WS_MANAGER.count,
             "ea_online": ea_online,
@@ -2424,6 +2431,22 @@ class ControlCenterLoginRequest(BaseModel):
     login: int
     password: str = Field(min_length=1)
     server: str = Field(min_length=1)
+
+
+class ControlCenterAIConfigRequest(BaseModel):
+    active_model: Optional[str] = None
+    active_ai_model: Optional[str] = None
+    trading_method: Optional[str] = None
+    custom_model_id: Optional[str] = None
+    gemini_api_key: Optional[str] = None
+    claude_api_key: Optional[str] = None
+    deepseek_api_key: Optional[str] = None
+    openai_api_key: Optional[str] = None
+    zplay_api_key: Optional[str] = None
+    grok_api_key: Optional[str] = None
+    qwen_api_key: Optional[str] = None
+    gateway_url: Optional[str] = None
+    gateway_key: Optional[str] = None
 
 
 class ControlKillSwitchRequest(BaseModel):
@@ -2870,6 +2893,8 @@ def execution_disabled_response() -> None:
 
 
 def fetch_mt5_multi_timeframe(symbol: str) -> Dict[str, pd.DataFrame]:
+    if mt5 is None:
+        return {}
     if not mt5.terminal_info():
         return {}
     tf_map = {
@@ -4149,19 +4174,7 @@ async def test_ai_config_endpoint(req: AITestRequest):
         message=f"AI provider test {req.key_type}/{model} -> {'OK' if result.get('ok') else result.get('error_code')}",
     )
     return {"status": "SUCCESS", "result": result}
-    active_model: Optional[str] = Field(default="deepseek-v4-flash-free", max_length=128)
-    active_ai_model: Optional[str] = None
-    custom_model_id: Optional[str] = None
-    trading_method: Optional[str] = None
-    gemini_api_key: Optional[str] = None
-    claude_api_key: Optional[str] = None
-    deepseek_api_key: Optional[str] = None
-    openai_api_key: Optional[str] = None
-    zplay_api_key: Optional[str] = None
-    grok_api_key: Optional[str] = None
-    qwen_api_key: Optional[str] = None
-    gateway_url: Optional[str] = None
-    gateway_key: Optional[str] = None
+
 
 SUPPORTED_AI_MODELS = [
     # ── OpenCode Zen FREE MODELS (Mặc định - Không cần API Key) ──
@@ -4169,17 +4182,17 @@ SUPPORTED_AI_MODELS = [
     # Đây là mô hình MẶC ĐỊNH: không cần key nào. Nếu khách hàng cấu hình
     # gateway/api-key/model riêng (Control Center) thì hệ thống ưu tiên theo
     # thứ tự: Custom Gateway → Custom Model → provider key riêng → OpenCode Free.
-    {"id": "deepseek-v4-flash-free", "name": "OpenCode DeepSeek V4 Flash Free ⭐ (Mặc định)", "provider": "OpenCode Zen", "key_type": "opencode"},
-    {"id": "big-pickle", "name": "OpenCode Big Pickle Free (Stealth Reasoning)", "provider": "OpenCode Zen", "key_type": "opencode"},
-    {"id": "mimo-v2.5-free", "name": "OpenCode MiMo V2.5 Free", "provider": "OpenCode Zen", "key_type": "opencode"},
-    {"id": "nemotron-3-ultra-free", "name": "OpenCode Nemotron 3 Ultra Free", "provider": "OpenCode Zen", "key_type": "opencode"},
-    {"id": "north-mini-code-free", "name": "OpenCode North Mini Code Free", "provider": "OpenCode Zen", "key_type": "opencode"},
-    {"id": "laguna-s-2.1-free", "name": "OpenCode Laguna S 2.1 Free", "provider": "OpenCode Zen", "key_type": "opencode"},
-    {"id": "longcat-2.0-free", "name": "OpenCode LongCat 2.0 Free", "provider": "OpenCode Zen", "key_type": "opencode"},
-    {"id": "ling-3.0-flash-free", "name": "OpenCode Ling 3.0 Flash Free (Deprecated)", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "deepseek-v4-flash-free", "name": "OpenCode DeepSeek V4 (Mặc định)", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "big-pickle", "name": "OpenCode Big Pickle", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "mimo-v2.5-free", "name": "OpenCode MiMo V2.5", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "nemotron-3-ultra-free", "name": "OpenCode Nemotron 3 Ultra", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "north-mini-code-free", "name": "OpenCode North Mini Code", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "laguna-s-2.1-free", "name": "OpenCode Laguna S 2.1", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "longcat-2.0-free", "name": "OpenCode LongCat 2.0", "provider": "OpenCode Zen", "key_type": "opencode"},
+    {"id": "ling-3.0-flash-free", "name": "OpenCode Ling 3.0 Flash", "provider": "OpenCode Zen", "key_type": "opencode"},
 
     # ── OpenAI ──
-    {"id": "gpt-5.6-sol", "name": "OpenAI GPT-5.6 Sol ⭐ (Flagship)", "provider": "OpenAI", "key_type": "openai"},
+    {"id": "gpt-5.6-sol", "name": "OpenAI GPT-5.6 Sol (Flagship)", "provider": "OpenAI", "key_type": "openai"},
     {"id": "gpt-5.6-terra", "name": "OpenAI GPT-5.6 Terra", "provider": "OpenAI", "key_type": "openai"},
     {"id": "gpt-5.6-luna", "name": "OpenAI GPT-5.6 Luna", "provider": "OpenAI", "key_type": "openai"},
     {"id": "gpt-5.5", "name": "OpenAI GPT-5.5", "provider": "OpenAI", "key_type": "openai"},
@@ -4198,7 +4211,7 @@ SUPPORTED_AI_MODELS = [
     {"id": "gpt-4o-mini", "name": "OpenAI GPT-4o Mini", "provider": "OpenAI", "key_type": "openai"},
 
     # ── Anthropic Claude ──
-    {"id": "claude-5-fable", "name": "Claude Fable 5 ⭐ (Flagship)", "provider": "Claude", "key_type": "claude"},
+    {"id": "claude-5-fable", "name": "Claude Fable 5 (Flagship)", "provider": "Claude", "key_type": "claude"},
     {"id": "claude-5-mythos", "name": "Claude Mythos 5", "provider": "Claude", "key_type": "claude"},
     {"id": "claude-5-opus", "name": "Claude Opus 5", "provider": "Claude", "key_type": "claude"},
     {"id": "claude-5-sonnet", "name": "Claude Sonnet 5", "provider": "Claude", "key_type": "claude"},
@@ -4213,7 +4226,7 @@ SUPPORTED_AI_MODELS = [
     {"id": "claude-3-5-haiku", "name": "Claude 3.5 Haiku", "provider": "Claude", "key_type": "claude"},
 
     # ── Google DeepMind ──
-    {"id": "gemini-3.6-flash", "name": "Google Gemini 3.6 Flash ⭐", "provider": "Gemini", "key_type": "gemini"},
+    {"id": "gemini-3.6-flash", "name": "Google Gemini 3.6 Flash", "provider": "Gemini", "key_type": "gemini"},
     {"id": "gemini-3.5-flash", "name": "Google Gemini 3.5 Flash", "provider": "Gemini", "key_type": "gemini"},
     {"id": "gemini-3.5-flash-lite", "name": "Google Gemini 3.5 Flash-Lite", "provider": "Gemini", "key_type": "gemini"},
     {"id": "gemini-3.1-pro", "name": "Google Gemini 3.1 Pro", "provider": "Gemini", "key_type": "gemini"},
@@ -4228,7 +4241,7 @@ SUPPORTED_AI_MODELS = [
     {"id": "gemini-1.5-pro", "name": "Google Gemini 1.5 Pro", "provider": "Gemini", "key_type": "gemini"},
 
     # ── DeepSeek ──
-    {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro ⭐", "provider": "DeepSeek", "key_type": "deepseek"},
+    {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "provider": "DeepSeek", "key_type": "deepseek"},
     {"id": "deepseek-v4-flash", "name": "DeepSeek V4 Flash (0731)", "provider": "DeepSeek", "key_type": "deepseek"},
     {"id": "deepseek-v3.2", "name": "DeepSeek V3.2", "provider": "DeepSeek", "key_type": "deepseek"},
     {"id": "deepseek-v3.1", "name": "DeepSeek V3.1", "provider": "DeepSeek", "key_type": "deepseek"},
@@ -4236,7 +4249,7 @@ SUPPORTED_AI_MODELS = [
     {"id": "deepseek-r1", "name": "DeepSeek R1 Reasoning", "provider": "DeepSeek", "key_type": "deepseek"},
 
     # ── xAI Grok ──
-    {"id": "grok-4.5", "name": "xAI Grok 4.5 ⭐ (Flagship)", "provider": "Grok", "key_type": "grok"},
+    {"id": "grok-4.5", "name": "xAI Grok 4.5 (Flagship)", "provider": "Grok", "key_type": "grok"},
     {"id": "grok-4", "name": "xAI Grok 4", "provider": "Grok", "key_type": "grok"},
     {"id": "grok-4.3", "name": "xAI Grok 4.3", "provider": "Grok", "key_type": "grok"},
     {"id": "grok-4.20", "name": "xAI Grok 4.20", "provider": "Grok", "key_type": "grok"},
@@ -4245,29 +4258,29 @@ SUPPORTED_AI_MODELS = [
     {"id": "grok-3", "name": "xAI Grok 3", "provider": "Grok", "key_type": "grok"},
 
     # ── Moonshot Kimi ──
-    {"id": "kimi-k3", "name": "Moonshot Kimi K3 ⭐", "provider": "Moonshot", "key_type": "zplay"},
-    {"id": "kimi-k2.6", "name": "Moonshot Kimi K2.6", "provider": "Moonshot", "key_type": "zplay"},
-    {"id": "kimi-k2-thinking", "name": "Moonshot Kimi K2 Thinking", "provider": "Moonshot", "key_type": "zplay"},
-    {"id": "kimi-k2-thinking-turbo", "name": "Moonshot Kimi K2 Turbo", "provider": "Moonshot", "key_type": "zplay"},
+    {"id": "kimi-k3", "name": "Moonshot Kimi K3", "provider": "Moonshot", "key_type": "moonshot"},
+    {"id": "kimi-k2.6", "name": "Moonshot Kimi K2.6", "provider": "Moonshot", "key_type": "moonshot"},
+    {"id": "kimi-k2-thinking", "name": "Moonshot Kimi K2 Thinking", "provider": "Moonshot", "key_type": "moonshot"},
+    {"id": "kimi-k2-thinking-turbo", "name": "Moonshot Kimi K2 Turbo", "provider": "Moonshot", "key_type": "moonshot"},
 
     # ── Alibaba Qwen ──
-    {"id": "qwen3.8-max", "name": "Alibaba Qwen3.8 Max ⭐", "provider": "Qwen", "key_type": "qwen"},
+    {"id": "qwen3.8-max", "name": "Alibaba Qwen3.8 Max", "provider": "Qwen", "key_type": "qwen"},
     {"id": "qwen3-thinking", "name": "Alibaba Qwen3 Thinking", "provider": "Qwen", "key_type": "qwen"},
     {"id": "qwen3-coder", "name": "Alibaba Qwen3 Coder", "provider": "Qwen", "key_type": "qwen"},
     {"id": "qwen3-vl", "name": "Alibaba Qwen3 VL", "provider": "Qwen", "key_type": "qwen"},
     {"id": "qwen3-235b-a22b", "name": "Alibaba Qwen3 235B", "provider": "Qwen", "key_type": "qwen"},
 
     # ── Zhipu GLM ──
-    {"id": "glm-5.2", "name": "Zhipu GLM-5.2 ⭐", "provider": "GLM", "key_type": "openai"},
+    {"id": "glm-5.2", "name": "Zhipu GLM-5.2", "provider": "GLM", "key_type": "openai"},
     {"id": "glm-4.7-flash", "name": "Zhipu GLM-4.7 Flash", "provider": "GLM", "key_type": "openai"},
     {"id": "glm-4.5", "name": "Zhipu GLM-4.5", "provider": "GLM", "key_type": "openai"},
 
     # ── MiniMax & Meta Llama & Mistral ──
-    {"id": "minimax-m3", "name": "MiniMax M3 ⭐", "provider": "MiniMax", "key_type": "openai"},
-    {"id": "llama-4-maverick", "name": "Meta Llama 4 Maverick ⭐", "provider": "Llama", "key_type": "openai"},
+    {"id": "minimax-m3", "name": "MiniMax M3", "provider": "MiniMax", "key_type": "openai"},
+    {"id": "llama-4-maverick", "name": "Meta Llama 4 Maverick", "provider": "Llama", "key_type": "openai"},
     {"id": "llama-4-scout", "name": "Meta Llama 4 Scout", "provider": "Llama", "key_type": "openai"},
     {"id": "llama-3.3-70b", "name": "Meta Llama 3.3 70B", "provider": "Llama", "key_type": "openai"},
-    {"id": "magistral-medium", "name": "Mistral Magistral Medium ⭐", "provider": "Mistral", "key_type": "openai"},
+    {"id": "magistral-medium", "name": "Mistral Magistral Medium", "provider": "Mistral", "key_type": "openai"},
     {"id": "mistral-large", "name": "Mistral Large", "provider": "Mistral", "key_type": "openai"},
     {"id": "codestral", "name": "Mistral Codestral", "provider": "Mistral", "key_type": "openai"},
     {"id": "phi-4", "name": "Microsoft Phi-4", "provider": "Microsoft", "key_type": "openai"},

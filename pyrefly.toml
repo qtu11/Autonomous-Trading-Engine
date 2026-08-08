@@ -1,0 +1,8 @@
+# Pyrefly configuration for the GoldQuant AI / ATE project.
+# dashboard/ modules are imported via `sys.path.insert` in tests, so expose
+# the directory as a top-level search path for the type checker.
+
+project-includes = [".", "dashboard", "tests"]
+project-excludes = ["**/.[!/.]*", "**/node_modules/**", "**/Cloudlocal/**", "**/volumes/**"]
+search-path = ["dashboard"]
+enable-fallback-search-path = true

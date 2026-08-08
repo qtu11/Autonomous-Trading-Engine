@@ -1,26 +1,86 @@
-# Local secrets
+# Environment variables
 .env
-.env.*
-!.env.example
+.env.local
+.env.*.local
+*.env
 
 # Python
 __pycache__/
 *.py[cod]
-.pytest_cache/
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
 .venv/
 
-# Runtime ledgers, logs and generated reports
-dashboard/*.sqlite3
-dashboard/user_control_config.json
-backtest/reports/
-logs/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
 *.log
+logs/
+*.log.*
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+# Docker volumes
+volumes/
+
+# Node
+node_modules/
+.npm
+.yarn/
+.next/
+out/
+
+# Build
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+*.cover
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Railway
+railway.env
+
+# Temp files
+*.tmp
 *.bak
-
-# Frontend
-web/.next/
-web/node_modules/
-Cloudlocal/volumes/
-
-.vercel
-.env*
+*.orig

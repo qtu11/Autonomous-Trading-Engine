@@ -104,9 +104,9 @@ class TestFVG:
         # C2: bullish in middle
         # C3: bearish, high=95 < low(C1)=96 -> FVG!
         candles = [
-            make_candle(0, 100.0, 101.0, 95.0, 96.0),    # C1: low=95
-            make_candle(1, 96.0, 100.0, 95.5, 99.5),     # C2: bullish middle
-            make_candle(2, 98.0, 99.0, 92.0, 93.0),      # C3: high=99 < low(C1)=95 -> FVG!
+            make_candle(0, 100.0, 101.0, 96.0, 96.5),    # C1: low=96
+            make_candle(1, 96.5, 100.0, 95.5, 99.5),     # C2: bullish middle
+            make_candle(2, 95.0, 95.5, 92.0, 93.0),      # C3: high=95.5 < low(C1)=96 -> FVG!
         ]
         objs = candles_to_objs(candles)
         fvgs = detect_fvg(objs)
@@ -181,7 +181,7 @@ class TestSwingEngine:
             make_candle(3, 98.0, 99.0, 96.0, 97.0),
             make_candle(4, 97.0, 98.0, 95.5, 96.5),
             make_candle(5, 96.5, 97.0, 95.0, 95.5),  # SWING LOW
-            make_candle(6, 95.5, 96.0, 95.0, 95.5),
+            make_candle(6, 95.8, 96.0, 95.5, 95.7),
             make_candle(7, 95.5, 96.5, 95.5, 96.0),
         ]
 
@@ -202,19 +202,20 @@ class TestHHHLLL:
 
     def test_hh_detection(self):
         """Higher High: current swing high > previous swing high"""
-        # Create clear HH pattern: H1=100, H2=105
+        # Swings located inside the last `n` candles read by detect_market_structure.
+        # H1=100 at candle 3, H2=105 at candle 6 -> both strict fractals (window=2).
         candles = []
-        for i in range(20):
-            if i == 3:  # First significant high
-                candles.append(make_candle(i, 95, 100, 94, 99))
+        for i in range(15):
+            if i == 3:
+                candles.append(make_candle(i, 95, 100, 94, 99))   # H1: 100
             elif i == 4:
-                candles.append(make_candle(i, 99, 100, 98, 99))  # Low after
-            elif i == 7:  # Higher high
-                candles.append(make_candle(i, 100, 105, 99, 104))
-            elif i == 8:
-                candles.append(make_candle(i, 104, 105, 103, 104))
+                candles.append(make_candle(i, 99, 99.5, 98, 99))  # Pullback below 100
+            elif i == 6:
+                candles.append(make_candle(i, 99, 105, 98, 104))  # H2: 105 (HH)
+            elif i == 7:
+                candles.append(make_candle(i, 104, 104.5, 103, 104))  # Pullback below 105
             else:
-                candles.append(make_candle(i, 95+i, 96+i, 94+i, 95+i))
+                candles.append(make_candle(i, 98, 99, 97, 98))
 
         df = make_df(candles)
         structure = detect_market_structure(df, window=2, n=10)
@@ -225,11 +226,13 @@ class TestHHHLLL:
     def test_hl_detection(self):
         """Higher Low: current swing low > previous swing low"""
         candles = []
-        for i in range(20):
+        for i in range(15):
             if i == 3:
-                candles.append(make_candle(i, 100, 101, 95, 96))  # First low
+                candles.append(make_candle(i, 100, 101, 95, 96))  # L1 = 95
+            elif i == 4:
+                candles.append(make_candle(i, 98, 99, 97, 98))
             elif i == 7:
-                candles.append(make_candle(i, 100, 101, 97, 98))  # Higher low (97 > 95)
+                candles.append(make_candle(i, 100, 101, 96.5, 97.5))  # L2 = 96.5 (HL)
             else:
                 candles.append(make_candle(i, 98, 99, 97, 98))
 

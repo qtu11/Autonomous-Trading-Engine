@@ -114,6 +114,7 @@ QUANTAI_AI_MODEL=deepseek-v4-flash-free
 # Key thương mại (tùy chọn)
 GEMINI_API_KEY=YOUR_GEMINI_API_KEY
 OPENAI_API_KEY=YOUR_OPENAI_API_KEY
+ANTHORPIC_API_KEY=YOUR_ANTHORPIC_API_KEY
 
 # Router cá nhân (ưu tiên cao nhất)
 GATEWAY_URL=https://openrouter.ai/api/v1

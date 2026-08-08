@@ -8,11 +8,11 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "dashboard"))
 
-from models import df_to_candles, Candle
+from detectors import Candle, df_to_candles
 import structure as S
 import price_action as PA
-import smc
 import ict
+import smc
 
 
 class TestRefactoredDetectors(unittest.TestCase):

@@ -88,6 +88,7 @@ class LogEvent:
 
     # Authentication / security
     OPERATOR_AUTHENTICATED = "OPERATOR_AUTHENTICATED"
+    SECURITY_ALERT = "SECURITY_ALERT"
 
 
 _LOGGER_NAME = "quantai"

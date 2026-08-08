@@ -1,0 +1,70 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "framework": "nextjs",
+  "rewrites": [
+    {
+      "source": "/api/v1/:path*",
+      "destination": "https://quantai-api.up.railway.app/api/v1/:path*"
+    },
+    {
+      "source": "/backend/:path*",
+      "destination": "https://quantai-api.up.railway.app/backend/:path*"
+    },
+    {
+      "source": "/health",
+      "destination": "https://quantai-api.up.railway.app/health"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/v1/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "https://autonomous-trading-engine.vercel.app"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization, X-API-Key, X-Bridge-Token, X-Requested-With"
+        },
+        {
+          "key": "Access-Control-Max-Age",
+          "value": "86400"
+        }
+      ]
+    },
+    {
+      "source": "/backend/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "https://autonomous-trading-engine.vercel.app"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization, X-API-Key, X-Bridge-Token, X-Requested-With"
+        }
+      ]
+    }
+  ],
+  "env": {
+    "NEXT_PUBLIC_ATE_API_ORIGIN": "",
+    "NEXT_PUBLIC_QUANTAI_API_ORIGIN": "",
+    "NEXT_PUBLIC_FIREBASE_API_KEY": "AIzaSyDRmJ294aBZhVEcTliP86D19qM3tJbhgDI",
+    "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN": "qtusdev.firebaseapp.com",
+    "NEXT_PUBLIC_FIREBASE_PROJECT_ID": "qtusdev",
+    "NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET": "qtusdev.firebasestorage.app",
+    "NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "98060679867",
+    "NEXT_PUBLIC_FIREBASE_APP_ID": "1:98060679867:web:563015a0a052b2f432879e",
+    "NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID": "G-F4F16X1TW4"
+  }
+}

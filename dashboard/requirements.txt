@@ -1,15 +1,17 @@
 fastapi>=0.100.0
-uvicorn>=0.22.0
+uvicorn[standard]>=0.22.0
+gunicorn>=21.0.0
 pydantic>=2.0.0
 psutil>=5.9.0
 MetaTrader5; platform_system == "Windows"
 psycopg2-binary
-redis
+redis>=4.5.0
 python-multipart
 python-jose[cryptography]
 passlib[bcrypt]
-httpx
-aiofiles
+httpx>=0.25.0
+aiofiles>=23.0.0
 pandas>=2.0.0
 numpy>=1.24.0
 requests>=2.31.0
+

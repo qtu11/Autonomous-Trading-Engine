@@ -1,0 +1,53 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "pip install -r requirements.txt"
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  },
+  "exposedEnv": ["PORT"],
+  "services": {
+    "api": {
+      "build": {
+        "builder": "NIXPACKS"
+      },
+      "deploy": {
+        "replicas": 1,
+        "restartPolicyType": "ON_FAILURE",
+        "restartPolicyMaxRetries": 10
+      },
+      "healthcheck": {
+        "path": "/health",
+        "port": 8005,
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3
+      }
+    },
+    "postgres": {
+      "image": "postgres:16-alpine",
+      "deploy": {
+        "replicas": 1
+      },
+      "env": {
+        "POSTGRES_DB": "quantai"
+      },
+      "volumes": {
+        "pgdata": "/var/lib/postgresql/data"
+      }
+    },
+    "redis": {
+      "image": "redis:7-alpine",
+      "deploy": {
+        "replicas": 1
+      },
+      "env": {
+        "REDIS_ARGS": "--maxmemory 256mb --maxmemory-policy allkeys-lru"
+      }
+    }
+  }
+}

@@ -1,5 +1,14 @@
 services:
-  # Reverse Proxy - Nginx (public entry: 80/8080)
+  # =======================================================================
+  # GOLDQUANT AI BLOOMBERG TRADING DESK - CLOUDLOCAL DOCKER STACK
+  # =======================================================================
+  # Standard URL Structure:
+  #   Website : https://autonomous-trading-engine.vercel.app/
+  #   Backend : https://autonomous-trading-engine.vercel.app/backend
+  #   API/v1  : https://autonomous-trading-engine.vercel.app/api/v1
+  # =======================================================================
+
+  # Reverse Proxy - Nginx (public entry: 80/8080/8848)
   nginx:
     image: nginx:alpine
     container_name: cloudlocal-nginx
@@ -33,18 +42,13 @@ services:
     build:
       context: ../web
       dockerfile: ../Cloudlocal/nextjs/Dockerfile
-      args:
-        NEXT_PUBLIC_ATE_API_ORIGIN: ${NEXT_PUBLIC_ATE_API_ORIGIN:-http://localhost:8080}
-        NEXT_PUBLIC_QUANTAI_API_ORIGIN: ${NEXT_PUBLIC_QUANTAI_API_ORIGIN:-http://localhost:8080}
     container_name: cloudlocal-nextjs
-    ports:
-      - "3001:3000"
+    env_file:
+      - .env
     environment:
       - NODE_ENV=production
-      # API base WITHOUT /api/v1 suffix - the frontend appends /api/... itself.
-      # http://localhost:8080 -> nginx /api/ -> FastAPI 8005
-      - NEXT_PUBLIC_ATE_API_ORIGIN=http://localhost:8080
-      - NEXT_PUBLIC_QUANTAI_API_ORIGIN=http://localhost:8080
+      - NEXT_PUBLIC_ATE_API_ORIGIN=${NEXT_PUBLIC_ATE_API_ORIGIN:-http://localhost:8080}
+      - NEXT_PUBLIC_QUANTAI_API_ORIGIN=${NEXT_PUBLIC_QUANTAI_API_ORIGIN:-http://localhost:8080}
       - ATE_BACKEND_URL=http://nginx:80
     volumes:
       - ./volumes/logs/nextjs:/app/logs
@@ -65,42 +69,43 @@ services:
       context: ../dashboard
       dockerfile: ../Cloudlocal/fastapi/Dockerfile
     container_name: cloudlocal-fastapi
-    ports:
-      - "8005:8005"
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
-      - ATE_EXECUTION_MODE=DEMO
+      # Trading config
+      - ATE_EXECUTION_MODE=${ATE_EXECUTION_MODE:-DEMO}
+      - QUANTAI_EXECUTION_MODE=${QUANTAI_EXECUTION_MODE:-DEMO}
+      - QUANTAI_ENABLE_TRADING=${QUANTAI_ENABLE_TRADING:-false}
+      - QUANTAI_DEMO_ARMED=${QUANTAI_DEMO_ARMED:-true}
+      - QUANTAI_LIVE_ARMED=${QUANTAI_LIVE_ARMED:-false}
+      - QUANTAI_KILL_SWITCH=${QUANTAI_KILL_SWITCH:-true}
+      - QUANTAI_EXECUTION_SYMBOL=${QUANTAI_EXECUTION_SYMBOL:-XAUUSDm}
+      - QUANTAI_EXECUTION_MAGIC=${QUANTAI_EXECUTION_MAGIC:-888999}
+      - QUANTAI_MAGIC_NUMBER=${QUANTAI_MAGIC_NUMBER:-888999}
+      - QUANTAI_DEMO_COMMAND_TTL_SECONDS=${QUANTAI_DEMO_COMMAND_TTL_SECONDS:-10}
+      - QUANTAI_DEMO_LOGIN=${QUANTAI_DEMO_LOGIN}
+      - QUANTAI_DEMO_SERVER=${QUANTAI_DEMO_SERVER}
+      - QUANTAI_DEMO_BROKER_COMPANY=${QUANTAI_DEMO_BROKER_COMPANY:-Exness Technologies Ltd}
+      - QUANTAI_LIVE_LOGIN=${QUANTAI_LIVE_LOGIN}
+      - QUANTAI_LIVE_SERVER=${QUANTAI_LIVE_SERVER}
+      - QUANTAI_LIVE_BROKER_COMPANY=${QUANTAI_LIVE_BROKER_COMPANY:-Exness Technologies Ltd}
+      # Dashboard
       - QUANTAI_DASHBOARD_PORT=8005
       - QUANTAI_DASHBOARD_HOST=0.0.0.0
-      - ATE_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://autonomous-trading-engine.vercel.app,http://${PUBLIC_IP}:8080,http://localhost:8080
-      - QUANTAI_ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000,https://autonomous-trading-engine.vercel.app,http://${PUBLIC_IP}:8080,http://localhost:8080
+      # Database
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_DB=quantai
       - POSTGRES_USER=quantai
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-quantai_secure_2024}
+      # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - MT5_LOGIN=${MT5_LOGIN}
-      - MT5_PASSWORD=${MT5_PASSWORD}
-      - MT5_SERVER=${MT5_SERVER}
-      - MT5_PATH=${MT5_PATH}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - ZPLAY_API_KEY=${ZPLAY_API_KEY}
-      - QUANTAI_AI_MODEL=${QUANTAI_AI_MODEL:-deepseek-v4-flash-free}
-      - OPENCODE_BASE_URL=${OPENCODE_BASE_URL:-https://opencode.ai/zen/v1/chat/completions}
-      - GATEWAY_URL=${GATEWAY_URL:-}
-      - GATEWAY_KEY=${GATEWAY_KEY:-}
-      - PUBLIC_IP=${PUBLIC_IP}
-      - ATE_BACKEND_URL=http://${PUBLIC_IP}:8080
-      - QUANTAI_LOG_DIR=/app/logs
-      - ADMIN_LOGIN=${ADMIN_LOGIN}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD}
-      - QUANTAI_BRIDGE_TOKEN=${QUANTAI_BRIDGE_TOKEN}
-      - QUANTAI_OPERATOR_TOKEN=${QUANTAI_OPERATOR_TOKEN}
+      # Firebase
+      - FIREBASE_ENABLE_SYNC=${FIREBASE_ENABLE_SYNC:-false}
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
+      - FIREBASE_API_KEY=${FIREBASE_API_KEY}
     volumes:
       - ../dashboard:/app
       - ./volumes/logs/fastapi:/app/logs
@@ -131,15 +136,10 @@ services:
       context: ../dashboard
       dockerfile: ../Cloudlocal/ai-engine/Dockerfile
     container_name: cloudlocal-ai-engine
-    ports:
-      - "8006:8006"
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - ZPLAY_API_KEY=${ZPLAY_API_KEY}
-      - QUANTAI_AI_MODEL=${QUANTAI_AI_MODEL:-deepseek-v4-flash-free}
-      - OPENCODE_BASE_URL=${OPENCODE_BASE_URL:-https://opencode.ai/zen/v1/chat/completions}
       - AI_ENGINE_PORT=8006
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -170,18 +170,12 @@ services:
       context: ../dashboard
       dockerfile: ../Cloudlocal/python-bridge/Dockerfile
     container_name: cloudlocal-python-bridge
-    ports:
-      - "8007:8007"
+    env_file:
+      - .env
     environment:
       - PYTHONUNBUFFERED=1
-      - MT5_LOGIN=${MT5_LOGIN}
-      - MT5_PASSWORD=${MT5_PASSWORD}
-      - MT5_SERVER=${MT5_SERVER}
-      - MT5_PATH=C:/Program Files/MetaTrader 5/terminal64.exe
       - BRIDGE_PORT=8007
       - FASTAPI_URL=http://fastapi:8005
-      - QUANTAI_BRIDGE_TOKEN=${QUANTAI_BRIDGE_TOKEN}
-      - PUBLIC_IP=${PUBLIC_IP}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
     volumes:
@@ -208,6 +202,8 @@ services:
     container_name: cloudlocal-postgres
     ports:
       - "5432:5432"
+    env_file:
+      - .env
     environment:
       - POSTGRES_DB=quantai
       - POSTGRES_USER=quantai

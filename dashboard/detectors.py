@@ -47,12 +47,28 @@ class Candle:
         return self.body_size / self.range_size
 
     @property
+    def mid(self) -> float:
+        return (self.high + self.low) / 2.0
+
+    @property
     def upper_wick(self) -> float:
         return self.high - max(self.open, self.close)
 
     @property
     def lower_wick(self) -> float:
         return min(self.open, self.close) - self.low
+
+    @property
+    def upper_wick_ratio(self) -> float:
+        if self.range_size == 0:
+            return 0.0
+        return self.upper_wick / self.range_size
+
+    @property
+    def lower_wick_ratio(self) -> float:
+        if self.range_size == 0:
+            return 0.0
+        return self.lower_wick / self.range_size
 
 
 def df_to_candles(df: pd.DataFrame) -> List[Candle]:
@@ -141,7 +157,9 @@ def get_last_swing_points(df: pd.DataFrame, n: int = 5) -> Dict[str, List[Dict[s
     return {"swing_highs": swing_highs, "swing_lows": swing_lows}
 
 
-def classify_trend_structure(df: pd.DataFrame) -> str:
+def classify_trend_structure(df: pd.DataFrame, window: int = 2) -> str:
+    if "swing_high" not in df.columns or "swing_low" not in df.columns:
+        df = find_swing_points(df, window)
     swings = get_last_swing_points(df, n=3)
     highs = [s["high"] for s in swings["swing_highs"]]
     lows = [s["low"] for s in swings["swing_lows"]]
@@ -421,14 +439,18 @@ def get_fvg_fill_state(fvg: PDArray, candles: List[Candle]) -> str:
 def detect_liquidity_sweep(
     candles: List[Candle],
     swing_df: pd.DataFrame,
-    current_index: int,
+    current_index: Optional[int] = None,
+    lookback: Optional[int] = None,
 ) -> Optional[str]:
-    if current_index >= len(candles):
+    if current_index is None:
+        current_index = len(candles) - 1
+    if current_index < 0 or current_index >= len(candles):
         return None
     current = candles[current_index]
 
-    swing_highs_idx = [idx for idx in swing_df[swing_df["swing_high"]].index if idx < current_index]
-    swing_lows_idx = [idx for idx in swing_df[swing_df["swing_low"]].index if idx < current_index]
+    cutoff = current_index - lookback if lookback is not None else -1
+    swing_highs_idx = [idx for idx in swing_df[swing_df["swing_high"]].index if cutoff < idx < current_index]
+    swing_lows_idx = [idx for idx in swing_df[swing_df["swing_low"]].index if cutoff < idx < current_index]
 
     if swing_highs_idx:
         bsl_target = candles[max(swing_highs_idx)].high
@@ -515,11 +537,17 @@ def calculate_ote_zone(swing_low: float, swing_high: float, direction: str) -> D
     if direction == "BUY":
         level_618 = swing_high - range_size * 0.618
         level_790 = swing_high - range_size * 0.790
-        return {"zone_top": level_618, "zone_bottom": level_790}
+        zone_top, zone_bottom = level_618, level_790
     else:
         level_618 = swing_low + range_size * 0.618
         level_790 = swing_low + range_size * 0.790
-        return {"zone_top": level_790, "zone_bottom": level_618}
+        zone_top, zone_bottom = level_790, level_618
+    return {
+        "zone_top": zone_top,
+        "zone_bottom": zone_bottom,
+        "zone_low": min(zone_top, zone_bottom),
+        "zone_high": max(zone_top, zone_bottom),
+    }
 
 
 def is_price_in_ote(price: float, ote_zone: Dict[str, float]) -> bool:
@@ -534,7 +562,16 @@ def check_fvg_ote_confluence(fvg: PDArray, ote_zone: Dict[str, float]) -> bool:
 
 def get_premium_discount_zone(swing_low: float, swing_high: float) -> Dict[str, float]:
     fib_50 = swing_low + (swing_high - swing_low) * 0.5
-    return {"swing_low": swing_low, "swing_high": swing_high, "fib_50": fib_50}
+    return {
+        "swing_low": swing_low,
+        "swing_high": swing_high,
+        "fib_50": fib_50,
+        "equilibrium": fib_50,
+        "premium_low": fib_50,
+        "premium_high": swing_high,
+        "discount_low": swing_low,
+        "discount_high": fib_50,
+    }
 
 
 def classify_pd_array_zone(pd_array: PDArray, pd_zone: Dict[str, float]) -> str:
