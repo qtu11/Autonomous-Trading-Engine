@@ -5,15 +5,11 @@
   "rewrites": [
     {
       "source": "/api/v1/:path*",
-      "destination": "https://quantai-api.up.railway.app/api/v1/:path*"
+      "destination": "http://113.173.29.210:8848/api/v1/:path*"
     },
     {
       "source": "/backend/:path*",
-      "destination": "https://quantai-api.up.railway.app/backend/:path*"
-    },
-    {
-      "source": "/health",
-      "destination": "https://quantai-api.up.railway.app/health"
+      "destination": "http://113.173.29.210:8848/backend/:path*"
     }
   ],
   "headers": [
@@ -31,10 +27,6 @@
         {
           "key": "Access-Control-Allow-Headers",
           "value": "Content-Type, Authorization, X-API-Key, X-Bridge-Token, X-Requested-With"
-        },
-        {
-          "key": "Access-Control-Max-Age",
-          "value": "86400"
         }
       ]
     },
@@ -57,8 +49,8 @@
     }
   ],
   "env": {
-    "NEXT_PUBLIC_ATE_API_ORIGIN": "",
-    "NEXT_PUBLIC_QUANTAI_API_ORIGIN": "",
+    "NEXT_PUBLIC_ATE_API_ORIGIN": "https://autonomous-trading-engine.vercel.app",
+    "NEXT_PUBLIC_QUANTAI_API_ORIGIN": "https://autonomous-trading-engine.vercel.app",
     "NEXT_PUBLIC_FIREBASE_API_KEY": "AIzaSyDRmJ294aBZhVEcTliP86D19qM3tJbhgDI",
     "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN": "qtusdev.firebaseapp.com",
     "NEXT_PUBLIC_FIREBASE_PROJECT_ID": "qtusdev",
