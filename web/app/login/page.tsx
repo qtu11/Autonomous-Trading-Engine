@@ -3,8 +3,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
-const rawOrigin = process.env.NEXT_PUBLIC_ATE_API_ORIGIN || process.env.NEXT_PUBLIC_QUANTAI_API_ORIGIN || '';
-const API_ORIGIN = rawOrigin.replace(/\/api\/?$/, '').replace(/\/$/, '');
+// Backend URL - dùng biến môi trường hoặc IP WAN của máy
+const BACKEND_URL = process.env.NEXT_PUBLIC_ATE_BACKEND_URL || 'http://113.173.192.226:8848';
 
 // Mock Live Market Ticker Data for Institutional Stock/Gold Desk Visuals
 const TICKER_ITEMS = [
@@ -79,7 +79,7 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const endpoint = API_ORIGIN ? `${API_ORIGIN}/api/auth/login` : '/api/auth/login';
+      const endpoint = `${BACKEND_URL}/api/auth/login`;
       const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
