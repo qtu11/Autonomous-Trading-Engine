@@ -242,7 +242,7 @@ function CandleChart({
 
   const ema9 = computeEMA(candles, 9);
   const ema21 = computeEMA(candles, 21);
-  
+
   const computeVWAP = (data: Candle[]): number[] => {
     const res: number[] = [];
     let cumPv = 0;
@@ -282,16 +282,16 @@ function CandleChart({
   if (isSniper && candles.length > 1) {
     const lastIdx = candles.length - 1;
     const lastC = candles[lastIdx];
-    
+
     const e9Val = ema9[lastIdx] || 0;
     const e21Val = ema21[lastIdx] || 0;
     const vwapVal = vwap[lastIdx] || 0;
     const rsiVal = rsi14[lastIdx] || 50;
-    
+
     const ema12 = computeEMA(candles, 12);
     const ema26 = computeEMA(candles, 26);
     const mLine = ema12.map((v, idx) => v - ema26[idx]);
-    
+
     const mSig: number[] = [];
     const kMacd = 2 / 10;
     let mSigVal = mLine[0] || 0;
@@ -299,16 +299,16 @@ function CandleChart({
       mSigVal = mLine[i] * kMacd + mSigVal * (1 - kMacd);
       mSig.push(mSigVal);
     }
-    
+
     const currM = mLine[lastIdx] || 0;
     const currS = mSig[lastIdx] || 0;
-    
+
     const computeADXClient = (data: Candle[]): number[] => {
       const adxArr: number[] = [];
       const tr: number[] = [];
       const plusDM: number[] = [];
       const minusDM: number[] = [];
-      
+
       for (let i = 0; i < data.length; i++) {
         if (i === 0) {
           tr.push(data[i].h - data[i].l);
@@ -322,14 +322,14 @@ function CandleChart({
             Math.abs(data[i].l - prev.c)
           );
           tr.push(trVal);
-          
+
           const up = data[i].h - prev.h;
           const down = prev.l - data[i].l;
           plusDM.push(up > down && up > 0 ? up : 0);
           minusDM.push(down > up && down > 0 ? down : 0);
         }
       }
-      
+
       const computeEMAForSeries = (series: number[], period: number): number[] => {
         const ema: number[] = [];
         const kVal = 2 / (period + 1);
@@ -340,11 +340,11 @@ function CandleChart({
         }
         return ema;
       };
-      
+
       const trSmooth = computeEMAForSeries(tr, 14);
       const plusDMSmooth = computeEMAForSeries(plusDM, 14);
       const minusDMSmooth = computeEMAForSeries(minusDM, 14);
-      
+
       const dx: number[] = [];
       for (let i = 0; i < data.length; i++) {
         const trS = trSmooth[i] || 1e-9;
@@ -354,13 +354,13 @@ function CandleChart({
         const diff = Math.abs(pDI - mDI);
         dx.push(100 * (diff / (sum || 1e-9)));
       }
-      
+
       return computeEMAForSeries(dx, 14);
     };
-    
+
     const adxSeries = computeADXClient(candles);
     const currADX = adxSeries[lastIdx] || 0;
-    
+
     const vols = candles.map(c => c.v || 0);
     let sumVol = 0;
     const startVol = Math.max(0, lastIdx - 19);
@@ -369,7 +369,7 @@ function CandleChart({
     }
     const volAvg = sumVol / (lastIdx - startVol + 1);
     const currVol = lastC.v || 0;
-    
+
     let bScore = 0;
     bScore += lastC.c > vwapVal ? 1 : 0;
     bScore += rsiVal > 50 ? 1 : 0;
@@ -379,7 +379,7 @@ function CandleChart({
     bScore += (currVol > volAvg && lastC.c > lastC.o) ? 1 : 0;
     bScore += (rsi14[Math.max(0, lastIdx - 1)] > 50) ? 1 : 0;
     const bullPct = (bScore / 7) * 100;
-    
+
     let rScore = 0;
     rScore += lastC.c < vwapVal ? 1 : 0;
     rScore += rsiVal < 50 ? 1 : 0;
@@ -389,13 +389,13 @@ function CandleChart({
     rScore += (currVol > volAvg && lastC.c < lastC.o) ? 1 : 0;
     rScore += (rsi14[Math.max(0, lastIdx - 1)] < 50) ? 1 : 0;
     const bearPct = (rScore / 7) * 100;
-    
+
     const biasText = (bullPct - bearPct) >= 40 ? "STRONG BULL" : (bearPct - bullPct) >= 40 ? "STRONG BEAR" : bullPct > bearPct ? "MILD BULL" : "MILD BEAR";
     const biasCol = biasText.includes("STRONG BULL") ? '#10b981' : biasText.includes("STRONG BEAR") ? '#ef4444' : '#9ca3af';
-    
+
     const triggerBuy = lastIdx >= 1 && ema9[lastIdx] > ema21[lastIdx] && ema9[lastIdx - 1] <= ema21[lastIdx - 1];
     const triggerSell = lastIdx >= 1 && ema9[lastIdx] < ema21[lastIdx] && ema9[lastIdx - 1] >= ema21[lastIdx - 1];
-    
+
     sniperDashboardData = {
       bullPct,
       bearPct,
@@ -415,16 +415,16 @@ function CandleChart({
       statusText: triggerBuy || triggerSell ? "NEW" : "WAIT",
       statusCol: triggerBuy || triggerSell ? '#10b981' : '#fff',
     };
-    
+
     for (let j = endIdx - 1; j >= 1; j--) {
       const e9_j = ema9[j];
       const e21_j = ema21[j];
       const e9_j_prev = ema9[j - 1];
       const e21_j_prev = ema21[j - 1];
-      
+
       const isBuy = e9_j > e21_j && e9_j_prev <= e21_j_prev;
       const isSell = e9_j < e21_j && e9_j_prev >= e21_j_prev;
-      
+
       if (isBuy || isSell) {
         let sumAtr = 0;
         const startAtrIdx = Math.max(0, j - 13);
@@ -434,7 +434,7 @@ function CandleChart({
         }
         const currAtr = sumAtr / countAtr;
         const risk = currAtr * 1.5;
-        
+
         const entry = candles[j].c;
         const sl = isBuy ? entry - risk : entry + risk;
         const tp1 = isBuy ? entry + risk : entry - risk;
@@ -442,7 +442,7 @@ function CandleChart({
         const tp3 = isBuy ? entry + risk * 3 : entry - risk * 3;
         const tp4 = isBuy ? entry + risk * 4 : entry - risk * 4;
         const tp5 = isBuy ? entry + risk * 5 : entry - risk * 5;
-        
+
         activeSniperSignal = {
           type: isBuy ? 'BUY' : 'SELL',
           entry,
@@ -585,7 +585,7 @@ function CandleChart({
         {vis.map((c, i) => {
           const bull = c.c >= c.o;
           let col = bull ? C.green : C.red;
-          
+
           if (isSniper) {
             const absIdx = startIdx + i;
             if (absIdx >= 1) {
@@ -593,10 +593,10 @@ function CandleChart({
               const e21_curr = ema21[absIdx];
               const e9_prev = ema9[absIdx - 1];
               const e21_prev = ema21[absIdx - 1];
-              
+
               const trigBuy = e9_curr > e21_curr && e9_prev <= e21_prev;
               const trigSell = e9_curr < e21_curr && e9_prev >= e21_prev;
-              
+
               if (trigBuy || trigSell) {
                 col = '#000000';
               } else {
@@ -661,7 +661,7 @@ function CandleChart({
             {ema21Points && <polyline points={ema21Points} fill="none" stroke="#ef4444" strokeWidth={1.2} opacity={0.9} />}
             {/* VWAP */}
             {vwapPoints && <polyline points={vwapPoints} fill="none" stroke="#3b82f6" strokeWidth={1.5} opacity={0.95} />}
-            
+
             {/* Buy/Sell text shapes */}
             {vis.map((c, i) => {
               const absIdx = startIdx + i;
@@ -670,10 +670,10 @@ function CandleChart({
               const e21_curr = ema21[absIdx];
               const e9_prev = ema9[absIdx - 1];
               const e21_prev = ema21[absIdx - 1];
-              
+
               const trigBuy = e9_curr > e21_curr && e9_prev <= e21_prev;
               const trigSell = e9_curr < e21_curr && e9_prev >= e21_prev;
-              
+
               if (trigBuy) {
                 return (
                   <g key={`shapeBuy${i}`}>
@@ -796,11 +796,11 @@ function CandleChart({
           const sig = activeSniperSignal;
           const sIdx = sig.signalIdx;
           if (sIdx < startIdx - 20 || sIdx >= endIdx) return null;
-          
+
           const startX = px(Math.max(0, sIdx - startIdx));
           const endX = px(Math.min(visibleCount - 1, sIdx - startIdx + 20));
           const labelX = px(Math.min(visibleCount - 1, sIdx - startIdx + 12));
-          
+
           const levels = [
             { price: sig.entry, color: '#3b82f6', label: `ENTRY: ${sig.entry.toFixed(2)}`, width: 1.5, dash: '' },
             { price: sig.sl, color: '#ef4444', label: `SL: ${sig.sl.toFixed(2)}`, width: 1.5, dash: '' },
@@ -810,7 +810,7 @@ function CandleChart({
             { price: sig.tp4, color: '#047857', label: `TP4: ${sig.tp4.toFixed(2)}`, width: 1.5, dash: '' },
             { price: sig.tp5, color: '#065f46', label: `TP5: ${sig.tp5.toFixed(2)}`, width: 2, dash: '' },
           ];
-          
+
           return (
             <g key="sniperLevels">
               {levels.map((lvl, idx) => {
@@ -845,13 +845,13 @@ function CandleChart({
             { label: "Status", value: d.statusText, tc: d.statusCol },
             { label: "Sniper Mode", value: "Qtus V.02", tc: '#3b82f6' },
           ];
-          
+
           const tableW = 86;
           const rowH = 10;
           const tableH = rows.length * rowH;
           const tableX = PL + 8;
           const tableY = 48;
-          
+
           return (
             <g key="sniperDashboard" opacity={0.92}>
               <rect x={tableX} y={tableY} width={tableW} height={tableH} fill="rgba(15,23,42,0.92)" stroke="rgba(255,255,255,0.08)" strokeWidth={0.7} rx={3} />
@@ -861,7 +861,7 @@ function CandleChart({
                   <g key={`drow${idx}`}>
                     {r.bg && <rect x={tableX + 0.6} y={ry + 0.6} width={tableW - 1.2} height={rowH - 1.2} fill={r.bg} opacity={0.8} rx={1.5} />}
                     {idx > 0 && <line x1={tableX} y1={ry} x2={tableX + tableW} y2={ry} stroke="rgba(255,255,255,0.05)" strokeWidth={0.4} />}
-                    
+
                     <text x={tableX + 4} y={ry + 7} fill={r.bg ? '#fff' : '#9ca3af'} fontSize={5.5} fontFamily={C.sans} fontWeight="bold">
                       {r.label}
                     </text>
@@ -1625,7 +1625,7 @@ export default function App() {
                   }}
                   title="Trading Method"
                 >
-                   <option value="ULTRA_CONFLUENCE" style={{ background: '#0b0f19', color: C.text }}>Ultra Confluence</option>
+                  <option value="ULTRA_CONFLUENCE" style={{ background: '#0b0f19', color: C.text }}>Ultra Confluence</option>
                   <option value="SMC" style={{ background: '#0b0f19', color: C.text }}>SMC Concepts</option>
                   <option value="ICT" style={{ background: '#0b0f19', color: C.text }}>ICT Killzone</option>
                   <option value="PRICE_ACTION" style={{ background: '#0b0f19', color: C.text }}>Price Action</option>
