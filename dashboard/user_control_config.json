@@ -1,13 +1,13 @@
 {
   "execution_mode": "DEMO",
-  "live_armed": true,
+  "live_armed": false,
   "demo_armed": true,
   "kill_switch": false,
   "ai_auto_loop": true,
   "enable_trading": true,
   "active_ai_model": "deepseek-v4-flash-free",
   "custom_model_id": "",
-  "trading_method": "ICT",
+  "trading_method": "SMC",
   "gemini_api_key": "enc:v1:QVEuQWI4Uk42TGhPSXk1eFVoZHE3azVpcWVDSUNzTml0ZU5GbFFQeU9sWlJnVlZiNDNyZlE=",
   "claude_api_key": "",
   "deepseek_api_key": "",
@@ -21,9 +21,9 @@
   "telegram_chat_id": "6688889075",
   "telegram_enabled": true,
   "pnl_reset_time": "2026-08-07T10:34:00.710974",
-  "risk_per_trade_fraction": 0.05,
-  "max_open_positions": 5,
-  "max_spread": 1.0,
+  "risk_per_trade_fraction": 0.0491,
+  "max_open_positions": 10,
+  "max_spread": 3.35,
   "oauth_test": true,
-  "config_updated_at": "2026-08-08T04:11:30.893011+00:00"
+  "config_updated_at": "2026-08-09T02:25:21.115133+00:00"
 }

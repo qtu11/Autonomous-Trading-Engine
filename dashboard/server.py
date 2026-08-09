@@ -2055,6 +2055,15 @@ class TelemetryPayload(BaseModel):
 
 @app.post("/api/telemetry", dependencies=[Depends(require_bridge_token)])
 async def receive_telemetry(payload: TelemetryPayload):
+    return _handle_telemetry(payload)
+
+
+@app.post("/api/v1/telemetry", dependencies=[Depends(require_bridge_token)])
+async def receive_telemetry_v1(payload: TelemetryPayload):
+    return _handle_telemetry(payload)
+
+
+def _handle_telemetry(payload: TelemetryPayload):
     global _LAST_EA_HEARTBEAT, _LAST_EA_TELEMETRY
     _LAST_EA_HEARTBEAT = datetime.now(timezone.utc)
     _LAST_EA_TELEMETRY = payload.model_dump()

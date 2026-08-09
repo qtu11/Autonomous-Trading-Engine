@@ -23,7 +23,10 @@
       "Bash(where metaeditor64.exe)",
       "Read(//c/Program Files/MetaTrader 5/**)",
       "Read(//c/Program Files \\\\\\(x86\\\\\\)/MetaTrader 5/**)",
-      "Read(//c/Program Files/**)"
+      "Read(//c/Program Files/**)",
+      "PowerShell(Get-Content *)",
+      "Bash(Get-Content \"C:\\\\Users\\\\KIMPC\\\\.claude\\\\settings.json\")",
+      "Bash(Select-Object -First 5)"
     ]
   }
 }

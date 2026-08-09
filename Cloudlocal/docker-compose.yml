@@ -73,6 +73,7 @@ services:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - QUANTAI_LOG_DIR=/app/logs
       # Trading config
       - ATE_EXECUTION_MODE=${ATE_EXECUTION_MODE:-DEMO}
       - QUANTAI_EXECUTION_MODE=${QUANTAI_EXECUTION_MODE:-DEMO}
