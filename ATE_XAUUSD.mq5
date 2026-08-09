@@ -544,7 +544,12 @@ void PollAndExecuteAISignals()
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
 
+   // DEBUG: log before every claim attempt to track cadence
+   PrintFormat("CLAIM_TRY: executor=%s symbol=%s magic=%I64u url=%s",
+      InpExecutorId, g_symbol, InpMagicNumber, ATEApiBase() + "/api/v1/bridge/commands/claim");
+
    int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/commands/claim", headers, 3000, data, result, result_headers);
+   PrintFormat("CLAIM_RESULT: HTTP=%d result_size=%d err=%d", res, ArraySize(result), GetLastError());
    if(res != 200 || ArraySize(result) == 0)
    {
       int err = GetLastError();
@@ -1015,19 +1020,28 @@ string TimeframeLabel(ENUM_TIMEFRAMES tf)
 //+------------------------------------------------------------------+
 void SendLiveCandles()
 {
+   // DEBUG: Always log entry so we know this function is being called
+   PrintFormat("CANDLES_DEBUG: entering SendLiveCandles() | token_len=%d url_len=%d last_push_ago=%d interval=%d",
+      StringLen(InpBridgeToken), StringLen(InpApiUrl),
+      (int)(TimeLocal() - m_last_candles_push), InpCandlesIntervalSec);
+
    if(StringLen(InpBridgeToken) == 0 || StringLen(InpApiUrl) == 0)
+   {
+      Print("CANDLES_SKIP: token or url empty");
       return;
+   }
 
    MqlRates rates[];
    ArraySetAsSeries(rates, false); // Oldest first, newest last
    int copied = CopyRates(g_symbol, _Period, 0, 100, rates);
+   PrintFormat("CANDLES_COPY_RESULT: copied=%d err=%d symbol=%s period=%d",
+      copied, GetLastError(), g_symbol, _Period);
    if(copied <= 0)
    {
       PrintFormat("CANDLES_COPY_FAILED: err=%d for %s on %s", GetLastError(), g_symbol, _Period);
       return;
    }
 
-   // DEBUG: Log every call to confirm execution cadence
    PrintFormat("CANDLES_PUSH_START: symbol=%s tf=%s candles=%d", g_symbol, _Period, copied);
 
    string candlesJson = "";
