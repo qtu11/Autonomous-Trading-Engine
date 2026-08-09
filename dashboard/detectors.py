@@ -9,8 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import time as dtime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
-import numpy as np
+from typing import Any
+
 import pandas as pd
 
 
@@ -71,8 +71,8 @@ class Candle:
         return self.lower_wick / self.range_size
 
 
-def df_to_candles(df: pd.DataFrame) -> List[Candle]:
-    candles: List[Candle] = []
+def df_to_candles(df: pd.DataFrame) -> list[Candle]:
+    candles: list[Candle] = []
     for i, row in df.iterrows():
         candles.append(
             Candle(
@@ -115,7 +115,7 @@ class PDArray:
     formed_at_time: pd.Timestamp
     mitigated: bool = False
     has_fvg_confluence: bool = False
-    ce: Optional[float] = None
+    ce: float | None = None
     strength_score: float = 1.0
 
     @property
@@ -151,7 +151,7 @@ def find_swing_points(df: pd.DataFrame, window: int = 2) -> pd.DataFrame:
     return df
 
 
-def get_last_swing_points(df: pd.DataFrame, n: int = 5) -> Dict[str, List[Dict[str, Any]]]:
+def get_last_swing_points(df: pd.DataFrame, n: int = 5) -> dict[str, list[dict[str, Any]]]:
     swing_highs = df[df["swing_high"]].tail(n)[["time", "high"]].to_dict("records")
     swing_lows = df[df["swing_low"]].tail(n)[["time", "low"]].to_dict("records")
     return {"swing_highs": swing_highs, "swing_lows": swing_lows}
@@ -181,7 +181,7 @@ def classify_trend_structure(df: pd.DataFrame, window: int = 2) -> str:
 
 # ── Order Blocks & Rejection Blocks ──────────────────────────────────────────
 
-def _find_nearest_swing_before(swing_idx_set: set, current_index: int, candles: List[Candle], field_name: str) -> Optional[float]:
+def _find_nearest_swing_before(swing_idx_set: set, current_index: int, candles: list[Candle], field_name: str) -> float | None:
     candidates = [idx for idx in swing_idx_set if idx < current_index]
     if not candidates:
         return None
@@ -190,12 +190,12 @@ def _find_nearest_swing_before(swing_idx_set: set, current_index: int, candles: 
 
 
 def detect_order_blocks(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
     displacement_atr_multiplier: float = 1.5,
-    atr_series: Optional[pd.Series] = None,
-) -> List[PDArray]:
-    order_blocks: List[PDArray] = []
+    atr_series: pd.Series | None = None,
+) -> list[PDArray]:
+    order_blocks: list[PDArray] = []
     n = len(candles)
 
     swing_highs_idx = set(swing_df[swing_df["swing_high"]].index) if "swing_high" in swing_df.columns else set()
@@ -250,8 +250,8 @@ def detect_order_blocks(
     return order_blocks
 
 
-def detect_rejection_blocks(candles: List[Candle], swing_df: pd.DataFrame, cluster_size: int = 3) -> List[PDArray]:
-    rejection_blocks: List[PDArray] = []
+def detect_rejection_blocks(candles: list[Candle], swing_df: pd.DataFrame, cluster_size: int = 3) -> list[PDArray]:
+    rejection_blocks: list[PDArray] = []
     n = len(candles)
 
     for i in range(cluster_size, n - 1):
@@ -290,7 +290,7 @@ def detect_rejection_blocks(candles: List[Candle], swing_df: pd.DataFrame, clust
     return rejection_blocks
 
 
-def mark_ob_mitigated(order_blocks: List[PDArray], candles: List[Candle]) -> None:
+def mark_ob_mitigated(order_blocks: list[PDArray], candles: list[Candle]) -> None:
     for ob in order_blocks:
         if ob.mitigated:
             continue
@@ -304,9 +304,9 @@ def mark_ob_mitigated(order_blocks: List[PDArray], candles: List[Candle]) -> Non
 
 
 def detect_breaker_and_mitigation_blocks(
-    order_blocks: List[PDArray], candles: List[Candle]
-) -> List[PDArray]:
-    results: List[PDArray] = []
+    order_blocks: list[PDArray], candles: list[Candle]
+) -> list[PDArray]:
+    results: list[PDArray] = []
 
     for ob in order_blocks:
         if not ob.mitigated:
@@ -357,8 +357,8 @@ def detect_breaker_and_mitigation_blocks(
 
 # ── FVG & Inversion FVG ───────────────────────────────────────────────────────
 
-def detect_fvg(candles: List[Candle]) -> List[PDArray]:
-    fvg_list: List[PDArray] = []
+def detect_fvg(candles: list[Candle]) -> list[PDArray]:
+    fvg_list: list[PDArray] = []
 
     for i in range(2, len(candles)):
         c0, c1, c2 = candles[i - 2], candles[i - 1], candles[i]
@@ -395,7 +395,7 @@ def detect_fvg(candles: List[Candle]) -> List[PDArray]:
 
 
 def link_fvg_to_order_blocks(
-    order_blocks: List[PDArray], fvg_list: List[PDArray], max_gap_bars: int = 3
+    order_blocks: list[PDArray], fvg_list: list[PDArray], max_gap_bars: int = 3
 ) -> None:
     for ob in order_blocks:
         for fvg in fvg_list:
@@ -406,7 +406,7 @@ def link_fvg_to_order_blocks(
                 break
 
 
-def get_fvg_fill_state(fvg: PDArray, candles: List[Candle]) -> str:
+def get_fvg_fill_state(fvg: PDArray, candles: list[Candle]) -> str:
     touched, ce_touched, fully_filled = False, False, False
 
     for c in candles[fvg.formed_at_index + 1 :]:
@@ -437,11 +437,11 @@ def get_fvg_fill_state(fvg: PDArray, candles: List[Candle]) -> str:
 # ── Liquidity Sweeps & EQH/EQL ───────────────────────────────────────────────
 
 def detect_liquidity_sweep(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
-    current_index: Optional[int] = None,
-    lookback: Optional[int] = None,
-) -> Optional[str]:
+    current_index: int | None = None,
+    lookback: int | None = None,
+) -> str | None:
     if current_index is None:
         current_index = len(candles) - 1
     if current_index < 0 or current_index >= len(candles):
@@ -467,7 +467,7 @@ def detect_liquidity_sweep(
 
 def detect_equal_highs_lows(
     swing_df: pd.DataFrame, tolerance_pct: float = 0.0005
-) -> Dict[str, List[Tuple[int, int, float]]]:
+) -> dict[str, list[tuple[int, int, float]]]:
     highs = swing_df[swing_df["swing_high"]][["high"]].reset_index()
     lows = swing_df[swing_df["swing_low"]][["low"]].reset_index()
 
@@ -490,7 +490,7 @@ def detect_equal_highs_lows(
 
 # ── Killzone Filter & Asian Range ───────────────────────────────────────────
 
-def get_killzone_status(candle_time: pd.Timestamp, broker_utc_offset_hours: float = 2.0) -> Dict[str, Any]:
+def get_killzone_status(candle_time: pd.Timestamp, broker_utc_offset_hours: float = 2.0) -> dict[str, Any]:
     utc_time = candle_time - pd.Timedelta(hours=broker_utc_offset_hours)
     vn_time = utc_time + pd.Timedelta(hours=7)
     t = vn_time.time()
@@ -508,7 +508,7 @@ def get_killzone_status(candle_time: pd.Timestamp, broker_utc_offset_hours: floa
     }
 
 
-def get_asian_range(df_m15: pd.DataFrame, broker_utc_offset_hours: float = 2.0) -> Dict[str, Optional[float]]:
+def get_asian_range(df_m15: pd.DataFrame, broker_utc_offset_hours: float = 2.0) -> dict[str, float | None]:
     df = df_m15.copy()
     df["vn_time"] = df["time"] - pd.Timedelta(hours=broker_utc_offset_hours) + pd.Timedelta(hours=7)
     df["vn_date"] = df["vn_time"].dt.date
@@ -532,7 +532,7 @@ def get_asian_range(df_m15: pd.DataFrame, broker_utc_offset_hours: float = 2.0) 
 
 # ── OTE (Optimal Trade Entry) & Premium/Discount ────────────────────────────
 
-def calculate_ote_zone(swing_low: float, swing_high: float, direction: str) -> Dict[str, float]:
+def calculate_ote_zone(swing_low: float, swing_high: float, direction: str) -> dict[str, float]:
     range_size = swing_high - swing_low
     if direction == "BUY":
         level_618 = swing_high - range_size * 0.618
@@ -550,17 +550,17 @@ def calculate_ote_zone(swing_low: float, swing_high: float, direction: str) -> D
     }
 
 
-def is_price_in_ote(price: float, ote_zone: Dict[str, float]) -> bool:
+def is_price_in_ote(price: float, ote_zone: dict[str, float]) -> bool:
     return ote_zone["zone_bottom"] <= price <= ote_zone["zone_top"]
 
 
-def check_fvg_ote_confluence(fvg: PDArray, ote_zone: Dict[str, float]) -> bool:
+def check_fvg_ote_confluence(fvg: PDArray, ote_zone: dict[str, float]) -> bool:
     if fvg.ce is None:
         return False
     return is_price_in_ote(fvg.ce, ote_zone)
 
 
-def get_premium_discount_zone(swing_low: float, swing_high: float) -> Dict[str, float]:
+def get_premium_discount_zone(swing_low: float, swing_high: float) -> dict[str, float]:
     fib_50 = swing_low + (swing_high - swing_low) * 0.5
     return {
         "swing_low": swing_low,
@@ -574,7 +574,7 @@ def get_premium_discount_zone(swing_low: float, swing_high: float) -> Dict[str, 
     }
 
 
-def classify_pd_array_zone(pd_array: PDArray, pd_zone: Dict[str, float]) -> str:
+def classify_pd_array_zone(pd_array: PDArray, pd_zone: dict[str, float]) -> str:
     fib_50 = pd_zone["fib_50"]
     if pd_array.top < fib_50:
         return "DISCOUNT"
@@ -583,7 +583,7 @@ def classify_pd_array_zone(pd_array: PDArray, pd_zone: Dict[str, float]) -> str:
     return "MIXED"
 
 
-def get_htf_bias_from_pd_zone(current_price: float, pd_zone: Dict[str, float]) -> str:
+def get_htf_bias_from_pd_zone(current_price: float, pd_zone: dict[str, float]) -> str:
     fib_50 = pd_zone["fib_50"]
     if current_price < fib_50:
         return "DISCOUNT_BUY_ONLY"
@@ -594,16 +594,16 @@ def get_htf_bias_from_pd_zone(current_price: float, pd_zone: Dict[str, float]) -
 
 # ── BOS / CHoCH & Market Structure Labels ────────────────────────────────────
 
-def detect_market_structure(df: pd.DataFrame, window: int = 2, n: int = 6) -> Dict[str, Any]:
+def detect_market_structure(df: pd.DataFrame, window: int = 2, n: int = 6) -> dict[str, Any]:
     """Gán nhãn HH/HL/LH/LL cho các swing gần nhất và phân loại cấu trúc hiện tại."""
     swings = find_swing_points(df, window)
     h_map = {int(idx): float(row["high"]) for idx, row in swings[swings["swing_high"]].tail(n).iterrows()}
     l_map = {int(idx): float(row["low"]) for idx, row in swings[swings["swing_low"]].tail(n).iterrows()}
 
     events = sorted(set(h_map) | set(l_map))
-    labeled: List[Dict[str, Any]] = []
-    prev_high: Optional[float] = None
-    prev_low: Optional[float] = None
+    labeled: list[dict[str, Any]] = []
+    prev_high: float | None = None
+    prev_low: float | None = None
 
     for idx in events:
         if idx in h_map:
@@ -628,7 +628,7 @@ def detect_market_structure(df: pd.DataFrame, window: int = 2, n: int = 6) -> Di
     return {"labels": labeled, "structure": structure}
 
 
-def detect_bos_choch(candles: List[Candle], swing_df: pd.DataFrame, current_index: int) -> Dict[str, Any]:
+def detect_bos_choch(candles: list[Candle], swing_df: pd.DataFrame, current_index: int) -> dict[str, Any]:
     """Phát hiện Break of Structure (BOS) và Change of Character (CHoCH).
 
     - BOS: phá vỡ swing cao/thấp CÙNG hướng cấu trúc (tiếp diễn xu hướng).
@@ -668,12 +668,12 @@ def detect_bos_choch(candles: List[Candle], swing_df: pd.DataFrame, current_inde
 # ── Trendline Detection ───────────────────────────────────────────────────────
 
 def detect_trendlines(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
     n: int = 8,
     touch_tolerance_atr: float = 0.20,
-    atr_series: Optional[pd.Series] = None,
-) -> List[Dict[str, Any]]:
+    atr_series: pd.Series | None = None,
+) -> list[dict[str, Any]]:
     """Vẽ trendline hỗ trợ (support) qua swing lows và kháng cự (resistance) qua swing highs.
 
     Mỗi đường cần >= 2 điểm chạm. Trả về [{'kind': 'SUPPORT'|'RESISTANCE', 'p1': {index, price, time},
@@ -685,7 +685,7 @@ def detect_trendlines(
     highs = [(int(idx), float(row["high"])) for idx, row in swing_df[swing_df["swing_high"]].tail(n).iterrows()]
     lows = [(int(idx), float(row["low"])) for idx, row in swing_df[swing_df["swing_low"]].tail(n).iterrows()]
 
-    def _fit(points: List[Tuple[int, float]], kind: str) -> Optional[Dict[str, Any]]:
+    def _fit(points: list[tuple[int, float]], kind: str) -> dict[str, Any] | None:
         if len(points) < 2:
             return None
         (i1, p1), (i2, p2) = points[0], points[-1]
@@ -708,7 +708,7 @@ def detect_trendlines(
             "touches": touches, "slope": slope,
         }
 
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     if len(lows) >= 2:
         support = _fit(lows, "SUPPORT")
         if support:

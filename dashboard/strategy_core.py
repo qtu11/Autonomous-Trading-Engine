@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Mapping, Optional
 
 
 class SignalAction(str, Enum):
@@ -29,9 +29,9 @@ class DecisionProposal:
     symbol: str
     timeframe: str
     confidence: int
-    entry: Optional[float]
-    stop_loss: Optional[float]
-    take_profit: Optional[float]
+    entry: float | None
+    stop_loss: float | None
+    take_profit: float | None
     reason_codes: tuple[str, ...] = field(default_factory=tuple)
     strategy_version: str = ""
     created_at: str = ""
@@ -46,7 +46,7 @@ def _no_trade(
     timeframe: str,
     config: StrategyConfig,
     *reasons: str,
-    created_at: Optional[str] = None,
+    created_at: str | None = None,
 ) -> DecisionProposal:
     return DecisionProposal(
         action=SignalAction.NO_TRADE,
@@ -70,7 +70,7 @@ def decide_signal(
     bid: float,
     ask: float,
     config: StrategyConfig = StrategyConfig(),
-    created_at: Optional[str] = None,
+    created_at: str | None = None,
 ) -> DecisionProposal:
     """Return one structured proposal; missing or invalid inputs always abstain."""
     timestamp = created_at or _now_iso()
@@ -92,10 +92,10 @@ def decide_signal(
     if not 0 <= rsi <= 100:
         return _no_trade(symbol, timeframe, config, "INVALID_RSI", created_at=timestamp)
 
-    if ema20 > ema50 and ema50 > ema200 and 40 <= rsi <= 85:
+    if ema20 > ema50 > ema200 and 40 <= rsi <= 85:
         action = SignalAction.BUY
         reasons = ["BULLISH_EMA_ALIGNMENT", "BUY_RSI_RANGE"]
-    elif ema20 < ema50 and ema50 < ema200 and 15 <= rsi <= 60:
+    elif ema20 < ema50 < ema200 and 15 <= rsi <= 60:
         action = SignalAction.SELL
         reasons = ["BEARISH_EMA_ALIGNMENT", "SELL_RSI_RANGE"]
     else:

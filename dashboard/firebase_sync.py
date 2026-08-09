@@ -25,7 +25,7 @@ import json
 import os
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 
@@ -48,12 +48,12 @@ def oauth_user_ready() -> bool:
     return _oauth_user_access_token() is not None
 
 
-_pull_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
+_pull_cache: dict[str, Any] = {"ts": 0.0, "data": None}
 _PULL_TTL_SECONDS = 15.0
 _PUSH_LOCK = threading.Lock()
 
 
-def pull_config() -> Optional[Dict[str, Any]]:
+def pull_config() -> dict[str, Any] | None:
     """Fetch the doc from Firestore; None if unreachable/disabled. Cached."""
     now = time.time()
     if now - _pull_cache["ts"] < _PULL_TTL_SECONDS:
@@ -74,7 +74,7 @@ def pull_config() -> Optional[Dict[str, Any]]:
     return result
 
 
-def push_config(data: Dict[str, Any]) -> bool:
+def push_config(data: dict[str, Any]) -> bool:
     """Best-effort push of the control config to Firestore 'control_center/config' doc."""
     if not is_configured():
         return False
@@ -103,7 +103,7 @@ def _service_account_credentials():
         return None
 
 
-def _push_with_admin(data: Dict[str, Any]) -> bool:
+def _push_with_admin(data: dict[str, Any]) -> bool:
     from firebase_admin import credentials, firestore, initialize_app
     cred = credentials.Certificate(_service_account_credentials())
     app = initialize_app(cred, name="ate-control-config", options={"projectId": _project_id()})
@@ -112,7 +112,7 @@ def _push_with_admin(data: Dict[str, Any]) -> bool:
     return True
 
 
-def _pull_with_admin() -> Optional[Dict[str, Any]]:
+def _pull_with_admin() -> dict[str, Any] | None:
     from firebase_admin import credentials, firestore, initialize_app
     cred = credentials.Certificate(_service_account_credentials())
     app = initialize_app(cred, name="ate-control-config-pull")
@@ -123,7 +123,7 @@ def _pull_with_admin() -> Optional[Dict[str, Any]]:
 
 # ── OAuth User Token (firebase-tools configstore) ──────────────────────────────
 
-def _read_firebase_configstore() -> Dict[str, Any]:
+def _read_firebase_configstore() -> dict[str, Any]:
     """Read ~/.config/configstore/firebase-tools.json and return parsed JSON."""
     import pathlib
     path = pathlib.Path.home() / ".config" / "configstore" / "firebase-tools.json"
@@ -133,7 +133,7 @@ def _read_firebase_configstore() -> Dict[str, Any]:
         return {}
 
 
-def _oauth_user_access_token() -> Optional[str]:
+def _oauth_user_access_token() -> str | None:
     """Return current access_token from firebase-tools configstore, or None."""
     cfg = _read_firebase_configstore()
     return cfg.get("tokens", {}).get("access_token")
@@ -147,7 +147,7 @@ def _project_id() -> str:
     return os.getenv("FIREBASE_PROJECT_ID", "").strip()
 
 
-def _push_with_oauth_user(data: Dict[str, Any]) -> bool:
+def _push_with_oauth_user(data: dict[str, Any]) -> bool:
     token = _oauth_user_access_token()
     if not token:
         return False
@@ -162,7 +162,7 @@ def _push_with_oauth_user(data: Dict[str, Any]) -> bool:
     return resp2.status_code in (200, 201, 204)
 
 
-def _pull_with_oauth_user() -> Optional[Dict[str, Any]]:
+def _pull_with_oauth_user() -> dict[str, Any] | None:
     token = _oauth_user_access_token()
     if not token:
         return None
@@ -184,10 +184,10 @@ def web_api_key_ready() -> bool:
     return bool(_project_id() and _beta_api_key())
 
 
-def _id_token_via_anonymous() -> Optional[str]:
+def _id_token_via_anonymous() -> str | None:
     """Identity Toolkit anonymous sign-in; yields an ID token for rules."""
     import requests
-    url = f"https://identitytoolkit.googleapis.com/v1/accounts:signUp"
+    url = "https://identitytoolkit.googleapis.com/v1/accounts:signUp"
     try:
         resp = requests.post(url, params={"key": _beta_api_key()},
                              json={"returnSecureToken": True},
@@ -204,7 +204,7 @@ def _id_token_via_anonymous() -> Optional[str]:
         return None
 
 
-def _push_with_rest_anonymous(data: Dict[str, Any]) -> bool:
+def _push_with_rest_anonymous(data: dict[str, Any]) -> bool:
     import requests
     token = _id_token_via_anonymous()
     if not token:
@@ -220,7 +220,7 @@ def _push_with_rest_anonymous(data: Dict[str, Any]) -> bool:
     return resp2.status_code in (200, 201, 204)
 
 
-def _pull_with_rest_anonymous() -> Optional[Dict[str, Any]]:
+def _pull_with_rest_anonymous() -> dict[str, Any] | None:
     import requests
     token = _id_token_via_anonymous()
     if not token:
@@ -235,7 +235,7 @@ def _pull_with_rest_anonymous() -> Optional[Dict[str, Any]]:
 
 # Field value helpers ------------------------------------------------------------
 
-def _field_value(value: Any) -> Dict[str, Any]:
+def _field_value(value: Any) -> dict[str, Any]:
     if isinstance(value, bool):
         return {"booleanValue": value}
     if isinstance(value, int):
@@ -253,12 +253,12 @@ def _field_value(value: Any) -> Dict[str, Any]:
     return {"stringValue": str(value)}
 
 
-def _data_to_fields(data: Dict[str, Any]) -> Dict[str, Any]:
+def _data_to_fields(data: dict[str, Any]) -> dict[str, Any]:
     return {k: _field_value(v) for k, v in data.items()}
 
 
-def _fields_to_data(fields: Dict[str, Any]) -> Dict[str, Any]:
-    out: Dict[str, Any] = {}
+def _fields_to_data(fields: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
     for key, dtype in (fields or {}).items():
         if "stringValue" in dtype:
             out[key] = dtype["stringValue"]

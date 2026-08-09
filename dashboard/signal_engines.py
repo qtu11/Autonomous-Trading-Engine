@@ -11,18 +11,15 @@ Implements 5 trading strategy engines:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
-import numpy as np
-import pandas as pd
+from typing import Any
 
+import pandas as pd
 from detectors import (
     PDArrayDirection,
-    PDArrayType,
     calculate_ote_zone,
     check_fvg_ote_confluence,
     classify_pd_array_zone,
     classify_trend_structure,
-    detect_breaker_and_mitigation_blocks,
     detect_fvg,
     detect_liquidity_sweep,
     detect_order_blocks,
@@ -44,13 +41,13 @@ class SignalResult:
     status: str  # "APPROVED" | "NO_TRADE"
     direction: str  # "BUY" | "SELL" | "NONE"
     reason_code: str
-    entry_price: Optional[float] = None
-    sl: Optional[float] = None
-    tp: Optional[float] = None
+    entry_price: float | None = None
+    sl: float | None = None
+    tp: float | None = None
     layers_passed: int = 0
-    pd_array_used: Optional[str] = None
+    pd_array_used: str | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
             "direction": self.direction,
@@ -189,8 +186,7 @@ def _run_indicator_only(df_m15: pd.DataFrame) -> SignalResult:
     
     # BUY: Close > EMA20 > EMA50 > EMA200, RSI 45-65, ADX > 25, MACD bullish, Close > VWAP
     if (
-        curr_close > curr_ema20 and
-        curr_ema20 > curr_ema50 > curr_ema200 and
+        curr_close > curr_ema20 > curr_ema50 > curr_ema200 and
         45.0 <= curr_rsi <= 65.0 and
         curr_adx > 25 and
         curr_macd > curr_macd_sig and
@@ -212,8 +208,7 @@ def _run_indicator_only(df_m15: pd.DataFrame) -> SignalResult:
 
     # SELL: Close < EMA20 < EMA50 < EMA200, RSI 35-55, ADX > 25, MACD bearish, Close < VWAP
     if (
-        curr_close < curr_ema20 and
-        curr_ema20 < curr_ema50 < curr_ema200 and
+        curr_close < curr_ema20 < curr_ema50 < curr_ema200 and
         35.0 <= curr_rsi <= 55.0 and
         curr_adx > 25 and
         curr_macd < curr_macd_sig and
@@ -852,7 +847,7 @@ def _run_sniper_only(df_m15: pd.DataFrame, df_m5: pd.DataFrame) -> SignalResult:
 
 def run_signal_engine(
     symbol: str,
-    mtf_data: Dict[str, pd.DataFrame],
+    mtf_data: dict[str, pd.DataFrame],
     broker_utc_offset_hours: float = 2.0,
     method: str = "ULTRA_CONFLUENCE",
 ) -> SignalResult:

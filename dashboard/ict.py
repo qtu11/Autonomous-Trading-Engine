@@ -7,16 +7,17 @@ Hàm run_ict_analysis() ở cuối file là điểm vào chính — trả về T
 khái niệm ICT mà người dùng liệt kê, đóng gói sẵn cho main.py serve qua API.
 """
 from __future__ import annotations
+
+from datetime import time as dtime
+from typing import Any
+
 import numpy as np
 import pandas as pd
-from datetime import time as dtime
-try:
-    from .models import Candle, df_to_candles, Direction, PDBox, BoxType, PriceLevel, LevelType
-    from . import structure as S
-except ImportError:
-    from models import Candle, df_to_candles, Direction, PDBox, BoxType, PriceLevel, LevelType
-    import structure as S
-
+import structure as S
+from models import (
+    Candle,
+    df_to_candles,
+)
 
 # ══════════════════════════════════════════════════════════════════
 # HELPERS
@@ -32,18 +33,18 @@ def _obj(
     price: float = 0.0,
     label: str = "",
     status: str = "",
-    **extra: any,
-) -> dict[str, any]:
+    **extra: Any,
+) -> dict[str, Any]:
     c = candles[index]
-    obj: dict[str, any] = {
+    obj: dict[str, Any] = {
         "type": type_name,
         "direction": direction,
-        "top": round(float(top), 2),
-        "bottom": round(float(bottom), 2),
-        "price": round(float(price), 2) if price else 0.0,
+        "top": round(top, 2),
+        "bottom": round(bottom, 2),
+        "price": round(price, 2) if price else 0.0,
         "time_start": str(c.time),
         "time_end": "",
-        "index": int(index),
+        "index": index,
         "label": label,
         "status": status,
     }
@@ -65,7 +66,7 @@ def get_previous_day_high_low(
     df = df_d1.copy()
     df["vn_date"] = df["time"] - pd.Timedelta(hours=broker_utc_offset_hours) + pd.Timedelta(hours=7)
     today = df["vn_date"].iloc[-1].date()
-    prev = df[df["vn_date"].dt.date < today]
+    prev = df[df["vn_date"].apply(lambda x: x.date()) < today]
     if prev.empty:
         return {}
     row = prev.iloc[-1]
@@ -91,7 +92,7 @@ def get_session_high_low(
     """(19) Session High/Low for LONDON / NY / ASIA sessions today."""
     df = df.copy()
     df["utc"] = df["time"] - pd.Timedelta(hours=broker_utc_offset_hours)
-    df["utc_date"] = df["utc"].dt.date
+    df["utc_date"] = df["utc"].apply(lambda x: x.date())
     today = df["utc_date"].iloc[-1]
     mask = df["utc_date"] == today
     df_today = df[mask]
@@ -129,13 +130,13 @@ def detect_turtle_soup(
     df_d1: pd.DataFrame,
     broker_utc_offset_hours: float = 2.0,
     lookback: int = 3,
-) -> list[dict[str, any]]:
+) -> list[dict[str, Any]]:
     """(11) Turtle Soup: false breakout of PDH/PDL + fast reversal."""
     pdl_hld = get_previous_day_high_low(df_d1, broker_utc_offset_hours)
     if not pdl_hld:
         return []
     pdh, pdl = pdl_hld["pdh"], pdl_hld["pdl"]
-    out: list[dict[str, any]] = []
+    out: list[dict[str, Any]] = []
     for i in range(max(1, len(candles) - lookback), len(candles)):
         c = candles[i]
         if c.high > pdh and c.close < pdh:
@@ -151,9 +152,9 @@ def detect_judas_swing(
     candles: list[Candle],
     broker_utc_offset_hours: float = 2.0,
     lookback: int = 48,
-) -> list[dict[str, any]]:
+) -> list[dict[str, Any]]:
     """(12) Judas Swing: fake move inside London Kill Zone before the real reversal."""
-    out: list[dict[str, any]] = []
+    out: list[dict[str, Any]] = []
     for i in range(max(1, len(candles) - lookback), len(candles)):
         c = candles[i]
         utc = c.time - pd.Timedelta(hours=broker_utc_offset_hours)
@@ -177,9 +178,9 @@ def detect_smt_divergence(
     df_correlation: pd.DataFrame,
     swing_window: int = 2,
     lookback: int = 30,
-) -> list[dict[str, any]]:
+) -> list[dict[str, Any]]:
     """(13) SMT Divergence: primary makes a new swing, correlation does not."""
-    out: list[dict[str, any]] = []
+    out: list[dict[str, Any]] = []
     if df_correlation is None or df_correlation.empty:
         return out
     try:
@@ -212,17 +213,17 @@ def detect_smt_divergence(
 def detect_amd_po3(
     df: pd.DataFrame,
     broker_utc_offset_hours: float = 2.0,
-) -> list[dict[str, any]]:
+) -> list[dict[str, Any]]:
     """(14)(15) AMD/PO3: Accumulation (range) -> Manipulation (sweep) -> Distribution."""
     df = df.copy()
-    df["utc"] = df["time"] - pd.Timedelta(hours=broker_utc_offset_hours)
-    df["utc_date"] = df["utc"].dt.date
+    df["utc"] = pd.to_datetime(df["time"]) - pd.Timedelta(hours=broker_utc_offset_hours)
+    df["utc_date"] = df["utc"].apply(lambda x: x.date())
     today = df["utc_date"].iloc[-1]
     seg = df[df["utc_date"] == today]
     if len(seg) < 10:
         return []
 
-    out: list[dict[str, any]] = []
+    out: list[dict[str, Any]] = []
     n = len(seg)
 
     def _phase_bounds(a: int, b: int) -> tuple[float, float]:
@@ -258,9 +259,9 @@ def detect_silver_bullet(
     candles: list[Candle],
     broker_utc_offset_hours: float = 2.0,
     lookback: int = 24,
-) -> list[dict[str, any]]:
+) -> list[dict[str, Any]]:
     """(17) Silver Bullet: 10-11am NY window entry setup (14-15 UTC)."""
-    out: list[dict[str, any]] = []
+    out: list[dict[str, Any]] = []
     for i in range(max(1, len(candles) - lookback), len(candles)):
         c = candles[i]
         utc = c.time - pd.Timedelta(hours=broker_utc_offset_hours)
@@ -276,7 +277,7 @@ def detect_silver_bullet(
 def get_weekly_monthly_high_low(
     df_d1: pd.DataFrame,
     period: str = "WEEKLY",
-) -> dict[str, any]:
+) -> dict[str, Any]:
     """(21) Weekly/Monthly High/Low from D1 data."""
     if df_d1 is None or df_d1.empty:
         return {}
@@ -288,7 +289,7 @@ def get_weekly_monthly_high_low(
         prev = df[df["time"] < start]
         label = "WEEKLY_HL"
     else:
-        prev = df[df["time"].dt.to_period("M") < ref.to_period("M")]
+        prev = df[df["time"].apply(lambda x: x.to_period("M")) < ref.to_period("M")]
         label = "MONTHLY_HL"
     if prev.empty:
         return {}
@@ -313,9 +314,9 @@ def get_weekly_monthly_high_low(
 def run_ict_analysis(
     mtf_data: dict[str, pd.DataFrame],
     broker_utc_offset_hours: float = 2.0,
-) -> dict[str, any]:
+) -> dict[str, Any]:
     """
-    Chạy toàn bộ quy trình phát hiện ICT cho biểu đồ.
+    Chạy toàn bộ quy trình phát hiện ICT cho biểu đồ M15 (Primary).
     Trả về {"objects": [...], "counts": {...}} sẵn sàng để dùng ở server/chart_markup.
     """
     m15 = mtf_data.get("M15")
@@ -330,12 +331,12 @@ def run_ict_analysis(
     objects = []
     counts = {}
 
-    def _add(items: list[dict[str, any]], key: str) -> None:
+    def _add(items: list[dict[str, Any]], key: str) -> None:
         clean = [it for it in items if isinstance(it, dict) and it and it.get("type")]
         objects.extend(clean)
         counts[key] = len(clean)
 
-    def _daily_level(obj: dict[str, any]) -> dict[str, any]:
+    def _daily_level(obj: dict[str, Any]) -> dict[str, Any]:
         if not obj:
             return obj
         obj["index"] = 0

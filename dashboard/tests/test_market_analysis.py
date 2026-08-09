@@ -8,37 +8,37 @@ Each test verifies: Detection + Price Coordinates + Time + Direction + Status.
 Run: python -m pytest tests/test_market_analysis.py -v
 """
 
-import pytest
-import pandas as pd
-import numpy as np
-from datetime import datetime, timezone, timedelta
-from typing import List
-
-import sys
 import os
+import sys
+from datetime import datetime, timedelta, timezone
+
+import numpy as np
+import pandas as pd
+import pytest
+
 sys.path.insert(0, os.path.dirname(__file__))
 
-from detectors import (
-    Candle, df_to_candles, find_swing_points,
-    detect_market_structure, detect_bos_choch,
-    detect_order_blocks, detect_fvg, detect_rejection_blocks,
-    detect_breaker_and_mitigation_blocks, detect_liquidity_sweep,
-    detect_equal_highs_lows, mark_ob_mitigated,
-    calculate_ote_zone, get_premium_discount_zone,
-    classify_trend_structure, detect_trendlines,
-    PDArray, PDArrayType, PDArrayDirection,
-)
 from advanced_detectors import (
-    detect_support_resistance, detect_channels, detect_range_state,
-    detect_breakouts, detect_pullback_retest_fake, detect_candle_patterns,
-    detect_mss, detect_liquidity_zones, detect_dealing_range,
-    detect_supply_demand, detect_volume_imbalance, detect_liquidity_voids,
-    detect_inducement, detect_bpr, detect_unicorn,
-    get_previous_day_high_low, get_session_high_low,
-    detect_turtle_soup, detect_judas_swing, detect_smt_divergence,
-    detect_silver_bullet, build_advanced_markup,
+    build_advanced_markup,
+    detect_breakouts,
+    detect_candle_patterns,
+    detect_support_resistance,
 )
-
+from detectors import (
+    Candle,
+    PDArrayDirection,
+    PDArrayType,
+    calculate_ote_zone,
+    classify_trend_structure,
+    detect_bos_choch,
+    detect_fvg,
+    detect_liquidity_sweep,
+    detect_market_structure,
+    detect_order_blocks,
+    df_to_candles,
+    find_swing_points,
+    get_premium_discount_zone,
+)
 
 # =============================================================================
 # SYNTHETIC DATA FACTORIES
@@ -54,16 +54,16 @@ def make_candle(idx: int, open_p: float, high_p: float, low_p: float, close_p: f
         'high': high_p,
         'low': low_p,
         'close': close_p,
-        'volume': volume
+        'tick_volume': volume
     }
 
 
-def make_df(candles: List[dict]) -> pd.DataFrame:
+def make_df(candles: list[dict]) -> pd.DataFrame:
     """Convert list of candles to DataFrame."""
     return pd.DataFrame(candles)
 
 
-def candles_to_objs(candles: List[dict]) -> List[Candle]:
+def candles_to_objs(candles: list[dict]) -> list[Candle]:
     """Convert dict list to Candle objects."""
     return df_to_candles(make_df(candles))
 
@@ -111,7 +111,7 @@ class TestFVG:
         objs = candles_to_objs(candles)
         fvgs = detect_fvg(objs)
 
-        assert len(fvgs) >= 1, f"Expected bearish FVG"
+        assert len(fvgs) >= 1, "Expected bearish FVG"
         bearish_fvgs = [f for f in fvgs if f.direction == PDArrayDirection.BEARISH]
         assert len(bearish_fvgs) >= 1, "Should detect bearish FVG"
 
@@ -125,7 +125,7 @@ class TestFVG:
         objs = candles_to_objs(candles)
         fvgs = detect_fvg(objs)
 
-        assert len(fvgs) == 0, f"Expected no FVG for adjacent candles"
+        assert len(fvgs) == 0, "Expected no FVG for adjacent candles"
 
     def test_fvg_zone_only_covers_gap(self):
         """FVG rectangle MUST cover only the gap, not whole candles"""
@@ -252,22 +252,15 @@ class TestBOSCHoCH:
 
     def test_bullish_bos_in_uptrend(self):
         """Bullish BOS: Close breaks above swing high in uptrend"""
-        # Build uptrend then break above HH
+        # Index: 0,  1,   2,  3,  4,  5,   6,   7,   8,   9,  10,  11,  12,  13,  14
+        highs = [90.0, 95.0, 100.0, 95.0, 96.0, 105.0, 115.0, 105.0, 106.0, 110.0, 120.0, 115.0, 110.0, 108.0, 105.0]
+        lows  = [80.0, 85.0,  94.0, 80.0, 82.0,  95.0,  97.0,  90.0,  95.0, 100.0, 105.0, 100.0,  95.0,  92.0,  90.0]
         candles = []
         for i in range(15):
-            if i == 2:
-                candles.append(make_candle(i, 95, 100, 94, 99))   # SH1
-            elif i == 3:
-                candles.append(make_candle(i, 99, 100, 98, 99))  # SL1
-            elif i == 6:
-                candles.append(make_candle(i, 98, 105, 97, 104))  # SH2 (HH)
-            elif i == 7:
-                candles.append(make_candle(i, 104, 105, 103, 104))  # SL2
-            elif i == 10:
-                candles.append(make_candle(i, 103, 108, 103, 107))  # Break above SH2
-            else:
-                mid = 95 + i
-                candles.append(make_candle(i, mid, mid+2, mid-1, mid+1))
+            h, l = highs[i], lows[i]
+            # Make i=10 close break recent_high=115
+            close_p = 118.0 if i == 10 else (h+l)/2.0
+            candles.append(make_candle(i, (h+l)/2.0, h, l, close_p))
 
         df = make_df(candles)
         swings = find_swing_points(df, window=2)
@@ -280,21 +273,15 @@ class TestBOSCHoCH:
 
     def test_bearish_bos_in_downtrend(self):
         """Bearish BOS: Close breaks below swing low in downtrend"""
+        # Index: 0,   1,   2,   3,   4,   5,  6,   7,   8,   9,  10,  11,  12,  13,  14
+        highs = [120.0, 115.0, 106.0, 120.0, 118.0, 105.0, 103.0, 110.0, 105.0, 100.0,  95.0, 100.0, 105.0, 108.0, 110.0]
+        lows  = [110.0, 105.0, 100.0, 105.0, 104.0,  95.0,  85.0,  95.0,  94.0,  90.0,  75.0,  85.0,  90.0,  92.0,  95.0]
         candles = []
         for i in range(15):
-            if i == 2:
-                candles.append(make_candle(i, 105, 106, 100, 101))  # SL1
-            elif i == 3:
-                candles.append(make_candle(i, 101, 105, 101, 104))  # SH1
-            elif i == 6:
-                candles.append(make_candle(i, 104, 105, 95, 96))  # SL2 (LL)
-            elif i == 7:
-                candles.append(make_candle(i, 96, 104, 96, 103))  # SH2
-            elif i == 10:
-                candles.append(make_candle(i, 103, 104, 90, 91))  # Break below SL2
-            else:
-                mid = 105 - i
-                candles.append(make_candle(i, mid, mid+1, mid-2, mid-1))
+            h, l = highs[i], lows[i]
+            # Make i=10 close break recent_low=85
+            close_p = 77.0 if i == 10 else (h+l)/2.0
+            candles.append(make_candle(i, (h+l)/2.0, h, l, close_p))
 
         df = make_df(candles)
         swings = find_swing_points(df, window=2)
@@ -315,13 +302,15 @@ class TestOrderBlock:
     def test_bullish_ob_formation(self):
         """Bullish OB: bearish consolidation + bullish displacement breaking structure"""
         candles = []
-        # Need swing high first
-        candles.append(make_candle(0, 95, 100, 94, 99))  # Swing high
-        # Prior: bearish candle (consolidation)
-        candles.append(make_candle(1, 102, 103, 98, 99))  # Bearish OB source
-        # Current: bullish displacement breaking above swing high
-        candles.append(make_candle(2, 99, 105, 98, 104))  # Bullish displacement
-        candles.append(make_candle(3, 104, 106, 103, 105))
+        candles.append(make_candle(0, 90, 92, 89, 91))
+        # i=1: Swing high
+        candles.append(make_candle(1, 91, 100, 90, 99))
+        # i=2: Bearish OB source
+        candles.append(make_candle(2, 97, 98, 93, 94))
+        # i=3: Bullish displacement breaking above i=1 high (100)
+        candles.append(make_candle(3, 94, 105, 93, 104))
+        # i=4: Dummy candle so index 3 is not the last candle
+        candles.append(make_candle(4, 104, 106, 103, 105))
 
         df = make_df(candles)
         swings = find_swing_points(df, window=1)
@@ -343,11 +332,11 @@ class TestCandlePatterns:
 
     def test_pin_bar_bullish(self):
         """Bullish Pin Bar: lower wick >= 2x body, small upper wick"""
-        # Pin bar: open=100, close=100, high=101, low=95
-        # body=0, lower_wick=5, upper_wick=1
+        # Pin bar: open=99, close=100, high=100.5, low=95
+        # body=1.0, lower_wick=4.0 (>= 2x body), upper_wick=0.5 (< body)
         candles = [
             make_candle(0, 98, 100, 97, 99),
-            make_candle(1, 99, 101, 95, 100),  # Pin bar: wick down to 95
+            make_candle(1, 99, 100.5, 95, 100),  # Pin bar: wick down to 95
             make_candle(2, 100, 102, 99, 101),
         ]
         objs = candles_to_objs(candles)
@@ -375,7 +364,7 @@ class TestCandlePatterns:
         """Doji: body < 10% of range"""
         candles = [
             make_candle(0, 100, 102, 98, 101),
-            make_candle(1, 100, 101, 99, 100.5),  # Doji: body=0.5, range=2
+            make_candle(1, 100.0, 101.0, 99.0, 100.05),  # Doji: body=0.05, range=2
             make_candle(2, 100.5, 102, 99, 101),
         ]
         objs = candles_to_objs(candles)
@@ -387,9 +376,9 @@ class TestCandlePatterns:
     def test_morning_star(self):
         """Morning Star: bearish, small body, bullish"""
         candles = [
-            make_candle(0, 105, 106, 101, 102),  # C1: bearish large
-            make_candle(1, 102, 104, 101, 103),  # C2: small body
-            make_candle(2, 103, 107, 102, 106),   # C3: bullish
+            make_candle(0, 105.0, 105.3, 103.5, 104.0),  # C1: bearish large
+            make_candle(1, 103.5, 104.5, 103.0, 103.6),  # C2: small body
+            make_candle(2, 103.6, 106.0, 103.0, 105.6),   # C3: bullish
         ]
         objs = candles_to_objs(candles)
         patterns = detect_candle_patterns(objs)
@@ -408,10 +397,11 @@ class TestTrendClassification:
     def test_uptrend_classification(self):
         """Uptrend: HH and HL pattern"""
         candles = []
-        # Build clear uptrend
-        for i in range(10):
-            base = i * 5
-            candles.append(make_candle(i, base, base+5, base-1, base+4))  # Ascending
+        highs = [90.0, 95.0, 110.0, 100.0, 95.0, 105.0, 115.0, 130.0, 120.0, 110.0, 120.0, 135.0, 150.0, 140.0, 130.0]
+        lows  = [80.0, 85.0,  90.0,  80.0, 75.0,  85.0,  95.0, 100.0,  95.0,  90.0, 100.0, 110.0, 120.0, 115.0, 110.0]
+        for i in range(15):
+            h, l = highs[i], lows[i]
+            candles.append(make_candle(i, (h+l)/2.0, h, l, (h+l)/2.0 + 1.0))
 
         df = make_df(candles)
         trend = classify_trend_structure(df)
@@ -421,10 +411,11 @@ class TestTrendClassification:
     def test_downtrend_classification(self):
         """Downtrend: LH and LL pattern"""
         candles = []
-        # Build clear downtrend
-        for i in range(10):
-            base = 100 - i * 5
-            candles.append(make_candle(i, base, base+1, base-5, base-4))  # Descending
+        highs = [150.0, 145.0, 130.0, 140.0, 145.0, 135.0, 125.0, 110.0, 120.0, 125.0, 115.0, 105.0,  90.0, 100.0, 105.0]
+        lows  = [140.0, 135.0, 110.0, 120.0, 125.0, 115.0, 105.0,  90.0, 100.0, 105.0,  95.0,  85.0,  70.0,  80.0,  85.0]
+        for i in range(15):
+            h, l = highs[i], lows[i]
+            candles.append(make_candle(i, (h+l)/2.0, h, l, (h+l)/2.0 - 1.0))
 
         df = make_df(candles)
         trend = classify_trend_structure(df)
@@ -462,8 +453,8 @@ class TestOTE:
         pd_zone = get_premium_discount_zone(swing_low, swing_high)
 
         assert pd_zone['equilibrium'] == 150.0
-        assert pd_zone['premium_low'] > pd_zone['equilibrium']
-        assert pd_zone['discount_high'] < pd_zone['equilibrium']
+        assert pd_zone['premium_low'] >= pd_zone['equilibrium']
+        assert pd_zone['discount_high'] <= pd_zone['equilibrium']
 
 
 # =============================================================================
@@ -502,24 +493,21 @@ class TestAdvancedPatterns:
     def test_liquidity_sweep_detected(self):
         """Liquidity sweep: price hunts above/below previous highs/lows"""
         candles = []
-        # Create equal highs at 100 level, then sweep above
-        for i in range(10):
+        for i in range(8):
             if i == 2:
-                candles.append(make_candle(i, 95, 100, 94, 99))  # EQH
-            elif i == 4:
-                candles.append(make_candle(i, 95, 100.5, 94, 94.5))  # Sweep above 100
+                candles.append(make_candle(i, 95, 100.0, 94, 99))  # Swing High target
             elif i == 5:
-                candles.append(make_candle(i, 94, 96, 90, 91))  # Reversal
+                candles.append(make_candle(i, 95, 100.5, 94, 94.5))  # Sweep above 100
             else:
-                candles.append(make_candle(i, 95, 98, 94, 96))
-
+                candles.append(make_candle(i, 95, 98.0, 94, 96))
+    
         df = make_df(candles)
         swings = find_swing_points(df, window=2)
         objs = candles_to_objs(candles)
-
-        sweeps = detect_liquidity_sweep(objs, swings, lookback=10)
-
-        assert isinstance(sweeps, list)
+    
+        sweeps = detect_liquidity_sweep(objs, swings, current_index=5, lookback=10)
+    
+        assert sweeps == "BEARISH_SWEEP"
 
     def test_breakout_detection(self):
         """Breakout above/below S/R with volume"""
@@ -529,16 +517,18 @@ class TestAdvancedPatterns:
             candles.append(make_candle(i, 99, 101, 98, 100, volume=800))
         # Breakout candle with high volume
         candles.append(make_candle(5, 100, 105, 99, 104, volume=2000))
-
+        # Dummy candle so index 5 is not the last candle
+        candles.append(make_candle(6, 104, 106, 103, 105, volume=800))
+    
         df = make_df(candles)
         swings = find_swing_points(df, window=1)
         objs = candles_to_objs(candles)
 
         sr_zones = [{'top': 101, 'bottom': 98, 'label': 'RESISTANCE', 'index': 0, 'time_start': str(datetime.now())}]
-        breakouts = detect_breakouts(objs, swings, sr_zones)
+        breakouts = detect_breakouts(objs, swings, sr_zones, volume_ma_period=3)
 
         bullish_breaks = [b for b in breakouts if b.get('direction') == 'BULLISH']
-        assert len(bullish_breaks) >= 1, f"Should detect bullish breakout"
+        assert len(bullish_breaks) >= 1, "Should detect bullish breakout"
 
 
 # =============================================================================

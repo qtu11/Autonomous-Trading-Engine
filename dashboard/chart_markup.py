@@ -19,16 +19,12 @@ offset from the newest candle, 0 = latest):
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pandas as pd
-
 from advanced_detectors import build_advanced_markup
 from detectors import (
-    PDArrayDirection,
-    PDArrayType,
     calculate_ote_zone,
-    classify_pd_array_zone,
     detect_bos_choch,
     detect_breaker_and_mitigation_blocks,
     detect_fvg,
@@ -59,7 +55,7 @@ def _dt(ts: pd.Timestamp) -> str:
 # The web/EA select a trading method (PRICE_ACTION / SMC / ICT / ULTRA_CONFLUENCE /
 # INDICATOR). The chart must ONLY render concepts belonging to the selected
 # method — this map decides which object types survive for each method.
-METHOD_ALLOWED_TYPES: Dict[str, Optional[set]] = {
+METHOD_ALLOWED_TYPES: dict[str, set | None] = {
     "PRICE_ACTION": {
         "SWING", "TRENDLINE", "SR", "CHANNEL", "RANGE",
         "BREAKOUT", "PULLBACK", "RETEST", "FAKE_BREAKOUT", "PATTERN",
@@ -89,10 +85,10 @@ def _zone(
     top: float,
     bottom: float,
     formed_at: pd.Timestamp,
-    index: Optional[int] = None,
+    index: int | None = None,
     **extra: Any,
-) -> Dict[str, Any]:
-    obj: Dict[str, Any] = {
+) -> dict[str, Any]:
+    obj: dict[str, Any] = {
         "type": type_name,
         "direction": direction,
         "top": round(float(top), 2),
@@ -107,16 +103,16 @@ def _zone(
 
 def build_chart_markup(
     symbol: str,
-    mtf_data: Dict[str, pd.DataFrame],
+    mtf_data: dict[str, pd.DataFrame],
     broker_utc_offset_hours: float = 2.0,
     method: str = "ULTRA_CONFLUENCE",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Tính toàn bộ cấu trúc ICT/SMC/PA từ dữ liệu đa khung thời gian.
 
     Trả về dict chuẩn: {"symbol", "method", "generated_at", "objects": [...]}.
     Chỉ dùng dữ liệu có sẵn; nếu thiếu khung giờ, bỏ qua nhóm tương ứng.
     """
-    objects: List[Dict[str, Any]] = []
+    objects: list[dict[str, Any]] = []
     method_upper = method.upper()
 
     allowed_types = METHOD_ALLOWED_TYPES.get(method_upper)

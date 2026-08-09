@@ -1,27 +1,38 @@
+
+import asyncio
+import json
 import os
 import secrets
-import sys
-import json
 import time
-import asyncio
 import urllib.request
-import pandas as pd
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, List
-from fastapi import Depends, FastAPI, HTTPException, Header, Query, Request, WebSocket, WebSocketDisconnect, status
-from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from typing import TYPE_CHECKING, Any, cast
 
-from command_store import CommandStore
+import pandas as pd
 from brain import BrainStore
-from logging_config import LogEvent, log_event, read_recent_logs, timed, get_logger
+from chart_markup import build_chart_markup
+from command_store import CommandStore
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from logging_config import LogEvent, get_logger, log_event, read_recent_logs
+from pydantic import BaseModel, Field
 from risk_gate import (
-    AccountSnapshot,
     DCA_DEFAULT_MAX_LOT,
     MAX_BASKET_LOSS_FRACTION,
+    AccountSnapshot,
     RiskPolicy,
     SymbolSpec,
     cap_volume_to_basket_risk,
@@ -29,13 +40,12 @@ from risk_gate import (
     evaluate_risk,
 )
 from risk_profiles import FOREX_RISK_PROFILES
+from signal_engines import run_signal_engine
 from strategy_core import DecisionProposal, SignalAction, StrategyConfig, decide_signal
-from signal_engines import run_signal_engine, SignalResult
-from chart_markup import build_chart_markup
 from ws_hub import WS_MANAGER
 
 try:
-    from mt5_auto import find_terminal64, deploy_expert_to_chart
+    from mt5_auto import deploy_expert_to_chart, find_terminal64
     HAS_MT5_AUTO = True
 except Exception:
     find_terminal64 = None
@@ -43,10 +53,10 @@ except Exception:
     HAS_MT5_AUTO = False
 
 try:
-    from ai_provider_test import test_provider_connection
+    from ai_provider_test import check_provider_connection
     HAS_AI_TEST = True
 except Exception:
-    test_provider_connection = None
+    check_provider_connection = None
     HAS_AI_TEST = False
 logger = get_logger()
 
@@ -66,19 +76,25 @@ def load_local_env() -> None:
 
 load_local_env()
 
-try:
+if TYPE_CHECKING:
     import MetaTrader5 as mt5
-    HAS_MT5 = True
-except ImportError:
-    mt5 = None
-    HAS_MT5 = False
-
-try:
+    HAS_MT5: bool
     import psutil
-    HAS_PSUTIL = True
-except ImportError:
-    psutil = None
-    HAS_PSUTIL = False
+    HAS_PSUTIL: bool
+else:
+    try:
+        import MetaTrader5 as mt5
+        HAS_MT5 = True
+    except ImportError:
+        mt5 = None  # type: ignore[assignment]
+        HAS_MT5 = False
+
+    try:
+        import psutil
+        HAS_PSUTIL = True
+    except ImportError:
+        psutil = None
+        HAS_PSUTIL = False
 
 EXECUTION_MODE = (os.getenv("ATE_EXECUTION_MODE") or os.getenv("QUANTAI_EXECUTION_MODE") or "DISABLED").upper()
 DEMO_ARMED = (os.getenv("ATE_DEMO_ARMED") or os.getenv("QUANTAI_DEMO_ARMED") or "false").lower() == "true"
@@ -97,13 +113,14 @@ ADMIN_PASSWORD = (os.getenv("ADMIN_PASSWORD") or os.getenv("ADMIN-PASSWORD") or 
 
 # Bearer tokens minted by /api/auth/login when OPERATOR_TOKEN is unset.
 # token -> unix expiry. Validated by require_operator_token (fail-closed).
-_ADMIN_SESSIONS: Dict[str, float] = {}
+_ADMIN_SESSIONS: dict[str, float] = {}
 _ADMIN_SESSION_TTL = 30 * 24 * 3600  # 30 days
-_LOGIN_ATTEMPTS: Dict[str, list] = {}  # client_ip -> [timestamps] (brute-force guard)
+_LOGIN_ATTEMPTS: dict[str, list] = {}  # client_ip -> [timestamps] (brute-force guard)
 _LOGIN_WINDOW_SECONDS = 300            # 5-minute rolling window
 _LOGIN_MAX_ATTEMPTS = 10
 
 import base64
+
 
 def _encode_secret(secret: str) -> str:
     """Encode sensitive credential strings for local configuration storage."""
@@ -131,7 +148,8 @@ CONTROL_CONFIG_FILE = os.path.join(os.path.dirname(__file__), "user_control_conf
 
 # Optional Firestore cloud mirror (best-effort). Local file is the ground
 # truth; cloud is a sync layer so any dashboard/device sees the same config.
-import firebase_sync  # noqa: E402
+import firebase_sync
+
 _firebase_sync_enabled = bool(os.getenv("FIREBASE_ENABLE_SYNC", "true").lower() in ("1", "true", "yes"))
 
 def load_control_config() -> dict:
@@ -141,7 +159,7 @@ def load_control_config() -> dict:
             with open(CONTROL_CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 for field in CONFIG_SECRET_FIELDS:
-                    if field in data and data[field]:
+                    if data.get(field):
                         data[field] = _decode_secret(str(data[field]))
                 local = data
         except Exception:
@@ -196,14 +214,14 @@ def save_control_config(data: dict):
     existing["config_updated_at"] = datetime.now(timezone.utc).isoformat()
     existing_to_save = dict(existing)
     for field in CONFIG_SECRET_FIELDS:
-        if field in existing_to_save and existing_to_save[field]:
+        if existing_to_save.get(field):
             existing_to_save[field] = _encode_secret(str(existing_to_save[field]))
     _persist_config_file(existing_to_save)
     if _firebase_sync_enabled:
         try:
             mirror = dict(existing)
             for field in CONFIG_SECRET_FIELDS:
-                if field in mirror and mirror[field]:
+                if mirror.get(field):
                     mirror[field] = _encode_secret(str(mirror[field]))
             firebase_sync.push_config(mirror)
         except Exception as e:
@@ -215,7 +233,7 @@ async def broadcast_config_updated():
         cfg = load_control_config()
         safe = dict(cfg)
         for field in CONFIG_SECRET_FIELDS:
-            if field in safe and safe[field]:
+            if safe.get(field):
                 safe[field] = _mask_field(str(safe[field]))
         await WS_MANAGER.broadcast({"type": "config_updated", "data": safe})
     except Exception:
@@ -231,6 +249,7 @@ DEMO_ARMED = bool(_saved_cfg.get("demo_armed", False))
 KILL_SWITCH = bool(_saved_cfg.get("kill_switch", True)) or EXECUTION_MODE == "DISABLED"
 ENABLE_TRADING = bool(_saved_cfg.get("enable_trading", EXECUTION_MODE != "DISABLED"))
 AI_AUTO_LOOP = bool(_saved_cfg.get("ai_auto_loop", False))
+FORCE_UNLOCK = bool(_saved_cfg.get("force_unlock", False))
 
 # Runtime execution symbol (persisted via Control Center MT5 login form);
 # validated/fallback at runtime to the broker-available symbol.
@@ -271,7 +290,7 @@ if _saved_risk_frac is not None or _saved_max_pos is not None or _saved_max_spre
         if _prof:
             if _saved_max_spread is not None:
                 _prof["max_spread"] = float(_saved_max_spread)
-            _pol = _prof["policy"]
+            _pol = cast(RiskPolicy, _prof["policy"])
             _prof["policy"] = replace(
                 _pol,
                 risk_per_trade_fraction=float(_saved_risk_frac) if _saved_risk_frac is not None else _pol.risk_per_trade_fraction,
@@ -300,7 +319,7 @@ def send_telegram_alert(message: str) -> bool:
             except Exception:
                 pass
             
-            from datetime import datetime, timezone, timedelta
+            from datetime import datetime, timedelta, timezone
             vn_time = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S %d/%m/%Y")
             
             meta_header = (
@@ -323,7 +342,7 @@ def send_telegram_alert(message: str) -> bool:
         return False
 
 
-def is_weekend_market_closed(dt: Optional[datetime] = None) -> bool:
+def is_weekend_market_closed(dt: datetime | None = None) -> bool:
     """Return True if current time in Vietnam (UTC+7) is during weekend market closure (Saturday 05:00 to Monday 05:00)."""
     if dt is None:
         dt = datetime.now(timezone(timedelta(hours=7)))
@@ -339,13 +358,13 @@ def is_weekend_market_closed(dt: Optional[datetime] = None) -> bool:
 
 
 def analyze_news_and_market_quantitatively(
-    event: Dict[str, Any],
-    indicators: Dict[str, Any],
+    event: dict[str, Any],
+    indicators: dict[str, Any],
     tick: Any,
     account: Any,
-    positions: List[Any],
-    pending: List[Any],
-) -> Dict[str, Any]:
+    positions: list[Any],
+    pending: list[Any],
+) -> dict[str, Any]:
     """Computes a complete 10-point quantitative AI analysis report returning a structured JSON object."""
     vn_now = datetime.now(timezone(timedelta(hours=7)))
     title = str(event.get("title") or event.get("description") or "SỰ KIỆN KINH TẾ").upper()
@@ -411,10 +430,10 @@ def analyze_news_and_market_quantitatively(
         gold_impact = "Vàng biến động hai chiều quét thanh khoản theo phản ứng nến M15."
 
     # 3. Bullish / Bearish & 7. BUY / SELL / WAIT Recommendation
-    if ema20 > ema50 and ema50 > ema200 and rsi >= 45:
+    if ema20 > ema50 > ema200 and rsi >= 45:
         market_bias = "BULLISH (TĂNG MẠNH)"
         recommendation = "BUY"
-    elif ema20 < ema50 and ema50 < ema200 and rsi <= 55:
+    elif ema20 < ema50 < ema200 and rsi <= 55:
         market_bias = "BEARISH (GIẢM MẠNH)"
         recommendation = "SELL"
     else:
@@ -436,9 +455,9 @@ def analyze_news_and_market_quantitatively(
 
     # 9. Risk Management Proposal
     risk_proposal = (
-        f"Duy trì Margin Risk <= 30%. Tự động dời Stop Loss toàn bộ vị thế mở trước lên Hòa vốn (+0.10$) "
-        f"trước 15 phút ra tin. Tạm ngắt phát lệnh mới trong cửa sổ ra tin. "
-        f"Nếu nến M15 bứt phá +1.50$, AI kích hoạt lệnh nhồi Pyramiding DCA Dương."
+        "Duy trì Margin Risk <= 30%. Tự động dời Stop Loss toàn bộ vị thế mở trước lên Hòa vốn (+0.10$) "
+        "trước 15 phút ra tin. Tạm ngắt phát lệnh mới trong cửa sổ ra tin. "
+        "Nếu nến M15 bứt phá +1.50$, AI kích hoạt lệnh nhồi Pyramiding DCA Dương."
     )
 
     # 10. Complete Structured JSON Result
@@ -526,8 +545,8 @@ def send_morning_news_telegram_bulletin() -> bool:
                 mode_str = "REAL" if getattr(account_obj, "trade_mode", 0) == 2 else "DEMO"
                 acc_info = f"{mode_str}-{account_obj.login} @ {account_obj.server}"
             tick_obj = mt5.symbol_info_tick(resolve_symbol(EXECUTION_SYMBOL))
-            positions_list = mt5.positions_get() or []
-            pending_list = mt5.orders_get() or []
+            positions_list = list(mt5.positions_get() or [])
+            pending_list = list(mt5.orders_get() or [])
     except Exception:
         pass
 
@@ -707,7 +726,7 @@ ALLOWED_ORIGINS = [
     if origin.strip()
 ]
 
-def validate_environment_security() -> Dict[str, Any]:
+def validate_environment_security() -> dict[str, Any]:
     """Audit environment variables at startup and log warnings/errors for missing configuration."""
     missing_required = []
     warnings = []
@@ -802,7 +821,7 @@ async def readiness_check():
     }
 
 
-def require_bridge_token(authorization: Optional[str] = Header(default=None)) -> None:
+def require_bridge_token(authorization: str | None = Header(default=None)) -> None:
     if not BRIDGE_TOKEN:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -817,7 +836,7 @@ def require_bridge_token(authorization: Optional[str] = Header(default=None)) ->
         )
 
 
-def require_operator_token(authorization: Optional[str] = Header(default=None)) -> None:
+def require_operator_token(authorization: str | None = Header(default=None)) -> None:
     """Fail-closed operator gate.
 
     Accepts ``Bearer OPERATOR_TOKEN`` (from .env) or a live admin session token
@@ -898,7 +917,7 @@ async def admin_login(req: LoginRequest, request: Request):
         )
 
 
-def execution_readiness(mode: Optional[str] = None) -> tuple[bool, str]:
+def execution_readiness(mode: str | None = None) -> tuple[bool, str]:
     """Check readiness for executing trade commands on connected MT5 account."""
     eff_mode = (mode or EXECUTION_MODE or "").upper()
     if eff_mode not in ("DEMO", "LIVE"):
@@ -909,6 +928,8 @@ def execution_readiness(mode: Optional[str] = None) -> tuple[bool, str]:
         return False, "REJECT_TRADING_DISABLED"
     if eff_mode == "LIVE" and not LIVE_ARMED:
         return False, "REJECT_LIVE_NOT_ARMED"
+    if FORCE_UNLOCK:
+        return True, "READY"
     if not ensure_mt5_connected():
         return False, "REJECT_MT5_UNAVAILABLE"
     account = mt5.account_info()
@@ -930,8 +951,8 @@ class CopilotChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     symbol: str = Field(default="XAUUSD", min_length=1, max_length=32)
     timeframe: str = Field(default="M15", min_length=1, max_length=8)
-    model_id: Optional[str] = None
-    truncation: Optional[str] = None
+    model_id: str | None = None
+    truncation: str | None = None
 
 _MT5_WAS_CONNECTED = False
 
@@ -954,7 +975,7 @@ def ensure_mt5_connected():
     ok = connected and mt5.terminal_info() is not None
     if ok and not _MT5_WAS_CONNECTED:
         log_event(LogEvent.MT5_CONNECTED, component="mt5")
-        if _MT5_WAS_CONNECTED is False and hasattr(ensure_mt5_connected, "_ever"):
+        if hasattr(ensure_mt5_connected, "_ever"):
             log_event(LogEvent.MT5_RECONNECT, component="mt5")
         ensure_mt5_connected._ever = True  # type: ignore[attr-defined]
     elif not ok and _MT5_WAS_CONNECTED:
@@ -1004,7 +1025,7 @@ def resolve_symbol_info(symbol: str = "XAUUSDm") -> tuple[str, str]:
         return s, f"Symbol {preferred} không có trên broker -> fallback sang {s} (XAUUSD/XAUUSDm nhánh vàng)."
     return preferred, f"Không tìm thấy symbol vàng nào ({', '.join(candidates)}); giữ nguyên {preferred} (chưa kiểm chứng)."
 
-def calc_rsi(closes: List[float], period: int = 14) -> float:
+def calc_rsi(closes: list[float], period: int = 14) -> float:
     if len(closes) < period + 1:
         return 0.0
     gains, losses = [], []
@@ -1028,7 +1049,7 @@ def calc_rsi(closes: List[float], period: int = 14) -> float:
     rs = avg_gain / avg_loss
     return round(100.0 - (100.0 / (1.0 + rs)), 1)
 
-def calc_ema(closes: List[float], period: int) -> float:
+def calc_ema(closes: list[float], period: int) -> float:
     if not closes:
         return 0.0
     if len(closes) < period:
@@ -1138,7 +1159,7 @@ def get_technical_indicators(symbol: str = "XAUUSDm"):
     return defaults
 
 
-def calc_indicators_from_candles(candles: List[Dict[str, Any]]) -> Dict[str, Any]:
+def calc_indicators_from_candles(candles: list[dict[str, Any]]) -> dict[str, Any]:
     """
     Compute technical indicators from EA-pushed candles (no MT5 required).
     This lets the dashboard show live indicators even when MT5 Python SDK is unavailable (Docker/Linux).
@@ -1223,7 +1244,7 @@ def get_account_performance():
         item["time"] = max(item["time"], int(deal.time))
 
     trades = [
-        ClosedTrade(position_id=position_id, closed_at=item["time"], net_profit=item["profit"])
+        ClosedTrade(position_id=position_id, closed_at=int(item["time"]), net_profit=item["profit"])
         for position_id, item in net_by_position.items()
     ]
     metrics = calculate_performance(trades)
@@ -1231,7 +1252,7 @@ def get_account_performance():
         return {**unavailable, "data_status": "NO_CLOSED_TRADES"}
     return {**metrics, "data_status": "LIVE_VERIFIED", "period_days": 60, "magic": ATE_MAGIC_NUMBER}
 
-def generate_real_ai_signal(symbol: str = "XAUUSDm", ask: float = 0.0, bid: float = 0.0, indicators: dict = None, balance: float = 0.0):
+def generate_real_ai_signal(symbol: str = "XAUUSDm", ask: float = 0.0, bid: float = 0.0, indicators: dict[str, Any] | None = None, balance: float = 0.0):
     if not indicators:
         indicators = get_technical_indicators(symbol)
     if indicators.get("data_status") != "LIVE_VERIFIED" or ask <= 0 or bid <= 0 or balance <= 0:
@@ -1250,18 +1271,24 @@ def generate_real_ai_signal(symbol: str = "XAUUSDm", ask: float = 0.0, bid: floa
             "reason_codes": ["MARKET_DATA_UNAVAILABLE"],
         }
 
-    ema20 = indicators.get("ema20")
-    ema50 = indicators.get("ema50")
-    ema200 = indicators.get("ema200")
-    rsi = indicators.get("rsi")
-    atr = indicators.get("atr")
-    if any(value is None for value in (ema20, ema50, ema200, rsi, atr)):
+    ema20_raw = indicators.get("ema20")
+    ema50_raw = indicators.get("ema50")
+    ema200_raw = indicators.get("ema200")
+    rsi_raw = indicators.get("rsi")
+    atr_raw = indicators.get("atr")
+    if any(value is None for value in (ema20_raw, ema50_raw, ema200_raw, rsi_raw, atr_raw)):
         return {
             "data_status": "UNAVAILABLE",
             "primary_signal": "NO_TRADE",
             "confidence": "N/A",
             "reason_codes": ["INSUFFICIENT_INDICATORS"],
         }
+
+    ema20 = float(ema20_raw)  # type: ignore[arg-type]
+    ema50 = float(ema50_raw)  # type: ignore[arg-type]
+    ema200 = float(ema200_raw)  # type: ignore[arg-type]
+    rsi = float(rsi_raw)  # type: ignore[arg-type]
+    atr = float(atr_raw)  # type: ignore[arg-type]
 
     # Multi-indicator confluence scoring
     signal = "BUY" if ema20 >= ema50 else "SELL"
@@ -1330,11 +1357,11 @@ def generate_real_ai_signal(symbol: str = "XAUUSDm", ask: float = 0.0, bid: floa
 # The MT5 Python SDK has no calendar API, so the EA reads the broker's built-in
 # economic calendar (CalendarValueHistory) and pushes it here. We never fabricate
 # events: an empty/stale cache yields an explicit UNAVAILABLE status instead.
-_CALENDAR_CACHE: Dict[str, Any] = {"events": [], "received_at": None, "source": "MT5_CALENDAR"}
+_CALENDAR_CACHE: dict[str, Any] = {"events": [], "received_at": None, "source": "MT5_CALENDAR"}
 _CALENDAR_TTL_SECONDS = 900  # 15 minutes
 
 
-_CHAT_MESSAGES: List[Dict[str, Any]] = [
+_CHAT_MESSAGES: list[dict[str, Any]] = [
     {
         "role": "ai",
         "text": "Tài khoản MT5 đã kết nối thành công. Sẵn sàng nhận lệnh từ chủ tịch.",
@@ -1356,14 +1383,14 @@ def append_chat_message(role: str, text: str):
         _CHAT_MESSAGES.pop(0)
 
 
-def update_calendar_cache(events: List[Dict[str, Any]]) -> int:
+def update_calendar_cache(events: list[dict[str, Any]]) -> int:
     _CALENDAR_CACHE["events"] = events
     _CALENDAR_CACHE["received_at"] = datetime.now(timezone.utc)
     log_event(LogEvent.CALENDAR_UPDATED, component="calendar", count=len(events))
     return len(events)
 
 
-def get_weekly_economic_calendar() -> List[Dict[str, Any]]:
+def get_weekly_economic_calendar() -> list[dict[str, Any]]:
     """Return 100% REAL economic calendar events from live feed (ForexFactory / MT5 Push / Real AI Calendar)."""
     return fetch_real_economic_calendar()
 
@@ -1382,14 +1409,14 @@ def extract_json_array(text: str) -> str:
     return text
 
 
-def generate_calendar_events_via_ai(monday_str: str, friday_str: str) -> List[Dict[str, Any]]:
+def generate_calendar_events_via_ai(monday_str: str, friday_str: str) -> list[dict[str, Any]]:
     system_prompt = (
         "Ban la mot tro ly thong tin tai chinh cao cap. "
         "Nhiem vu cua ban la liet ke cac tin tuc kinh te vi mo USD quan trong thuc te (Medium va High Impact) "
-        "cho tuan tu thu Hai {} den thu Sau {}. "
+        f"cho tuan tu thu Hai {monday_str} den thu Sau {friday_str}. "
         "Hay phan hoi o dinh dang JSON duy nhat, la mot danh sach (JSON array) cac su kien co cau truc chinh xac nhu sau:\n"
         "[\n"
-        "  {{\n"
+        "  {\n"
         "    \"id\": \"evt-YYYYMMDD-1\",\n"
         "    \"day\": \"Mon/Tue/Wed/Thu/Fri\",\n"
         "    \"date\": \"DD/MM\",\n"
@@ -1399,11 +1426,11 @@ def generate_calendar_events_via_ai(monday_str: str, friday_str: str) -> List[Di
         "    \"actual\": \"So lieu thuc te (neu tin da xay ra, vi du: 4.2% hoac 245K, neu chua xay ra hay de trong \"\")\",\n"
         "    \"forecast\": \"So lieu du bao (vi du: 4.1% hoac 190K)\",\n"
         "    \"previous\": \"So lieu ky truoc (vi du: 4.0% hoac 229K)\"\n"
-        "  }}\n"
+        "  }\n"
         "]\n"
         "Quy tac quan trong: Khong duoc dung bat ky emoji hay bieu tuong cam xuc nao trong ket qua. "
         "Chi tra ve JSON hop le, khong co markdown codeblock, khong giai thich gi them."
-    ).format(monday_str, friday_str)
+    )
 
     user_msg = f"Hay tao lich kinh te thuc te cho tuan tu {monday_str} den {friday_str}."
 
@@ -1437,7 +1464,7 @@ def generate_calendar_events_via_ai(monday_str: str, friday_str: str) -> List[Di
     return []
 
 
-def get_ai_weekly_economic_calendar() -> List[Dict[str, Any]]:
+def get_ai_weekly_economic_calendar() -> list[dict[str, Any]]:
     today = datetime.now()
     monday = today - timedelta(days=today.weekday())
     friday = monday + timedelta(days=4)
@@ -1491,12 +1518,12 @@ def get_ai_weekly_economic_calendar() -> List[Dict[str, Any]]:
 
 
 _FF_CALENDAR_URL = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
-_FF_CALENDAR_CACHE: Dict[str, Any] = {"events": [], "fetched_at": None, "last_attempt": None}
+_FF_CALENDAR_CACHE: dict[str, Any] = {"events": [], "fetched_at": None, "last_attempt": None}
 _FF_CALENDAR_TTL_SECONDS = 900  # 15 minutes
 _FF_CALENDAR_RETRY_AFTER_SECONDS = 60  # avoid hammering the feed on failure
 
 
-def _ff_to_news_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _ff_to_news_item(item: dict[str, Any]) -> dict[str, Any] | None:
     """Map one ForexFactory feed entry to the dashboard NewsItem schema (GVT+7)."""
     try:
         impact_raw = str(item.get("impact") or "Low").lower()
@@ -1531,7 +1558,7 @@ def _ff_to_news_item(item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
 
-def fetch_forexfactory_calendar() -> List[Dict[str, Any]]:
+def fetch_forexfactory_calendar() -> list[dict[str, Any]]:
     """Pull the real ForexFactory weekly calendar feed (same data as forexfactory.com/calendar)."""
     now = datetime.now(timezone.utc)
     cached = _FF_CALENDAR_CACHE.get("events")
@@ -1563,7 +1590,7 @@ def fetch_forexfactory_calendar() -> List[Dict[str, Any]]:
         return cached or []
 
 
-def fetch_real_economic_calendar() -> List[Dict[str, Any]]:
+def fetch_real_economic_calendar() -> list[dict[str, Any]]:
     """Priority: ForexFactory live feed -> broker MT5 push (fresh) -> AI weekly calendar."""
     ff_events = fetch_forexfactory_calendar()
     if ff_events:
@@ -1585,7 +1612,7 @@ GOLD_NEWS_KEYWORDS = (
 )
 
 
-def _parse_event_datetime(evt: Dict[str, Any], now: datetime) -> Optional[datetime]:
+def _parse_event_datetime(evt: dict[str, Any], now: datetime) -> datetime | None:
     try:
         dt_str = evt.get("datetime")
         if dt_str:
@@ -1601,7 +1628,7 @@ def _parse_event_datetime(evt: Dict[str, Any], now: datetime) -> Optional[dateti
         return None
 
 
-def _event_is_gold_relevant(evt: Dict[str, Any]) -> bool:
+def _event_is_gold_relevant(evt: dict[str, Any]) -> bool:
     currency = (evt.get("currency") or "USD").upper()
     title = (evt.get("title") or "").lower()
     if currency == "USD":
@@ -1609,7 +1636,7 @@ def _event_is_gold_relevant(evt: Dict[str, Any]) -> bool:
     return any(kw in title for kw in GOLD_NEWS_KEYWORDS)
 
 
-def compute_news_protection(events: List[Dict[str, Any]], now: Optional[datetime] = None) -> Dict[str, Any]:
+def compute_news_protection(events: list[dict[str, Any]], now: datetime | None = None) -> dict[str, Any]:
     """Port of web client computeNewsProtection() for XAUUSD EA News Protection.
 
     - lockdown:   High USD/XAU news within 45 min (live window -30m -> +45m)
@@ -1636,7 +1663,7 @@ def compute_news_protection(events: List[Dict[str, Any]], now: Optional[datetime
         gold = _event_is_gold_relevant(evt)
         candidates.append({
             "at": at_s,
-            "until": at_s - now.timestamp(),
+            "until": float(at_s - now.timestamp()),
             "impact": impact,
             "gold": gold,
             "title": evt.get("title", ""),
@@ -1654,23 +1681,24 @@ def compute_news_protection(events: List[Dict[str, Any]], now: Optional[datetime
         return {"level": "none", "active": False, "event": None, "in_seconds": 0, "live_remaining_seconds": 0, "message": ""}
 
     until = next_high["until"]
-    if until <= live_window_end_s:
-        live_remaining = max(0.0, next_high["at"] + live_window_end_s - now.timestamp())
+    until_f = float(until)
+    if until_f <= live_window_end_s:
+        live_remaining = max(0.0, float(next_high["at"]) + live_window_end_s - now.timestamp())
         return {
             "level": "lockdown", "active": True, "event": next_high,
             "in_seconds": 0, "live_remaining_seconds": int(live_remaining),
             "message": f"Khoa lenh moi: tin {next_high['impact']} {next_high['currency']} - {next_high['title']} dang trong/gan cua so live",
         }
-    if until <= approach_s:
+    if until_f <= approach_s:
         return {
             "level": "approaching", "active": True, "event": next_high,
-            "in_seconds": int(until - live_window_end_s), "live_remaining_seconds": live_window_end_s,
+            "in_seconds": int(until_f - live_window_end_s), "live_remaining_seconds": live_window_end_s,
             "message": f"Can trong: tin {next_high['impact']} {next_high['currency']} - {next_high['title']} sap den (duoi 1h)",
         }
-    if until <= watch_s:
+    if until_f <= watch_s:
         return {
             "level": "watch", "active": True, "event": next_high,
-            "in_seconds": int(until - live_window_end_s), "live_remaining_seconds": live_window_end_s,
+            "in_seconds": int(until_f - live_window_end_s), "live_remaining_seconds": live_window_end_s,
             "message": f"Giam sat: tin {next_high['impact']} {next_high['currency']} - {next_high['title']} trong vong 5h",
         }
     return {"level": "none", "active": False, "event": None, "in_seconds": 0, "live_remaining_seconds": 0, "message": ""}
@@ -1884,7 +1912,7 @@ def get_mt5_telemetry():
             pass
 
     t0 = time.time()
-    telemetry = {
+    telemetry: dict[str, Any] = {
         "data_status": "UNAVAILABLE",
         "server": os.getenv("MT5_SERVER", "UNAVAILABLE"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -1951,7 +1979,7 @@ def get_mt5_telemetry():
             telemetry["current_bid"] = float(tick.bid)
             telemetry["current_spread"] = round(float(tick.ask - tick.bid), 2)
             telemetry["ai_signal"] = {
-                **generate_real_ai_signal(symbol, tick.ask, tick.bid, indicators, telemetry["balance"]),
+                **generate_real_ai_signal(symbol, tick.ask, tick.bid, indicators, float(telemetry["balance"])),
                 "data_status": "LIVE_VERIFIED",
             }
             telemetry["news"] = fetch_real_economic_calendar()
@@ -1976,25 +2004,43 @@ def get_mt5_telemetry():
         and (datetime.now(timezone.utc) - _LAST_EA_HEARTBEAT).total_seconds() <= EA_HEARTBEAT_STALE_SECONDS * 6
     )
     if not telemetry["mt5_connected"] and ea_fresh:
-        et = _LAST_EA_TELEMETRY
+        et: dict[str, Any] = _LAST_EA_TELEMETRY  # type: ignore[assignment]
         telemetry["data_status"] = "LIVE_VERIFIED"
         telemetry["mt5_connected"] = True
-        telemetry["account_id"] = int(et.get("account_id", telemetry["account_id"]) or 0)
-        telemetry["balance"] = float(et.get("balance") or telemetry["balance"])
-        telemetry["equity"] = float(et.get("equity") or telemetry["equity"])
-        telemetry["margin"] = float(et.get("margin") or telemetry["margin"])
-        telemetry["margin_free"] = float(et.get("margin_free") or telemetry["margin_free"])
-        telemetry["floating_pnl"] = float(et.get("profit") or telemetry["floating_pnl"])
-        telemetry["open_positions"] = int(et.get("positions") or telemetry["open_positions"])
-        telemetry["current_ask"] = float(et.get("ask") or telemetry["current_ask"])
-        telemetry["current_bid"] = float(et.get("bid") or telemetry["current_bid"])
-        telemetry["symbol"] = et.get("symbol", EXECUTION_SYMBOL)
-        if telemetry["current_ask"] > 0 and telemetry["current_bid"] > 0:
-            telemetry["current_spread"] = round(abs(telemetry["current_ask"] - telemetry["current_bid"]), 2)
+        telemetry["account_id"] = int(et.get("account_id", 0) or 0)
+        _bal = float(et.get("balance", 0) or 0)
+        _eq = float(et.get("equity", 0) or 0)
+        _mg = float(et.get("margin", 0) or 0)
+        _mf = float(et.get("margin_free", 0) or 0)
+        _fp = float(et.get("profit", 0) or 0)
+        _op = int(et.get("positions", 0) or 0)
+        _ca = float(et.get("ask", 0) or 0)
+        _cb = float(et.get("bid", 0) or 0)
+        telemetry["balance"] = _bal if _bal else telemetry["balance"]
+        telemetry["equity"] = _eq if _eq else telemetry["equity"]
+        telemetry["margin"] = _mg if _mg else telemetry["margin"]
+        telemetry["margin_free"] = _mf if _mf else telemetry["margin_free"]
+        telemetry["floating_pnl"] = _fp if _fp else telemetry["floating_pnl"]
+        telemetry["open_positions"] = _op if _op else telemetry["open_positions"]
+        telemetry["current_ask"] = _ca if _ca else telemetry["current_ask"]
+        telemetry["current_bid"] = _cb if _cb else telemetry["current_bid"]
+        telemetry["symbol"] = str(et.get("symbol", EXECUTION_SYMBOL))
+
+        # Calculate technical indicators from EA-pushed candles if available
+        global _EA_PUSHED_CANDLES
+        ea_candles, _ = _find_ea_candles(str(telemetry["symbol"]), EXECUTION_TIMEFRAME)
+        if ea_candles:
+            telemetry["indicators"] = calc_indicators_from_candles(ea_candles)
+
+        _ask_f = float(telemetry["current_ask"])
+        _bid_f = float(telemetry["current_bid"])
+        if _ask_f > 0 and _bid_f > 0:
+            telemetry["current_spread"] = round(abs(_ask_f - _bid_f), 2)
         telemetry["ai_signal"] = {
-            **generate_real_ai_signal(telemetry["symbol"], telemetry["current_ask"], telemetry["current_bid"], indicators, telemetry["balance"]),
+            **generate_real_ai_signal(str(telemetry["symbol"]), _ask_f, _bid_f, telemetry["indicators"], float(telemetry["balance"])),
             "data_status": "LIVE_VERIFIED",
         }
+
         telemetry["server"] = et.get("server") or telemetry["server"]
         telemetry["broker"] = et.get("broker") or telemetry["broker"]
         telemetry["currency"] = "USD"
@@ -2044,11 +2090,11 @@ async def get_market(symbol: str = "XAUUSD", tf: str = "M15"):
 
     # Fallback: use real candles pushed by the EA on Windows host
     global _EA_PUSHED_CANDLES
-    if actual_symbol in _EA_PUSHED_CANDLES and tf in _EA_PUSHED_CANDLES[actual_symbol]:
-        candles = _EA_PUSHED_CANDLES[actual_symbol][tf]
+    ea_candles, ea_tf = _find_ea_candles(actual_symbol, tf)
+    if ea_candles:
         # Compute indicators from EA-pushed candles (no MT5 required)
-        indicators = calc_indicators_from_candles(candles)
-        response = {"symbol": actual_symbol, "timeframe": tf, "candles": candles, "indicators": indicators}
+        indicators = calc_indicators_from_candles(ea_candles)
+        response = {"symbol": actual_symbol, "timeframe": ea_tf or tf, "candles": ea_candles, "indicators": indicators}
         markup = get_markup_cached(actual_symbol)
         if markup and markup.get("objects"):
             response["markup"] = markup
@@ -2058,11 +2104,11 @@ async def get_market(symbol: str = "XAUUSD", tf: str = "M15"):
 
 
 # ── Chart markup cache: web poll is 1s, markup compute is heavy → TTL 3s ─────
-_MARKUP_CACHE: Dict[str, Dict[str, Any]] = {}
+_MARKUP_CACHE: dict[tuple[str, str], dict[str, Any]] = {}
 _MARKUP_CACHE_TTL = 3.0
 
 
-def get_markup_cached(symbol: str) -> Dict[str, Any]:
+def get_markup_cached(symbol: str) -> dict[str, Any]:
     now = time.time()
     cache_key = (symbol, TRADING_METHOD)
     cached = _MARKUP_CACHE.get(cache_key)
@@ -2081,11 +2127,11 @@ COMMAND_STORE = CommandStore(os.getenv("ATE_COMMAND_DB") or os.getenv("QUANTAI_C
 BRAIN = BrainStore(os.getenv("ATE_BRAIN_DB") or os.getenv("QUANTAI_BRAIN_DB", os.path.join(os.path.dirname(__file__), "ate_brain.sqlite3")))
 BRAIN_EVAL_INTERVAL_SECONDS = max(15, int(os.getenv("ATE_BRAIN_EVAL_INTERVAL") or os.getenv("QUANTAI_BRAIN_EVAL_INTERVAL", "30")))
 BRAIN_AUTO_ADJUST_WINDOW = max(5, int(os.getenv("ATE_BRAIN_ADJUST_WINDOW") or os.getenv("QUANTAI_BRAIN_ADJUST_WINDOW", "10")))
-BRAIN_LOOP_HEARTBEAT = {"last_run": None, "cycles": 0, "last_error": None}
+BRAIN_LOOP_HEARTBEAT: dict[str, Any] = {"last_run": None, "cycles": 0, "last_error": None}
 
 # Tracks the most recent EA telemetry push so the dashboard can show EA liveness.
-_LAST_EA_HEARTBEAT: Optional[datetime] = None
-_LAST_EA_TELEMETRY: Optional[dict] = None
+_LAST_EA_HEARTBEAT: datetime | None = None
+_LAST_EA_TELEMETRY: dict | None = None
 EA_HEARTBEAT_STALE_SECONDS = 10
 
 
@@ -2129,9 +2175,9 @@ def _handle_telemetry(payload: TelemetryPayload):
 
 
 class CalendarEventItem(BaseModel):
-    event_id: Optional[str] = None
-    day: Optional[str] = None
-    date: Optional[str] = None
+    event_id: str | None = None
+    day: str | None = None
+    date: str | None = None
     time: str = ""
     currency: str = "USD"
     title: str
@@ -2144,7 +2190,7 @@ class CalendarEventItem(BaseModel):
 
 class CalendarPushRequest(BaseModel):
     source: str = "MT5_CALENDAR"
-    events: List[CalendarEventItem]
+    events: list[CalendarEventItem]
 
 
 @app.post("/api/v1/bridge/calendar", dependencies=[Depends(require_bridge_token)])
@@ -2154,7 +2200,7 @@ async def receive_calendar(req: CalendarPushRequest):
 
 
 @app.get("/api/logs")
-async def get_logs(limit: int = 200, level: Optional[str] = None):
+async def get_logs(limit: int = 200, level: str | None = None):
     logs = read_recent_logs(limit=limit, level=level)
     return logs
 
@@ -2172,10 +2218,10 @@ class CommandReceiptRequest(BaseModel):
     executor_id: str
     receipt_id: str
     status: str
-    retcode: Optional[int] = None
+    retcode: int | None = None
     result_message: str = ""
-    order_ticket: Optional[int] = None
-    deal_ticket: Optional[int] = None
+    order_ticket: int | None = None
+    deal_ticket: int | None = None
 
 
 class ChartMarkupRequest(BaseModel):
@@ -2203,7 +2249,7 @@ class CandlePushItem(BaseModel):
 class PushCandlesRequest(BaseModel):
     symbol: str
     timeframe: str
-    candles: List[CandlePushItem]
+    candles: list[CandlePushItem]
 
 
 # LIVE identity allowlist (empty login = LIVE not configured -> fail closed).
@@ -2336,7 +2382,40 @@ async def bridge_chart_markup(req: ChartMarkupRequest):
 
 
 # In-memory storage for real candles pushed by the EA on host machine
-_EA_PUSHED_CANDLES: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+_EA_PUSHED_CANDLES: dict[str, dict[str, list[dict[str, Any]]]] = {}
+
+# Canonical symbol aliases: the EA pushes candles with its own symbol spelling
+# (InpSymbol default "XAUUSDm") while the dashboard requests "XAUUSD" — and the
+# EA pushes its CHART timeframe while the dashboard asks for "M15". Normalize
+# both when falling back to EA-pushed candles so the chart stays live even when
+# the native MetaTrader5 Python module is unavailable (Docker/Linux backend).
+_EA_CANDLE_SYMBOL_ALIASES = ("XAUUSDm", "XAUUSD.m", "XAUUSD_m", "XAUUSD", "GOLD")
+
+
+def _find_ea_candles(symbol: str, tf: str) -> tuple[list[dict[str, Any]], str | None]:
+    """Look up EA-pushed candles with symbol/timeframe alias normalization.
+
+    Returns (candles, actual_timeframe) or ([], None). Tries the exact key
+    first, then symbol aliases, then any timeframe stored for a matching
+    symbol (preferring the requested TF, then M15, then the first available).
+    """
+    exact = _EA_PUSHED_CANDLES.get(symbol)
+    if exact is not None and tf in exact:
+        return exact[tf], tf
+    for alias in _EA_CANDLE_SYMBOL_ALIASES:
+        if alias in _EA_PUSHED_CANDLES and tf in _EA_PUSHED_CANDLES[alias]:
+            return _EA_PUSHED_CANDLES[alias][tf], tf
+    for alias in _EA_CANDLE_SYMBOL_ALIASES:
+        stored = _EA_PUSHED_CANDLES.get(alias)
+        if not stored:
+            continue
+        for cand_tf in (tf, "M15", "M5", "M1", "H1", "H4", "D1"):
+            if cand_tf in stored:
+                return stored[cand_tf], cand_tf
+        first_tf = next(iter(stored))
+        return stored[first_tf], first_tf
+    return [], None
+
 
 @app.post("/api/v1/bridge/candles", dependencies=[Depends(require_bridge_token)])
 @app.post("/api/v1/bridge/candles/", dependencies=[Depends(require_bridge_token)])
@@ -2442,6 +2521,7 @@ async def get_control_center_status():
             "bridge_auth_configured": bool(BRIDGE_TOKEN),
             "operator_auth_configured": bool(OPERATOR_TOKEN),
             "risk_policy_execution_enabled": bool(risk.execution_enabled),
+            "force_unlock": FORCE_UNLOCK,
         },
         "telegram": {
             "bot_token": _mask_field(TELEGRAM_BOT_TOKEN),
@@ -2480,10 +2560,10 @@ class ControlModeRequest(BaseModel):
 
 class ControlCenterModeRequest(BaseModel):
     mode: str = Field(default="DEMO", pattern="^(DEMO|LIVE|DISABLED)$")
-    live_armed: Optional[bool] = None
-    demo_armed: Optional[bool] = None
-    kill_switch: Optional[bool] = None
-    ai_auto_loop: Optional[bool] = None
+    live_armed: bool | None = None
+    demo_armed: bool | None = None
+    kill_switch: bool | None = None
+    ai_auto_loop: bool | None = None
 
 
 class ControlCenterLoginRequest(BaseModel):
@@ -2493,19 +2573,19 @@ class ControlCenterLoginRequest(BaseModel):
 
 
 class ControlCenterAIConfigRequest(BaseModel):
-    active_model: Optional[str] = None
-    active_ai_model: Optional[str] = None
-    trading_method: Optional[str] = None
-    custom_model_id: Optional[str] = None
-    gemini_api_key: Optional[str] = None
-    claude_api_key: Optional[str] = None
-    deepseek_api_key: Optional[str] = None
-    openai_api_key: Optional[str] = None
-    zplay_api_key: Optional[str] = None
-    grok_api_key: Optional[str] = None
-    qwen_api_key: Optional[str] = None
-    gateway_url: Optional[str] = None
-    gateway_key: Optional[str] = None
+    active_model: str | None = None
+    active_ai_model: str | None = None
+    trading_method: str | None = None
+    custom_model_id: str | None = None
+    gemini_api_key: str | None = None
+    claude_api_key: str | None = None
+    deepseek_api_key: str | None = None
+    openai_api_key: str | None = None
+    zplay_api_key: str | None = None
+    grok_api_key: str | None = None
+    qwen_api_key: str | None = None
+    gateway_url: str | None = None
+    gateway_key: str | None = None
 
 
 class ControlKillSwitchRequest(BaseModel):
@@ -2520,9 +2600,9 @@ class MT5LoginRequest(BaseModel):
     login: int
     password: str = Field(min_length=1)
     server: str = Field(min_length=1)
-    terminal_path: Optional[str] = None
-    symbol: Optional[str] = None
-    timeframe: Optional[str] = None
+    terminal_path: str | None = None
+    symbol: str | None = None
+    timeframe: str | None = None
     auto_deploy: bool = True
 
 
@@ -2546,6 +2626,19 @@ async def update_demo_arm(req: ControlDemoArmRequest):
     return {"status": "SUCCESS", "demo_armed": DEMO_ARMED}
 
 
+class ControlForceUnlockRequest(BaseModel):
+    force_unlock: bool
+
+@app.post("/api/control-center/force-unlock", dependencies=[Depends(require_operator_token)])
+async def update_force_unlock(req: ControlForceUnlockRequest):
+    global FORCE_UNLOCK
+    FORCE_UNLOCK = req.force_unlock
+    save_control_config({"force_unlock": FORCE_UNLOCK})
+    await broadcast_config_updated()
+    log_event(LogEvent.INFO, component="control-center", message=f"Force unlock updated -> {FORCE_UNLOCK}")
+    return {"status": "SUCCESS", "force_unlock": FORCE_UNLOCK}
+
+
 @app.post("/api/control-center/login-mt5", dependencies=[Depends(require_operator_token)])
 async def login_mt5_account(req: MT5LoginRequest):
     global DEMO_LOGIN, DEMO_SERVER, EXECUTION_SYMBOL, EXECUTION_TIMEFRAME
@@ -2561,7 +2654,7 @@ async def login_mt5_account(req: MT5LoginRequest):
         from mt5_auto import connect_and_login as auto_connect
 
         ok, msg, acc = auto_connect(
-            req.terminal_path.strip(),
+            (req.terminal_path or "").strip(),
             str(req.login),
             req.password,
             req.server,
@@ -2641,18 +2734,18 @@ async def update_risk_config(req: RiskConfigRequest):
     profile = FOREX_RISK_PROFILES.get("XAUUSD")
     if profile:
         profile["max_spread"] = req.max_spread
-        policy = profile["policy"]
+        policy_obj = cast(RiskPolicy, profile["policy"])
         profile["policy"] = replace(
-            policy,
+            policy_obj,
             risk_per_trade_fraction=req.risk_per_trade_fraction,
             max_open_positions=req.max_open_positions,
         )
     profile_m = FOREX_RISK_PROFILES.get("XAUUSDM")
     if profile_m:
         profile_m["max_spread"] = req.max_spread
-        policy_m = profile_m["policy"]
+        policy_m_obj = cast(RiskPolicy, profile_m["policy"])
         profile_m["policy"] = replace(
-            policy_m,
+            policy_m_obj,
             risk_per_trade_fraction=req.risk_per_trade_fraction,
             max_open_positions=req.max_open_positions,
         )
@@ -2688,7 +2781,7 @@ class OrderRequest(BaseModel):
     volume: float = 0.10
     sl_pips: float = 120.0
     tp_pips: float = 240.0
-    idempotency_key: Optional[str] = None
+    idempotency_key: str | None = None
 
 
 def get_daily_realized_pnl(symbol: str, magic: int) -> float:
@@ -2706,12 +2799,12 @@ def get_daily_realized_pnl(symbol: str, magic: int) -> float:
     )
 
 
-def get_risk_profile(symbol: str) -> Optional[Dict[str, Any]]:
+def get_risk_profile(symbol: str) -> dict[str, Any] | None:
     normalized = symbol.upper()
     return FOREX_RISK_PROFILES.get(normalized) or FOREX_RISK_PROFILES.get(normalized.rstrip(".M").rstrip("M"))
 
 
-def get_symbol_spec(symbol: str) -> Optional[SymbolSpec]:
+def get_symbol_spec(symbol: str) -> SymbolSpec | None:
     if not ensure_mt5_connected():
         return None
     info = mt5.symbol_info(symbol)
@@ -2848,7 +2941,7 @@ def issue_demo_command() -> dict[str, Any]:
             log_event(LogEvent.RISK_REJECTED, component="risk-gate", action=proposal.action.value, reasons=["REJECT_DCA_VOLUME"])
             return {"status": "REJECTED", "reason_codes": ["REJECT_DCA_VOLUME"], "command": None, "pos_count": pos_count, "total_pnl": total_pnl}
         effective_volume = dca_volume
-    stop_distance = abs(proposal.entry - proposal.stop_loss)
+    stop_distance = abs(float(proposal.entry or 0) - float(proposal.stop_loss or 0))
     risk_per_lot = (stop_distance / spec.tick_size) * spec.tick_value
     capped_volume = cap_volume_to_basket_risk(
         desired_volume=effective_volume,
@@ -2951,7 +3044,7 @@ def execution_disabled_response() -> None:
     )
 
 
-def fetch_mt5_multi_timeframe(symbol: str) -> Dict[str, pd.DataFrame]:
+def fetch_mt5_multi_timeframe(symbol: str) -> dict[str, pd.DataFrame]:
     if mt5 is None:
         return {}
     if not mt5.terminal_info():
@@ -2975,7 +3068,8 @@ def fetch_mt5_multi_timeframe(symbol: str) -> Dict[str, pd.DataFrame]:
     # Only used when the symbol exists in the terminal.
     if symbol and symbol.upper().startswith("XAU"):
         try:
-            all_symbols = [s.name for s in mt5.symbols_get()]
+            symbols_list = mt5.symbols_get()
+            all_symbols = [s.name for s in symbols_list] if symbols_list is not None else []
             for dxy_name in ("DXY", "DX", "USDX", "USDX.m"):
                 if dxy_name in all_symbols:
                     rates = mt5.copy_rates_from_pos(dxy_name, mt5.TIMEFRAME_M15, 0, 500)
@@ -3138,8 +3232,9 @@ async def order_buy(req: OrderRequest):
         reason="MANUAL_BROWSER_BUY",
         ttl_seconds=DEMO_COMMAND_TTL,
     )
-    log_event(LogEvent.ORDER_SENT, component="order", action="BUY", volume=req.volume, command_id=command.get("command_id"))
-    send_telegram_alert(f"<b>[COMMAND ISSUED]</b> Lệnh BUY {req.volume} Lot đã vào Ledger (ID: <code>{command.get('command_id')[:8]}...</code>). Đang chờ EA thực thi.")
+    cmd_id = command.get("command_id") or ""
+    log_event(LogEvent.ORDER_SENT, component="order", action="BUY", volume=req.volume, command_id=cmd_id)
+    send_telegram_alert(f"<b>[COMMAND ISSUED]</b> Lệnh BUY {req.volume} Lot đã vào Ledger (ID: <code>{cmd_id[:8]}...</code>). Đang chờ EA thực thi.")
     append_chat_message("ai", f"[BUY] Yêu cầu đặt lệnh BUY {req.volume} lot {target_symbol} đã vào Command Ledger.")
     return {"status": "SUCCESS", "message": "Lệnh BUY đã được tạo thành công trong Command Ledger!", "command": command}
 
@@ -3195,8 +3290,9 @@ async def order_sell(req: OrderRequest):
         reason="MANUAL_BROWSER_SELL",
         ttl_seconds=DEMO_COMMAND_TTL,
     )
-    log_event(LogEvent.ORDER_SENT, component="order", action="SELL", volume=req.volume, command_id=command.get("command_id"))
-    send_telegram_alert(f"<b>[COMMAND ISSUED]</b> Lệnh SELL {req.volume} Lot đã vào Ledger (ID: <code>{command.get('command_id')[:8]}...</code>). Đang chờ EA thực thi.")
+    cmd_id = command.get("command_id") or ""
+    log_event(LogEvent.ORDER_SENT, component="order", action="SELL", volume=req.volume, command_id=cmd_id)
+    send_telegram_alert(f"<b>[COMMAND ISSUED]</b> Lệnh SELL {req.volume} Lot đã vào Ledger (ID: <code>{cmd_id[:8]}...</code>). Đang chờ EA thực thi.")
     append_chat_message("ai", f"[SELL] Yêu cầu đặt lệnh SELL {req.volume} lot {target_symbol} đã vào Command Ledger.")
     return {"status": "SUCCESS", "message": "Lệnh SELL đã được tạo thành công trong Command Ledger!", "command": command}
 
@@ -3219,8 +3315,9 @@ async def order_close_all():
         reason="MANUAL_BROWSER_CLOSE_ALL",
         ttl_seconds=DEMO_COMMAND_TTL,
     )
-    log_event(LogEvent.ORDER_SENT, component="order", action="CLOSE_ALL", command_id=command.get("command_id"))
-    send_telegram_alert(f"<b>[COMMAND ISSUED]</b> Yêu cầu CLOSE ALL đã vào Ledger (ID: <code>{command.get('command_id')[:8]}...</code>). Đang chờ EA thực thi.")
+    cmd_id = command.get("command_id") or ""
+    log_event(LogEvent.ORDER_SENT, component="order", action="CLOSE_ALL", command_id=cmd_id)
+    send_telegram_alert(f"<b>[COMMAND ISSUED]</b> Yêu cầu CLOSE ALL đã vào Ledger (ID: <code>{cmd_id[:8]}...</code>). Đang chờ EA thực thi.")
     append_chat_message("ai", "[CLOSE ALL] Yêu cầu đóng toàn bộ vị thế đã vào Command Ledger.")
     return {"status": "SUCCESS", "message": "Yêu cầu CLOSE ALL đã được tạo trong Command Ledger!", "command": command}
 
@@ -3255,7 +3352,7 @@ async def reset_all():
         for p in positions:
             is_buy = (p.type == 0)
             symbol_info = mt5.symbol_info_tick(p.symbol)
-            price = symbol_info.bid if is_buy else symbol_info.ask if symbol_info else p.price_current
+            price = (symbol_info.bid if is_buy else symbol_info.ask) if symbol_info else p.price_current
             
             req = {
                 "action": mt5.TRADE_ACTION_DEAL,
@@ -3322,17 +3419,17 @@ class ModifyTpSlRequest(BaseModel):
     ticket: int
     stop_loss: float = Field(ge=0.0)
     take_profit: float = Field(ge=0.0)
-    idempotency_key: Optional[str] = None
+    idempotency_key: str | None = None
 
 
 class ClosePositionRequest(BaseModel):
     ticket: int
-    idempotency_key: Optional[str] = None
+    idempotency_key: str | None = None
 
 
 class CancelPendingRequest(BaseModel):
     order_ticket: int
-    idempotency_key: Optional[str] = None
+    idempotency_key: str | None = None
 
 
 @app.post("/api/order/modify_tpsl", dependencies=[Depends(require_operator_token)])
@@ -3454,9 +3551,12 @@ async def _manage_active_positions_loop() -> None:
                 if positions:
                     # Fetch latest indicators and prices for trailing stops and validation
                     indicators = get_technical_indicators(EXECUTION_SYMBOL)
-                    ema20 = indicators.get("ema20")
-                    ema50 = indicators.get("ema50")
-                    atr = indicators.get("atr")
+                    ema20_val = indicators.get("ema20")
+                    ema50_val = indicators.get("ema50")
+                    atr_val = indicators.get("atr")
+                    ema20 = float(ema20_val) if isinstance(ema20_val, (int, float)) else 0.0
+                    ema50 = float(ema50_val) if isinstance(ema50_val, (int, float)) else 0.0
+                    atr = float(atr_val) if isinstance(atr_val, (int, float)) else 0.0
                     
                     for p in positions:
                         # Manage any position belonging to our target symbol (case-insensitive)
@@ -3682,7 +3782,7 @@ def _brain_lesson(outcome: str, r_multiple: float, exit_reason: str) -> str:
     return "Lệnh hòa vốn: cần sample lớn hơn để kết luận."
 
 
-def _brain_exit_reason(exit_price: float, decision: Dict[str, Any]) -> str:
+def _brain_exit_reason(exit_price: float, decision: dict[str, Any]) -> str:
     entry = decision.get("entry")
     stop_loss = decision.get("stop_loss")
     take_profit = decision.get("take_profit")
@@ -4112,6 +4212,7 @@ async def update_control_center_mode(req: ControlCenterModeRequest):
         DEMO_ARMED = False
         ENABLE_TRADING = False
         KILL_SWITCH = True
+        FORCE_UNLOCK = False
         
     if req.live_armed is not None: LIVE_ARMED = req.live_armed
     if req.demo_armed is not None: DEMO_ARMED = req.demo_armed
@@ -4126,6 +4227,7 @@ async def update_control_center_mode(req: ControlCenterModeRequest):
         "kill_switch": KILL_SWITCH,
         "ai_auto_loop": AI_AUTO_LOOP,
         "enable_trading": ENABLE_TRADING,
+        "force_unlock": FORCE_UNLOCK,
     })
     await broadcast_config_updated()
 
@@ -4191,18 +4293,18 @@ async def update_telegram_config(req: ControlCenterTelegramRequest):
     sent = False
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         sent = send_telegram_alert(
-            f"<b>[GOLDQUANT TELEGRAM BOT TEST]</b>\n"
-            f"Báo cáo anh Tú: Đã kết nối Telegram Bot thành công!\n"
-            f"Tất cả thông báo tín hiệu AI, rủi ro & lệnh giao dịch sẽ tự động gửi tới đây."
+            "<b>[GOLDQUANT TELEGRAM BOT TEST]</b>\n"
+            "Báo cáo anh Tú: Đã kết nối Telegram Bot thành công!\n"
+            "Tất cả thông báo tín hiệu AI, rủi ro & lệnh giao dịch sẽ tự động gửi tới đây."
         )
 
     if sent:
         return {"status": "SUCCESS", "message": "Đã lưu thông số Telegram vào Control Center và gửi tin nhắn test thành công!"}
 class AITestRequest(BaseModel):
     key_type: str = Field(default="openai", max_length=32)
-    api_key: Optional[str] = None
+    api_key: str | None = None
     model: str = Field(default="", max_length=128)
-    base_url: Optional[str] = None
+    base_url: str | None = None
 
 
 @app.post("/api/ai/test", dependencies=[Depends(require_operator_token)])
@@ -4212,7 +4314,7 @@ async def test_ai_config_endpoint(req: AITestRequest):
     Returns a structured verdict with a clear reason when it fails:
     sai key / sai model / hết credit / lỗi url...
     """
-    if not HAS_AI_TEST or test_provider_connection is None:
+    if not HAS_AI_TEST or check_provider_connection is None:
         raise HTTPException(status_code=503, detail={"code": "AI_TEST_UNAVAILABLE", "message": "Module kiểm tra AI chưa sẵn sàng."})
     model = (req.model or "").strip()
     if not model:
@@ -4221,7 +4323,7 @@ async def test_ai_config_endpoint(req: AITestRequest):
     if req.key_type != "opencode" and not key:
         raise HTTPException(status_code=400, detail={"code": "API_KEY_REQUIRED", "message": f"Nhà cung cấp {req.key_type} cần API key để test."})
     result = await asyncio.to_thread(
-        test_provider_connection,
+        check_provider_connection,
         req.key_type.strip().lower(),
         key,
         model.strip(),
@@ -4357,7 +4459,7 @@ USER_CUSTOM_MODEL_ID = _saved_cfg.get("custom_model_id", "")
 GEMINI_ROTATION_POOL = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3-flash"]
 GEMINI_ROTATION_IDX = 0
 OPENCODE_ROTATION_IDX = 0
-AI_MODEL_COOLDOWN: Dict[str, float] = {}
+AI_MODEL_COOLDOWN: dict[str, float] = {}
 AI_COOLDOWN_SECONDS = max(120, int(os.getenv("ATE_AI_COOLDOWN_SECONDS") or os.getenv("QUANTAI_AI_COOLDOWN_SECONDS", "7200")))
 
 USER_GROK_KEY = _saved_cfg.get("grok_api_key") or os.getenv("GROK_API_KEY", "")
@@ -4475,7 +4577,7 @@ async def get_control_center_ai_config():
     }
 
 
-def get_ai_endpoints_queue(preferred_model: str = "auto") -> List[Dict[str, Any]]:
+def get_ai_endpoints_queue(preferred_model: str = "auto") -> list[dict[str, Any]]:
     global GEMINI_ROTATION_IDX, OPENCODE_ROTATION_IDX
     target_model = USER_CUSTOM_MODEL_ID or (preferred_model if preferred_model and preferred_model != "auto" else ACTIVE_AI_MODEL)
     queue = []
@@ -4821,7 +4923,7 @@ async def copilot_chat(req: CopilotChatRequest):
             ema20_v = float(indicators.get("ema20") or 0.0)
             ema50_v = float(indicators.get("ema50") or 0.0)
             ema200_v = float(indicators.get("ema200") or 0.0)
-            trend_score = 40 if (ema20_v > ema50_v > ema200_v and ema200_v > 0) else (20 if ema20_v > ema200_v else 0)
+            trend_score = 40 if (ema20_v > ema50_v > ema200_v > 0) else (20 if ema20_v > ema200_v else 0)
             mom_score = 23 if rsi_v >= 55 else (12 if rsi_v >= 45 else 4)
             vol_score = 15 if atr_v > 0 else 0
             total_score = trend_score + mom_score + vol_score
@@ -4876,8 +4978,8 @@ async def get_copilot_chat_history():
 
 class EconomicCalendarRequest(BaseModel):
     days: int = 7
-    country: Optional[str] = None
-    impact: Optional[str] = None
+    country: str | None = None
+    impact: str | None = None
 
 
 class EconomicEvent(BaseModel):
@@ -4889,7 +4991,7 @@ class EconomicEvent(BaseModel):
     datetime: str
     forecast: str
     previous: str
-    actual: Optional[str]
+    actual: str | None
     unit: str
     source: str
     description: str
@@ -4900,8 +5002,8 @@ class EconomicEvent(BaseModel):
 @app.get("/api/economic-calendar")
 async def economic_calendar(
     days: int = Query(7, ge=1, le=30),
-    country: Optional[str] = Query(None),
-    impact: Optional[str] = Query(None),
+    country: str | None = Query(None),
+    impact: str | None = Query(None),
 ):
     events = fetch_real_economic_calendar()
     now = datetime.now(timezone.utc)

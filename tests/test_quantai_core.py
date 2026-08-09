@@ -183,6 +183,27 @@ class ATECoreTests(unittest.TestCase):
         self.assertEqual(metrics["max_drawdown"], 25.0)
         self.assertEqual(metrics["win_rate"], 33.33)
 
+    def test_execution_readiness_bypasses_mt5_when_force_unlocked(self):
+        original_force_unlock = server.FORCE_UNLOCK
+        original_mode = server.EXECUTION_MODE
+        original_kill_switch = server.KILL_SWITCH
+        original_enable_trading = server.ENABLE_TRADING
+        try:
+            server.FORCE_UNLOCK = True
+            server.EXECUTION_MODE = "DEMO"
+            server.KILL_SWITCH = False
+            server.ENABLE_TRADING = True
+            
+            ready, reason = server.execution_readiness()
+            self.assertTrue(ready)
+            self.assertEqual(reason, "READY")
+        finally:
+            server.FORCE_UNLOCK = original_force_unlock
+            server.EXECUTION_MODE = original_mode
+            server.KILL_SWITCH = original_kill_switch
+            server.ENABLE_TRADING = original_enable_trading
+
 
 if __name__ == "__main__":
     unittest.main()
+

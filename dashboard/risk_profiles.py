@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from risk_gate import RiskPolicy
 
-
 FOREX_RISK_PROFILES = {
     "EURUSD": {
         "max_spread": 0.00020,

@@ -14,12 +14,11 @@ import json
 import time
 import urllib.error
 import urllib.request
-from typing import Dict, Optional, Tuple
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 
 # provider key_type -> (default base url, does it speak Anthropic /messages shape)
-PROVIDER_PRESETS: Dict[str, Dict] = {
+PROVIDER_PRESETS: dict[str, dict] = {
     "gemini": {
         "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
         "anthropic": False,
@@ -63,7 +62,7 @@ PROVIDER_PRESETS: Dict[str, Dict] = {
 }
 
 
-def classify_http_error(exc: urllib.error.HTTPError) -> Tuple[str, str]:
+def classify_http_error(exc: urllib.error.HTTPError) -> tuple[str, str]:
     """Map an HTTP error to (code, human_readable_reason)."""
     status = exc.code
     body = ""
@@ -102,22 +101,18 @@ def classify_http_error(exc: urllib.error.HTTPError) -> Tuple[str, str]:
     return code, base_msg
 
 
-def test_provider_connection(
+def check_provider_connection(
     key_type: str,
     api_key: str,
     model: str,
-    base_url: Optional[str] = None,
+    base_url: str | None = None,
     timeout: float = 20.0,
-) -> Dict:
-    """Perform a minimal one-turn completion against the provider.
-
-    Returns dict with keys: ok, message, latency_ms, status_code, error_code, model_used.
-    """
+) -> dict:
     start = time.time()
-    preset = PROVIDER_PRESETS.get(key_type, PROVIDER_PRESETS.get("openai"))
+    preset = PROVIDER_PRESETS.get(key_type) or PROVIDER_PRESETS["openai"]
 
-    url = (base_url or "").strip() or preset["url"]
-    is_anthropic = bool(preset["anthropic"]) or "anthropic.com" in url
+    url = (base_url or "").strip() or str(preset.get("url") or "")
+    is_anthropic = bool(preset.get("anthropic")) or "anthropic.com" in url
 
     url = url.rstrip("/")
     if is_anthropic:

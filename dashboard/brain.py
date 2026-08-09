@@ -13,10 +13,11 @@ import json
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any
 
 
 def _now_iso() -> str:
@@ -143,17 +144,17 @@ class BrainStore:
         timeframe: str,
         action: str,
         confidence: int,
-        entry: Optional[float],
-        stop_loss: Optional[float],
-        take_profit: Optional[float],
-        volume: Optional[float],
-        reason_codes: List[str],
-        indicators: Dict[str, Any],
-        account: Dict[str, Any],
-        context: Dict[str, Any],
+        entry: float | None,
+        stop_loss: float | None,
+        take_profit: float | None,
+        volume: float | None,
+        reason_codes: list[str],
+        indicators: dict[str, Any],
+        account: dict[str, Any],
+        context: dict[str, Any],
         status: str,
-        command_id: Optional[str] = None,
-        order_ticket: Optional[int] = None,
+        command_id: str | None = None,
+        order_ticket: int | None = None,
         decision_detail: str = "",
     ) -> str:
         decision_id = "dec-" + uuid.uuid4().hex[:12]
@@ -179,7 +180,7 @@ class BrainStore:
             )
         return decision_id
 
-    def link_execution(self, *, command_id: str, order_ticket: Optional[int]) -> None:
+    def link_execution(self, *, command_id: str, order_ticket: int | None) -> None:
         with self._lock, self._connection() as connection:
             connection.execute(
                 "UPDATE brain_decisions SET status='EXECUTED', order_ticket=? WHERE command_id=? AND status IN ('ISSUED','EXECUTED')",
@@ -195,7 +196,7 @@ class BrainStore:
 
     # ── Self-evaluation ───────────────────────────────────────────────────────
 
-    def pending_executed_decisions(self, limit: int = 200) -> List[Dict[str, Any]]:
+    def pending_executed_decisions(self, limit: int = 200) -> list[dict[str, Any]]:
         with self._lock, self._connection() as connection:
             rows = connection.execute(
                 """
@@ -220,7 +221,7 @@ class BrainStore:
         outcome: str,
         exit_reason: str,
         lesson: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         if outcome == "WIN":
             delta_wins, delta_losses, delta_be = 1, 0, 0
         elif outcome == "LOSS":
@@ -317,14 +318,14 @@ class BrainStore:
                 (sample_size, wins, losses, breakevens, win_rate, profit_factor, total_pnl, avg_r, _now_iso(), strategy_version, trading_method),
             )
 
-    def strategy_summary(self) -> List[Dict[str, Any]]:
+    def strategy_summary(self) -> list[dict[str, Any]]:
         with self._lock, self._connection() as connection:
             rows = connection.execute(
                 "SELECT * FROM strategy_stats ORDER BY updated_at DESC"
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def recent_decisions(self, limit: int = 30) -> List[Dict[str, Any]]:
+    def recent_decisions(self, limit: int = 30) -> list[dict[str, Any]]:
         with self._lock, self._connection() as connection:
             rows = connection.execute(
                 """
@@ -349,7 +350,7 @@ class BrainStore:
             out.append(item)
         return out
 
-    def recent_evaluations(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def recent_evaluations(self, limit: int = 20) -> list[dict[str, Any]]:
         with self._lock, self._connection() as connection:
             rows = connection.execute(
                 """
@@ -362,7 +363,7 @@ class BrainStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def latest_adjustments(self, limit: int = 10) -> List[Dict[str, Any]]:
+    def latest_adjustments(self, limit: int = 10) -> list[dict[str, Any]]:
         with self._lock, self._connection() as connection:
             rows = connection.execute(
                 "SELECT * FROM brain_adjustments ORDER BY ts DESC LIMIT ?",
@@ -376,8 +377,8 @@ class BrainStore:
         self,
         *,
         strategy_version: str,
-        window: Dict[str, Any],
-        proposed: Dict[str, Any],
+        window: dict[str, Any],
+        proposed: dict[str, Any],
         result: str = "",
     ) -> str:
         adjustment_id = "adj-" + uuid.uuid4().hex[:10]

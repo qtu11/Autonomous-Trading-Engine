@@ -17,14 +17,11 @@ silently pretending to succeed.
 
 from __future__ import annotations
 
-import glob
 import os
 import shutil
-import subprocess
 import time
 import winreg
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 try:
     import MetaTrader5 as mt5  # type: ignore
@@ -50,7 +47,7 @@ EXPERT_FILE = "ATE_XAUUSD.ex5"
 EXPERT_DIR_NAME = "ATE_XAUUSD"
 
 # MT5 chart period quick-keys (documented MetaTrader 5 shortcuts).
-TIMEFRAME_KEYS: Dict[str, str] = {
+TIMEFRAME_KEYS: dict[str, str] = {
     "M1": "1",
     "M5": "5",
     "M15": "15",
@@ -79,7 +76,7 @@ MAIN_WINDOW_TITLE_PATTERNS = [
 # --------------------------------------------------------------------------- #
 
 
-def find_terminal64(explicit_path: Optional[str] = None) -> Tuple[bool, Optional[str], str]:
+def find_terminal64(explicit_path: str | None = None) -> tuple[bool, str | None, str]:
     """
     Locate terminal64.exe.
 
@@ -134,7 +131,7 @@ def find_terminal64(explicit_path: Optional[str] = None) -> Tuple[bool, Optional
     return False, None, "Không tự tìm được terminal64.exe. Hãy nhập đường dẫn thủ công (VD: C:\\Program Files\\Exness MetaTrader 5\\terminal64.exe)."
 
 
-def find_data_path() -> Optional[str]:
+def find_data_path() -> str | None:
     """Data folder from the currently running MT5 terminal (if any)."""
     if not MT5_AVAILABLE:
         return None
@@ -155,18 +152,18 @@ def find_data_path() -> Optional[str]:
 
 def connect_and_login(
     terminal64: str,
-    login: Optional[str] = None,
-    password: Optional[str] = None,
-    server: Optional[str] = None,
+    login: str | None = None,
+    password: str | None = None,
+    server: str | None = None,
     timeout_ms: int = 90_000,
-) -> Tuple[bool, str, Optional[Dict]]:
+) -> tuple[bool, str, dict | None]:
     """Launch terminal64 (if needed) and log into the given account.
 
     Returns (ok, message, account_info_dict)."""
     if not MT5_AVAILABLE:
         return False, "MetaTrader5 (python module) chưa được cài. Chạy: pip install MetaTrader5", None
 
-    kwargs: Dict = {"path": terminal64, "timeout": timeout_ms}
+    kwargs: dict = {"path": terminal64, "timeout": timeout_ms}
     if login is not None and str(login).strip():
         kwargs["login"] = int(str(login).strip())
     if password:
@@ -206,7 +203,7 @@ def connect_and_login(
     return True, f"Đã kết nối tài khoản {info.login} @ {info.server}", acc
 
 
-def copy_expert_to_data(data_path: str, source_expert: Optional[str] = None) -> Tuple[bool, str, Optional[str]]:
+def copy_expert_to_data(data_path: str, source_expert: str | None = None) -> tuple[bool, str, str | None]:
     """
     Ensure ATE_XAUUSD.ex5 exists inside the MT5 data folder Experts folder.
 
@@ -253,7 +250,7 @@ def copy_expert_to_data(data_path: str, source_expert: Optional[str] = None) -> 
 # --------------------------------------------------------------------------- #
 
 
-def _mt5_window(app: "Application"):
+def _mt5_window(app: Application):
     """Find the main MT5 window by title pattern."""
     for pattern in MAIN_WINDOW_TITLE_PATTERNS:
         try:
@@ -265,7 +262,7 @@ def _mt5_window(app: "Application"):
     return None
 
 
-def open_symbol_chart(symbol: str, timeframe: str, terminal64: str) -> Tuple[bool, str]:
+def open_symbol_chart(symbol: str, timeframe: str, terminal64: str) -> tuple[bool, str]:
     """Open a chart for `symbol` at `timeframe` on the MT5 terminal window."""
     if not PYWINAUTO_AVAILABLE:
         return (
@@ -309,7 +306,7 @@ def open_symbol_chart(symbol: str, timeframe: str, terminal64: str) -> Tuple[boo
         return False, f"Mở chart thất bại (UI): {exc}"
 
 
-def attach_expert_to_chart(terminal64: str, expert_name: str = EXPERT_FILE) -> Tuple[bool, str]:
+def attach_expert_to_chart(terminal64: str, expert_name: str = EXPERT_FILE) -> tuple[bool, str]:
     """Double-click the EA inside the Navigator tree -> attaches to active chart."""
     if not PYWINAUTO_AVAILABLE:
         return (
@@ -359,7 +356,7 @@ def attach_expert_to_chart(terminal64: str, expert_name: str = EXPERT_FILE) -> T
     return False, "Không tìm thấy EA trong cây Navigator (có thể file .ex5 chưa được copy đúng chỗ)."
 
 
-def enable_algo_trading(terminal64: str, expert_name: str = EXPERT_FILE) -> Tuple[bool, str]:
+def enable_algo_trading(terminal64: str, expert_name: str = EXPERT_FILE) -> tuple[bool, str]:
     """
     Toggle the green 'Algo Trading' button via UI automation.
 
@@ -425,9 +422,9 @@ def deploy_expert_to_chart(
     server: str,
     symbol: str,
     timeframe: str,
-    terminal64_path: Optional[str] = None,
-    source_expert: Optional[str] = None,
-) -> Dict:
+    terminal64_path: str | None = None,
+    source_expert: str | None = None,
+) -> dict:
     """
     Full deployment pipeline. Returns a report dict:
 
@@ -444,7 +441,7 @@ def deploy_expert_to_chart(
           "symbol_info": {...},
         }
     """
-    report: Dict = {
+    report: dict = {
         "ok": False,
         "terminal64": None,
         "account": None,
@@ -500,7 +497,7 @@ def deploy_expert_to_chart(
     return report
 
 
-def manual_checklist(report: Dict) -> str:
+def manual_checklist(report: dict) -> str:
     """Human-readable fallback instructions when UI steps could not run."""
     lines = []
     for s in report.get("steps", []):

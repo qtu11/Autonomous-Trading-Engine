@@ -7,14 +7,12 @@ Breakout/Pullback/Retest/Fake Breakout, và 15 mẫu hình nến cổ điển
 Shooting Star, Tweezer Top/Bottom, Marubozu, Three White Soldiers, Three Black Crows).
 """
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
-try:
-    from .models import Candle, Direction, PriceLevel, LevelType, PatternMarker
-    from .structure import get_swing_series
-except ImportError:
-    from models import Candle, Direction, PriceLevel, LevelType, PatternMarker
-    from structure import get_swing_series
+
+from models import Candle, Direction, LevelType, PatternMarker, PriceLevel
+from structure import get_swing_series
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -114,8 +112,8 @@ def detect_range(candles: list[Candle], atr_series: pd.Series, lookback: int = 2
         return None
     is_range = (range_high - range_low) <= max_range_atr_mult * avg_atr
     return {
-        "is_range": bool(is_range), "range_high": range_high, "range_low": range_low,
-        "width": range_high - range_low, "avg_atr": float(avg_atr),
+        "is_range": is_range, "range_high": range_high, "range_low": range_low,
+        "width": range_high - range_low, "avg_atr": avg_atr,
         "start_index": window[0].index, "end_index": window[-1].index,
     }
 

@@ -19,11 +19,12 @@ import json
 import logging
 import os
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any
 
 
 class LogEvent:
@@ -168,7 +169,7 @@ def log_event(
     *,
     component: str = "backend",
     level: int = logging.INFO,
-    exc: Optional[BaseException] = None,
+    exc: BaseException | None = None,
     **fields: Any,
 ) -> None:
     """Emit one structured event line."""
@@ -188,7 +189,7 @@ def timed(event: str, *, component: str = "backend", **fields: Any) -> Iterator[
         log_event(event, component=component, latency_ms=latency_ms, **fields)
 
 
-def read_recent_logs(limit: int = 200, level: Optional[str] = None) -> list[dict[str, Any]]:
+def read_recent_logs(limit: int = 200, level: str | None = None) -> list[dict[str, Any]]:
     """Tail the current day's log file, newest last, optionally filtered by level."""
     log_file = _log_directory() / f"ate_{datetime.now(timezone.utc):%Y%m%d}.log"
     if not log_file.is_file():

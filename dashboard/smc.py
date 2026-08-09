@@ -8,18 +8,22 @@ Hàm run_smc_analysis() ở cuối file là điểm vào chính — trả về T
 khái niệm SMC mà người dùng liệt kê, đóng gói sẵn cho main.py serve qua API.
 """
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
-try:
-    from .models import (
-        Candle, df_to_candles, Direction, PDBox, BoxType, PriceLevel, LevelType, StructureEvent,
-    )
-    from . import structure as S
-except ImportError:
-    from models import (
-        Candle, df_to_candles, Direction, PDBox, BoxType, PriceLevel, LevelType, StructureEvent,
-    )
-    import structure as S
+
+from typing import Any
+import structure as S
+from models import (
+    BoxType,
+    Candle,
+    Direction,
+    LevelType,
+    PDBox,
+    PriceLevel,
+    StructureEvent,
+    df_to_candles,
+)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -37,9 +41,7 @@ def detect_ifc(candles: list[Candle], liquidity_levels: list[PriceLevel]) -> lis
         if not lvl.swept or lvl.swept_at_index is None:
             continue
         c = candles[lvl.swept_at_index]
-        if lvl.type == LevelType.SSL and c.close_position >= 0.7 and c.body_ratio >= 0.4:
-            ifc_levels.append(lvl)
-        elif lvl.type == LevelType.BSL and c.close_position <= 0.3 and c.body_ratio >= 0.4:
+        if lvl.type == LevelType.SSL and c.close_position >= 0.7 and c.body_ratio >= 0.4 or lvl.type == LevelType.BSL and c.close_position <= 0.3 and c.body_ratio >= 0.4:
             ifc_levels.append(lvl)
     return ifc_levels
 
@@ -53,10 +55,7 @@ def detect_trendline_liquidity(swing_df: pd.DataFrame, candles: list[Candle]) ->
     Trendline Liquidity (TLL): fit trendlines through swing points,
     and identify them as liquidity zones.
     """
-    try:
-        from .price_action import detect_trendlines
-    except ImportError:
-        from price_action import detect_trendlines
+    from price_action import detect_trendlines
     lines = detect_trendlines(swing_df)
     levels = []
     n = len(candles)
@@ -127,7 +126,7 @@ def detect_unicorn(
 # MAIN ENTRY: run_smc_analysis
 # ══════════════════════════════════════════════════════════════════
 
-def run_smc_analysis(mtf_data: dict[str, pd.DataFrame], broker_utc_offset_hours: float = 2.0) -> dict[str, any]:
+def run_smc_analysis(mtf_data: dict[str, pd.DataFrame], broker_utc_offset_hours: float = 2.0) -> dict[str, Any]:
     """
     Chạy toàn bộ quy trình phát hiện SMC cho biểu đồ M15 (Primary).
     Trả về {"objects": [...], "counts": {...}} sẵn sàng để dùng ở server/chart_markup.

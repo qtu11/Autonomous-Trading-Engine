@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Set
+from typing import Any
 
 from fastapi import WebSocket
-
 from logging_config import LogEvent, log_event
 
 
@@ -20,7 +19,7 @@ class ConnectionManager:
     """Track active WebSocket clients and broadcast JSON events to them."""
 
     def __init__(self) -> None:
-        self._connections: Set[WebSocket] = set()
+        self._connections: set[WebSocket] = set()
         self._lock = asyncio.Lock()
 
     @property

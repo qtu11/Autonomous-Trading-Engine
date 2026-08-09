@@ -8,8 +8,8 @@ Migrates ate_brain.sqlite3 to support multi-trading-method analytics.
 
 from __future__ import annotations
 
-import sqlite3
 import shutil
+import sqlite3
 from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "ate_brain.sqlite3"

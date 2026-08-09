@@ -14,16 +14,14 @@ Contract shared with dashboard/chart_markup.py and ATE_XAUUSD.mq5:
 from __future__ import annotations
 
 from datetime import time as dtime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 import pandas as pd
-
 from detectors import (
+    Candle,
     PDArray,
     PDArrayDirection,
-    PDArrayType,
-    Candle,
     detect_breaker_and_mitigation_blocks,
     detect_fvg,
     detect_order_blocks,
@@ -48,7 +46,7 @@ def _atr_series(df: pd.DataFrame, period: int = 14) -> pd.Series:
 def _obj(
     type_name: str,
     direction: str,
-    candles: List[Candle],
+    candles: list[Candle],
     index: int,
     top: float = 0.0,
     bottom: float = 0.0,
@@ -56,9 +54,9 @@ def _obj(
     label: str = "",
     status: str = "",
     **extra: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     c = candles[index]
-    obj: Dict[str, Any] = {
+    obj: dict[str, Any] = {
         "type": type_name,
         "direction": direction,
         "top": round(float(top), 2),
@@ -83,14 +81,14 @@ def _obj(
 
 
 def detect_support_resistance(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
     lookback: int = 80,
     tolerance_pct: float = 0.0005,
     min_touches: int = 2,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(4) Support/Resistance zones via cluster density of swing points."""
-    zones: List[Dict[str, Any]] = []
+    zones: list[dict[str, Any]] = []
     window = swing_df.tail(lookback)
     points = []  # (index, price, is_support_swing)
     for idx, row in window.iterrows():
@@ -138,18 +136,18 @@ def detect_support_resistance(
 
 
 def detect_channels(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
     n: int = 10,
     max_slope_diff: float = 0.25,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(6) Channel: parallel upper (swing highs) + lower (swing lows) trendlines."""
     highs = [(int(idx), float(row["high"])) for idx, row in swing_df[swing_df["swing_high"]].tail(n).iterrows()]
     lows = [(int(idx), float(row["low"])) for idx, row in swing_df[swing_df["swing_low"]].tail(n).iterrows()]
     if len(highs) < 2 or len(lows) < 2:
         return []
 
-    def _line(pts: List[Tuple[int, float]]) -> Optional[Tuple[float, float, int, int, float, float]]:
+    def _line(pts: list[tuple[int, float]]) -> tuple[float, float, int, int, float, float] | None:
         if len(pts) < 2:
             return None
         (i1, p1), (i2, p2) = pts[0], pts[-1]
@@ -189,7 +187,7 @@ def detect_channels(
     ]
 
 
-def detect_range_state(df: pd.DataFrame, lookback: int = 60) -> Dict[str, Any]:
+def detect_range_state(df: pd.DataFrame, lookback: int = 60) -> dict[str, Any]:
     """(7) Range: ADX < 20 or bounded swing oscillation over N candles."""
     window = df.tail(lookback)
     if len(window) < 20:
@@ -226,14 +224,14 @@ def detect_range_state(df: pd.DataFrame, lookback: int = 60) -> Dict[str, Any]:
 
 
 def detect_breakouts(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
-    sr_zones: List[Dict[str, Any]],
+    sr_zones: list[dict[str, Any]],
     volume_ma_period: int = 20,
     atr_mult: float = 0.75,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(8) Breakout: close beyond S/R zone with volume above volume MA."""
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     if len(candles) < volume_ma_period + 2:
         return results
     vol_ma = float(np.mean([c.volume for c in candles[-volume_ma_period:-1]])) + 1e-9
@@ -265,14 +263,14 @@ def detect_breakouts(
 
 
 def detect_pullback_retest_fake(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
-    breakouts: List[Dict[str, Any]],
+    breakouts: list[dict[str, Any]],
     atr: float = 0.0,
     fake_window: int = 5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(9)(10)(11) Pullback, Retest, Fake Breakout combined pass."""
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     if not breakouts:
         return results
 
@@ -315,7 +313,7 @@ def detect_pullback_retest_fake(
     return results
 
 
-def detect_candle_patterns(candles: List[Candle]) -> List[Dict[str, Any]]:
+def detect_candle_patterns(candles: list[Candle]) -> list[dict[str, Any]]:
     """(12-25) 14 single/multi-candle Price Action patterns.
 
     Emits PATTERN objects with labels:
@@ -323,7 +321,7 @@ def detect_candle_patterns(candles: List[Candle]) -> List[Dict[str, Any]]:
     MORNING_STAR, EVENING_STAR, HAMMER, SHOOTING_STAR, TWEEZER_TOP,
     TWEEZER_BOTTOM, MARUBOZU, THREE_WHITE_SOLDIERS, THREE_BLACK_CROWS.
     """
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     n = len(candles)
     for i in range(1, n):
         c, prev = candles[i], candles[i - 1]
@@ -419,10 +417,10 @@ def detect_candle_patterns(candles: List[Candle]) -> List[Dict[str, Any]]:
 
 
 def detect_mss(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
     current_index: int,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """(4) MSS: CHoCH + confirmation — price breaks the CHoCH swing then closes
     beyond it on a follow-through candle (used on lower TFs).
     """
@@ -452,10 +450,10 @@ def detect_mss(
 
 
 def detect_liquidity_zones(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
     lookback: int = 60,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(5) Liquidity: clusters of stops above swing highs / below swing lows.
 
     Clusters of >=2 swing points at nearly the same price are flagged as
@@ -463,12 +461,12 @@ def detect_liquidity_zones(
     sell-side) liquidity. Each pool is also classified Internal (inside the
     current dealing range) or External (outside it).
     """
-    zones: List[Dict[str, Any]] = []
+    zones: list[dict[str, Any]] = []
     window = swing_df.tail(lookback)
     highs = [(int(idx), float(row["high"])) for idx, row in window[window["swing_high"]].iterrows()]
     lows = [(int(idx), float(row["low"])) for idx, row in window[window["swing_low"]].iterrows()]
 
-    def _extreme(pts: List[Tuple[int, float]], side: str) -> Optional[Tuple[int, float]]:
+    def _extreme(pts: list[tuple[int, float]], side: str) -> tuple[int, float] | None:
         if not pts:
             return None
         return max(pts, key=lambda t: t[1]) if side == "high" else min(pts, key=lambda t: t[1])
@@ -483,11 +481,11 @@ def detect_liquidity_zones(
             return "INTERNAL"
         return "EXTERNAL"
 
-    def _cluster(points: List[Tuple[int, float]], side: str) -> List[Dict[str, Any]]:
+    def _cluster(points: list[tuple[int, float]], side: str) -> list[dict[str, Any]]:
         if len(points) < 2:
             return []
         points = sorted(points, key=lambda p: p[1])
-        groups: List[Tuple[int, float, float, float]] = []  # (count, mid, span, std)
+        groups: list[tuple[int, float, float, float]] = []  # (count, mid, span, std)
         cur = [points[0]]
         for p in points[1:]:
             if abs(p[1] - cur[-1][1]) / max(cur[-1][1], 1e-9) <= 0.0006:
@@ -524,10 +522,10 @@ def detect_liquidity_zones(
 
 
 def detect_dealing_range(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
     lookback: int = 40,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """(21) Dealing Range: band between the nearest external swing high and low."""
     window = swing_df.tail(lookback)
     highs = [(int(idx), float(row["high"])) for idx, row in window[window["swing_high"]].iterrows()]
@@ -549,11 +547,11 @@ def detect_dealing_range(
 
 
 def detect_dealing_curve(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
     lookback: int = 40,
     max_points: int = 6,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(ICT) Dealing Curve — the median/eatl curve that connects the equilibrium
     point (midpoint) of consecutive swing highs/lows inside the dealing range.
 
@@ -575,7 +573,7 @@ def detect_dealing_curve(
     # Equilibrium through the range — build a price series with a mid-weighted EMA
     # of (high + low)/2 per swing point, then downsample to <= max_points.
     pts = [(h[0], (h[1] + lows[0][1]) / 2.0) for h in highs]
-    samples: List[Dict[str, Any]] = []
+    samples: list[dict[str, Any]] = []
     step = max(len(pts) // max_points, 1)
     for i in range(0, len(pts), step):
         idx, p = pts[i]
@@ -593,7 +591,7 @@ def detect_dealing_curve(
         "price": round(eq, 2),
         "label": "DEALING_CURVE",
         "status": "ACTIVE",
-        "index": int(ext_high[0] if ext_high[0] < ext_low[0] else ext_low[0]),
+        "index": int(min(ext_low[0], ext_high[0])),
         "time_start": samples[0]["t"],
         "time_end": samples[-1]["t"],
         "points": samples,
@@ -602,12 +600,12 @@ def detect_dealing_curve(
 
 
 def detect_supply_demand(
-    candles: List[Candle],
+    candles: list[Candle],
     atr_mult: float = 1.2,
     min_strength: float = 1.2,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(24) Supply/Demand: base candle + strong move away (no BOS needed)."""
-    zones: List[Dict[str, Any]] = []
+    zones: list[dict[str, Any]] = []
     n = len(candles)
     atr = float(np.mean([c.range_size for c in candles[-14:]])) + 1e-9
 
@@ -625,11 +623,11 @@ def detect_supply_demand(
 
 
 def detect_volume_imbalance(
-    candles: List[Candle],
+    candles: list[Candle],
     volume_mult: float = 1.5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(25) Volume Imbalance: price gap with no volume between two candles."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for i in range(1, len(candles)):
         prev, cur = candles[i - 1], candles[i]
         gap = 0.0
@@ -650,17 +648,17 @@ def detect_volume_imbalance(
 
 
 def detect_liquidity_voids(
-    candles: List[Candle],
+    candles: list[Candle],
     void_atr_mult: float = 2.0,
     min_consecutive: int = 3,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(26) Liquidity Void: fast one-directional consecutive move, thin bodies."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     n = len(candles)
     atr = float(np.mean([c.range_size for c in candles[-20:]])) + 1e-9
 
-    run: List[int] = []
-    run_dir: Optional[str] = None
+    run: list[int] = []
+    run_dir: str | None = None
     for i in range(1, n):
         c = candles[i]
         body_dir = "UP" if c.is_bullish else ("DOWN" if c.is_bearish else None)
@@ -682,12 +680,12 @@ def detect_liquidity_voids(
 
 
 def detect_inducement(
-    candles: List[Candle],
+    candles: list[Candle],
     swing_df: pd.DataFrame,
     lookback: int = 40,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(22) Inducement: small swing that traps retail before the real move."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     swings = swing_df.tail(lookback)
     events = []
     for idx, row in swings.iterrows():
@@ -715,11 +713,11 @@ def detect_inducement(
 
 
 def detect_bpr(
-    fvg_list: List[PDArray],
+    fvg_list: list[PDArray],
     overlap_pct: float = 0.5,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """ICT (2) BPR: two opposite FVGs overlapping (Balanced Price Range)."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     bull = [f for f in fvg_list if f.direction == PDArrayDirection.BULLISH]
     bear = [f for f in fvg_list if f.direction == PDArrayDirection.BEARISH]
     for b in bull:
@@ -744,12 +742,12 @@ def detect_bpr(
 
 
 def detect_unicorn(
-    order_blocks: List[PDArray],
-    breaker_blocks: List[PDArray],
+    order_blocks: list[PDArray],
+    breaker_blocks: list[PDArray],
     overlap_pct: float = 0.6,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """ICT (18) Unicorn: OB overlapping a Breaker Block at the same zone."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for ob in order_blocks:
         for bb in breaker_blocks:
             overlap = min(ob.top, bb.top) - max(ob.bottom, bb.bottom)
@@ -782,7 +780,7 @@ def detect_unicorn(
 def get_previous_day_high_low(
     df_d1: pd.DataFrame,
     broker_utc_offset_hours: float = 2.0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """(20) PDH/PDL from the previous trading day's D1 candle."""
     if df_d1 is None or df_d1.empty:
         return {}
@@ -811,7 +809,7 @@ def get_session_high_low(
     df: pd.DataFrame,
     session: str = "LONDON",
     broker_utc_offset_hours: float = 2.0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """(19) Session High/Low for LONDON / NY / ASIA sessions today."""
     df = df.copy()
     df["utc"] = df["time"] - pd.Timedelta(hours=broker_utc_offset_hours)
@@ -849,17 +847,17 @@ def get_session_high_low(
 
 
 def detect_turtle_soup(
-    candles: List[Candle],
+    candles: list[Candle],
     df_d1: pd.DataFrame,
     broker_utc_offset_hours: float = 2.0,
     lookback: int = 3,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(11) Turtle Soup: false breakout of PDH/PDL + fast reversal."""
     pdl_hld = get_previous_day_high_low(df_d1, broker_utc_offset_hours)
     if not pdl_hld:
         return []
     pdh, pdl = pdl_hld["pdh"], pdl_hld["pdl"]
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for i in range(max(1, len(candles) - lookback), len(candles)):
         c = candles[i]
         # break above PDH then close back below = bearish soup
@@ -873,12 +871,12 @@ def detect_turtle_soup(
 
 
 def detect_judas_swing(
-    candles: List[Candle],
+    candles: list[Candle],
     broker_utc_offset_hours: float = 2.0,
     lookback: int = 48,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(12) Judas Swing: fake move inside London Kill Zone before the real reversal."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for i in range(max(1, len(candles) - lookback), len(candles)):
         c = candles[i]
         utc = c.time - pd.Timedelta(hours=broker_utc_offset_hours)
@@ -903,12 +901,12 @@ def detect_smt_divergence(
     df_correlation: pd.DataFrame,
     swing_window: int = 2,
     lookback: int = 30,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(13) SMT Divergence: primary makes a new swing, correlation does not.
 
     df_primary = XAUUSD, df_correlation = DXY-style index.
     """
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     if df_correlation is None or df_correlation.empty:
         return out
     try:
@@ -941,7 +939,7 @@ def detect_smt_divergence(
 def detect_amd_po3(
     df: pd.DataFrame,
     broker_utc_offset_hours: float = 2.0,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(14)(15) AMD/PO3: Accumulation (range) -> Manipulation (sweep) -> Distribution."""
     df = df.copy()
     df["utc"] = df["time"] - pd.Timedelta(hours=broker_utc_offset_hours)
@@ -951,10 +949,10 @@ def detect_amd_po3(
     if len(seg) < 10:
         return {}
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     n = len(seg)
 
-    def _phase_bounds(a: int, b: int) -> Tuple[float, float]:
+    def _phase_bounds(a: int, b: int) -> tuple[float, float]:
         part = seg.iloc[a:b]
         return float(part["high"].max()), float(part["low"].min())
 
@@ -986,12 +984,12 @@ def detect_amd_po3(
 
 
 def detect_silver_bullet(
-    candles: List[Candle],
+    candles: list[Candle],
     broker_utc_offset_hours: float = 2.0,
     lookback: int = 24,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """(17) Silver Bullet: 10-11am NY window entry setup (14-15 UTC)."""
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for i in range(max(1, len(candles) - lookback), len(candles)):
         c = candles[i]
         utc = c.time - pd.Timedelta(hours=broker_utc_offset_hours)
@@ -1007,7 +1005,7 @@ def detect_silver_bullet(
 def get_weekly_monthly_high_low(
     df_d1: pd.DataFrame,
     period: str = "WEEKLY",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """(21) Weekly/Monthly High/Low from D1 data."""
     if df_d1 is None or df_d1.empty:
         return {}
@@ -1043,19 +1041,19 @@ def get_weekly_monthly_high_low(
 
 
 def build_advanced_markup(
-    mtf_data: Dict[str, pd.DataFrame],
+    mtf_data: dict[str, pd.DataFrame],
     broker_utc_offset_hours: float = 2.0,
     include_pa: bool = True,
     include_smc: bool = True,
     include_ict: bool = True,
-) -> Dict[str, List[Dict[str, Any]]]:
+) -> dict[str, list[dict[str, Any]]]:
     """Run every advanced detector and return {"objects": [...]} additions.
 
     Only appends objects NOT already produced by dashboard/chart_markup.py
     (SWING, OB, FVG, BREAKER, MITIGATION, REJECTION, LIQUIDITY, BOS, CHoCH,
     TRENDLINE, PD, OTE, ASIAN, KILLZONE live in the base builder).
     """
-    objects: List[Dict[str, Any]] = []
+    objects: list[dict[str, Any]] = []
     m15 = mtf_data.get("M15")
     m5 = mtf_data.get("M5")
     h1 = mtf_data.get("H1")
@@ -1070,15 +1068,15 @@ def build_advanced_markup(
     atr = _atr_series(m15).iloc[-1] if len(m15) >= 15 else 0.0
     atr = 0.0 if atr is None or np.isnan(atr) else float(atr)
 
-    counts: Dict[str, int] = {}
+    counts: dict[str, int] = {}
 
-    def _add(items: List[Dict[str, Any]], key: str) -> None:
+    def _add(items: list[dict[str, Any]], key: str) -> None:
         clean = [it for it in items if isinstance(it, dict) and it and it.get("type")]
         capped = clean[-20:] if len(clean) > 20 else clean
         objects.extend(capped)
         counts[key] = len(capped)
 
-    def _daily_level(obj: Dict[str, Any]) -> Dict[str, Any]:
+    def _daily_level(obj: dict[str, Any]) -> dict[str, Any]:
         """Daily/session levels are horizontal bands — span the whole visible window
         so they render as full-width rectangles instead of a single-candle notch."""
         if not obj:

@@ -8,17 +8,19 @@ Viết 1 lần ở đây, smc.py và ict.py cùng import — tránh 2 định ng
 cho cùng 1 khái niệm (rủi ro lớn nhất khi code 2 phương pháp gần giống nhau).
 """
 from __future__ import annotations
-import pandas as pd
-import numpy as np
-try:
-    from .models import (
-        Candle, df_to_candles, Direction, PDBox, BoxType, PriceLevel, LevelType, StructureEvent,
-    )
-except ImportError:
-    from models import (
-        Candle, df_to_candles, Direction, PDBox, BoxType, PriceLevel, LevelType, StructureEvent,
-    )
 
+from typing import Any, cast
+
+import pandas as pd
+from models import (
+    BoxType,
+    Candle,
+    Direction,
+    LevelType,
+    PDBox,
+    PriceLevel,
+    StructureEvent,
+)
 
 # ══════════════════════════════════════════════════════════════════
 # 1. SWING POINTS (Fractal) — nền tảng của mọi thứ khác
@@ -29,7 +31,7 @@ def find_swing_points(df: pd.DataFrame, window: int = 2) -> pd.DataFrame:
     df = df.copy()
     df["swing_high"] = False
     df["swing_low"] = False
-    highs, lows = df["high"].values, df["low"].values
+    highs, lows = df["high"].to_numpy(), df["low"].to_numpy()
     n = len(df)
     for i in range(window, n - window):
         if highs[i] > highs[i - window:i].max() and highs[i] > highs[i + 1:i + window + 1].max():
@@ -41,8 +43,8 @@ def find_swing_points(df: pd.DataFrame, window: int = 2) -> pd.DataFrame:
 
 def get_swing_series(swing_df: pd.DataFrame) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
     """Trả về [(index, price), ...] cho swing highs và swing lows, sắp theo thời gian."""
-    highs = [(i, row["high"]) for i, row in swing_df[swing_df["swing_high"]].iterrows()]
-    lows = [(i, row["low"]) for i, row in swing_df[swing_df["swing_low"]].iterrows()]
+    highs = [(int(cast(Any, i)), float(row["high"])) for i, row in swing_df[swing_df["swing_high"]].iterrows()]
+    lows = [(int(cast(Any, i)), float(row["low"])) for i, row in swing_df[swing_df["swing_low"]].iterrows()]
     return highs, lows
 
 

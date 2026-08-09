@@ -6,11 +6,11 @@ import json
 import sqlite3
 import threading
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
-
+from typing import Any
 
 TERMINAL_STATES = {"EXECUTED", "REJECTED", "FAILED", "EXPIRED"}
 
@@ -127,9 +127,9 @@ class CommandStore:
         action: str,
         symbol: str,
         magic: int,
-        volume: Optional[float],
-        stop_loss: Optional[float],
-        take_profit: Optional[float],
+        volume: float | None,
+        stop_loss: float | None,
+        take_profit: float | None,
         reason: str,
         ttl_seconds: int = 30,
     ) -> dict[str, Any]:
@@ -186,7 +186,7 @@ class CommandStore:
         symbol: str,
         magic: int,
         lease_seconds: int = 15,
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """Atomically lease one pending command for a matching EA executor."""
         now = self._utc_now()
         now_text = self._timestamp(now)
@@ -246,11 +246,11 @@ class CommandStore:
         executor_id: str,
         receipt_id: str,
         status: str,
-        retcode: Optional[int],
+        retcode: int | None,
         result_message: str,
-        order_ticket: Optional[int] = None,
-        deal_ticket: Optional[int] = None,
-    ) -> Optional[dict[str, Any]]:
+        order_ticket: int | None = None,
+        deal_ticket: int | None = None,
+    ) -> dict[str, Any] | None:
         """Store an EA receipt once; terminal receipts are safe to retry."""
         if status not in {"EXECUTED", "REJECTED", "FAILED"}:
             raise ValueError("Unsupported receipt status")
@@ -304,7 +304,7 @@ class CommandStore:
             connection.execute("COMMIT")
             return self._row_to_command(updated)
 
-    def get_command(self, command_id: str) -> Optional[dict[str, Any]]:
+    def get_command(self, command_id: str) -> dict[str, Any] | None:
         with self._connection() as connection:
             row = connection.execute(
                 "SELECT * FROM execution_commands WHERE command_id = ?", (command_id,)

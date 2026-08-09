@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Iterable
+from dataclasses import dataclass
 from math import isfinite
-from typing import Iterable, Optional
 
 from strategy_core import DecisionProposal, SignalAction
 
@@ -42,7 +42,7 @@ class RiskPolicy:
 class RiskDecision:
     approved: bool
     reason_codes: tuple[str, ...]
-    volume: Optional[float]
+    volume: float | None
     policy_version: str
 
 
@@ -60,7 +60,7 @@ DCA_COUNTER_DIRECTION_GROWTH = 1.20
 MAX_BASKET_LOSS_FRACTION = 0.50
 
 
-def _normalize_volume(requested: float, spec: SymbolSpec, volume_max: Optional[float] = None) -> Optional[float]:
+def _normalize_volume(requested: float, spec: SymbolSpec, volume_max: float | None = None) -> float | None:
     if not isfinite(requested) or not isfinite(spec.volume_min) or not isfinite(spec.volume_max) or not isfinite(spec.volume_step):
         return None
     if requested <= 0 or spec.volume_step <= 0:
@@ -68,12 +68,10 @@ def _normalize_volume(requested: float, spec: SymbolSpec, volume_max: Optional[f
     if requested < spec.volume_min * 0.5:
         return None
     hard_max = spec.volume_max if volume_max is None else min(volume_max, spec.volume_max)
-    if requested < spec.volume_min:
-        requested = spec.volume_min
+    requested = max(requested, spec.volume_min)
     steps = int((requested - spec.volume_min + 1e-12) / spec.volume_step)
     volume = spec.volume_min + steps * spec.volume_step
-    if volume > hard_max:
-        volume = hard_max
+    volume = min(volume, hard_max)
     return round(volume, 2)
 
 
@@ -84,7 +82,7 @@ def compute_dca_volume(
     same_direction: bool,
     spec: SymbolSpec,
     volume_max: float = DCA_DEFAULT_MAX_LOT,
-) -> Optional[float]:
+) -> float | None:
     """Khối lượng cho lệnh thứ `entry_index` (0-based) trong chuỗi DCA.
 
     - entry_index 0: lệnh đầu tiên dùng đúng volume từ equity-based sizing.
@@ -105,13 +103,13 @@ def compute_dca_volume(
 
 def cap_volume_to_basket_risk(
     *,
-    desired_volume: Optional[float],
+    desired_volume: float | None,
     existing_lot_volumes: Iterable[float],
     risk_per_lot: float,
     equity: float,
     spec: SymbolSpec,
     max_basket_loss_fraction: float = MAX_BASKET_LOSS_FRACTION,
-) -> Optional[float]:
+) -> float | None:
     """Giới hạn lot của lệnh sắp mở sao cho nếu TOÀN BỘ basket chạm SL thì tổng
     rủi ro = risk_per_lot * (existing_lots + new_lot) không vượt equity * fraction.
     Trả None khi basket đã dùng hết ngân sách rủi ro (chặn nhồi thêm)."""
