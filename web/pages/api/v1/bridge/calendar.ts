@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { proxyToBackend } from '../../../../../lib/rawFetch';
+import { proxyToBackend } from '../../../../lib/rawFetch';
 
 export const config = {
   api: {
