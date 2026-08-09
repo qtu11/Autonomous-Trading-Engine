@@ -2,41 +2,49 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 
 const BACKEND_URL = process.env.ATE_BACKEND_URL || 'http://113.173.192.226:8848';
 
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).end();
   }
 
   try {
-    // Replace [id] or {id} with actual id from query
-    let path = '/api/v1/bridge/commands/claim';
-    if (req.query.id) {
-      path = path.replace('[id]', req.query.id as string).replace('{id}', req.query.id as string);
+    let rawBody = '';
+    if (req.body) {
+      const chunks: string[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const stream = req.body as AsyncIterable<Buffer>;
+      for await (const chunk of stream) {
+        chunks.push(Buffer.from(chunk).toString('utf8'));
+      }
+      rawBody = chunks.join('');
     }
-    
-    const response = await fetch(BACKEND_URL + path, {
+
+    const response = await fetch(`${BACKEND_URL}/api/v1/bridge/commands/claim`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': (req.headers.authorization as string) || '',
       },
-      body: JSON.stringify(req.body),
+      body: rawBody,
     });
 
-    const data = await response.json();
-    
-    // Copy cookies if any
-    const setCookie = response.headers.get('set-cookie');
-    if (setCookie) {
-      res.setHeader('set-cookie', setCookie);
+    const text = await response.text();
+    try {
+      const json = JSON.parse(text);
+      return res.status(response.status).json(json);
+    } catch {
+      return res.status(response.status).send(text);
     }
-    
-    return res.status(response.status).json(data);
   } catch (error) {
-    console.error('API error:', error);
     return res.status(502).json({
       error: 'Backend unavailable',
-      details: error instanceof Error ? error.message : 'Unknown error'
+      details: error instanceof Error ? error.message : 'Unknown error',
     });
   }
 }
