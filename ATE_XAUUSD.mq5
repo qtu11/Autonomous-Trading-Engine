@@ -1023,9 +1023,12 @@ void SendLiveCandles()
    int copied = CopyRates(g_symbol, _Period, 0, 100, rates);
    if(copied <= 0)
    {
-      PrintFormat("Failed to copy rates for %s, err=%d", g_symbol, GetLastError());
+      PrintFormat("CANDLES_COPY_FAILED: err=%d for %s on %s", GetLastError(), g_symbol, _Period);
       return;
    }
+
+   // DEBUG: Log every call to confirm execution cadence
+   PrintFormat("CANDLES_PUSH_START: symbol=%s tf=%s candles=%d", g_symbol, _Period, copied);
 
    string candlesJson = "";
    for(int i = 0; i < copied; i++)
@@ -1061,10 +1064,14 @@ void SendLiveCandles()
    
    string headers = BridgeHeaders();
    int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 4000, data, result, result_headers);
-   if(res != 200)
+   if(res == 200)
+   {
+      PrintFormat("CANDLES_PUSH_OK: pushed %d candles for %s %s", copied, g_symbol, tfLabel);
+   }
+   else
    {
       int err = GetLastError();
-      ATELogThrottled("CANDLES_HTTP_" + string(res), StringFormat("Candles push failed (HTTP %d, err=%d)", res, err));
+      ATELogThrottled("CANDLES_HTTP_" + string(res), StringFormat("CANDLES_PUSH_FAIL: HTTP %d err=%d", res, err));
    }
 }
 //+------------------------------------------------------------------+
