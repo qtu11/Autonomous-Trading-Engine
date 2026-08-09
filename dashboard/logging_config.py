@@ -91,7 +91,7 @@ class LogEvent:
     SECURITY_ALERT = "SECURITY_ALERT"
 
 
-_LOGGER_NAME = "quantai"
+_LOGGER_NAME = "ate"
 _DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 _configured = False
 
@@ -146,7 +146,7 @@ def get_logger() -> logging.Logger:
 
     formatter = _JsonFormatter()
 
-    log_file = _log_directory() / f"quantai_{datetime.now(timezone.utc):%Y%m%d}.log"
+    log_file = _log_directory() / f"ate_{datetime.now(timezone.utc):%Y%m%d}.log"
     file_handler = RotatingFileHandler(
         log_file, maxBytes=10 * 1024 * 1024, backupCount=7, encoding="utf-8"
     )
@@ -190,7 +190,7 @@ def timed(event: str, *, component: str = "backend", **fields: Any) -> Iterator[
 
 def read_recent_logs(limit: int = 200, level: Optional[str] = None) -> list[dict[str, Any]]:
     """Tail the current day's log file, newest last, optionally filtered by level."""
-    log_file = _log_directory() / f"quantai_{datetime.now(timezone.utc):%Y%m%d}.log"
+    log_file = _log_directory() / f"ate_{datetime.now(timezone.utc):%Y%m%d}.log"
     if not log_file.is_file():
         return []
     limit = max(1, min(limit, 2000))

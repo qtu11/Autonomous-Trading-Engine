@@ -7,7 +7,7 @@ services:
     ports:
       - "8005:8005"
     volumes:
-      - ./quantai_brain.sqlite3:/app/quantai_brain.sqlite3
+      - ./ate_brain.sqlite3:/app/ate_brain.sqlite3
       - ./user_control_config.json:/app/user_control_config.json
     environment:
       - PORT=8005

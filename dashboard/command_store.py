@@ -1,4 +1,4 @@
-"""Persistent, idempotent command ledger for the local QuantAI bridge."""
+"""Persistent, idempotent command ledger for the local ATE bridge."""
 
 from __future__ import annotations
 

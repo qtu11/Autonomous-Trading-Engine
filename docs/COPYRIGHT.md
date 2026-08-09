@@ -3,14 +3,14 @@
 ## 1. Thông Tin Bản Quyền (Copyright)
 
 ```
-QuantAI - Autonomous Trading Engine (ATE) for XAUUSD (Gold)
+Autonomous Trading Engine (ATE) for XAUUSD (Gold)
 
 Copyright (c) 2024-2026 Nguyễn Quang Tú (QTusdev)
 
 Tác giả / Lead Developer : Nguyễn Quang Tú (QTusdev)
 GitHub Repository         : https://github.com/qtu11/Autonomous-Trading-Engine
 GitHub Profile            : https://github.com/qtu11
-Hệ thống thương hiệu      : QuantAI / ATE / GoldQuant AI
+Hệ thống thương hiệu      : ATE (Autonomous Trading Engine)
 ```
 
 - **Chủ sở hữu trí tuệ**: Toàn bộ mã nguồn, kiến trúc, thuật toán phân tích thị trường, hệ thống định tuyến AI, văn bản tài liệu và giao diện trong repository này thuộc sở hữu của tác giả Nguyễn Quang Tú (QTusdev).
@@ -20,7 +20,7 @@ Hệ thống thương hiệu      : QuantAI / ATE / GoldQuant AI
 
 ## Giấy Phép MIT (MIT License)
 
-Bản quyền gốc của giấy phép được áp dụng cho toàn bộ mã nguồn và tài liệu của dự án QuantAI:
+Bản quyền gốc của giấy phép được áp dụng cho toàn bộ mã nguồn và tài liệu của dự án ATE:
 
 ```
 MIT License

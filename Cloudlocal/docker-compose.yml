@@ -1,6 +1,6 @@
 services:
   # =======================================================================
-  # GOLDQUANT AI BLOOMBERG TRADING DESK - CLOUDLOCAL DOCKER STACK
+  # AUTONOMOUS TRADING ENGINE (ATE) - CLOUDLOCAL DOCKER STACK
   # =======================================================================
   # Standard URL Structure:
   #   Website : https://autonomous-trading-engine.vercel.app/
@@ -48,7 +48,7 @@ services:
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_ATE_API_ORIGIN=${NEXT_PUBLIC_ATE_API_ORIGIN:-http://localhost:8080}
-      - NEXT_PUBLIC_QUANTAI_API_ORIGIN=${NEXT_PUBLIC_QUANTAI_API_ORIGIN:-http://localhost:8080}
+      - NEXT_PUBLIC_ATE_API_ORIGIN=${NEXT_PUBLIC_ATE_API_ORIGIN:-http://localhost:8080}
       - ATE_BACKEND_URL=http://nginx:80
     volumes:
       - ./volumes/logs/nextjs:/app/logs
@@ -68,38 +68,38 @@ services:
     build:
       context: ../dashboard
       dockerfile: ../Cloudlocal/fastapi/Dockerfile
-    container_name: cloudlocal-fastapi
+    container_name: ate_backend
     env_file:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
-      - QUANTAI_LOG_DIR=/app/logs
+      - ATE_LOG_DIR=/app/logs
       # Trading config
       - ATE_EXECUTION_MODE=${ATE_EXECUTION_MODE:-DEMO}
-      - QUANTAI_EXECUTION_MODE=${QUANTAI_EXECUTION_MODE:-DEMO}
-      - QUANTAI_ENABLE_TRADING=${QUANTAI_ENABLE_TRADING:-false}
-      - QUANTAI_DEMO_ARMED=${QUANTAI_DEMO_ARMED:-true}
-      - QUANTAI_LIVE_ARMED=${QUANTAI_LIVE_ARMED:-false}
-      - QUANTAI_KILL_SWITCH=${QUANTAI_KILL_SWITCH:-true}
-      - QUANTAI_EXECUTION_SYMBOL=${QUANTAI_EXECUTION_SYMBOL:-XAUUSDm}
-      - QUANTAI_EXECUTION_MAGIC=${QUANTAI_EXECUTION_MAGIC:-888999}
-      - QUANTAI_MAGIC_NUMBER=${QUANTAI_MAGIC_NUMBER:-888999}
-      - QUANTAI_DEMO_COMMAND_TTL_SECONDS=${QUANTAI_DEMO_COMMAND_TTL_SECONDS:-10}
-      - QUANTAI_DEMO_LOGIN=${QUANTAI_DEMO_LOGIN}
-      - QUANTAI_DEMO_SERVER=${QUANTAI_DEMO_SERVER}
-      - QUANTAI_DEMO_BROKER_COMPANY=${QUANTAI_DEMO_BROKER_COMPANY:-Exness Technologies Ltd}
-      - QUANTAI_LIVE_LOGIN=${QUANTAI_LIVE_LOGIN}
-      - QUANTAI_LIVE_SERVER=${QUANTAI_LIVE_SERVER}
-      - QUANTAI_LIVE_BROKER_COMPANY=${QUANTAI_LIVE_BROKER_COMPANY:-Exness Technologies Ltd}
+      - ATE_EXECUTION_MODE=${ATE_EXECUTION_MODE:-DEMO}
+      - ATE_ENABLE_TRADING=${ATE_ENABLE_TRADING:-false}
+      - ATE_DEMO_ARMED=${ATE_DEMO_ARMED:-true}
+      - ATE_LIVE_ARMED=${ATE_LIVE_ARMED:-false}
+      - ATE_KILL_SWITCH=${ATE_KILL_SWITCH:-true}
+      - ATE_EXECUTION_SYMBOL=${ATE_EXECUTION_SYMBOL:-XAUUSDm}
+      - ATE_EXECUTION_MAGIC=${ATE_EXECUTION_MAGIC:-888999}
+      - ATE_MAGIC_NUMBER=${ATE_MAGIC_NUMBER:-888999}
+      - ATE_DEMO_COMMAND_TTL_SECONDS=${ATE_DEMO_COMMAND_TTL_SECONDS:-10}
+      - ATE_DEMO_LOGIN=${ATE_DEMO_LOGIN}
+      - ATE_DEMO_SERVER=${ATE_DEMO_SERVER}
+      - ATE_DEMO_BROKER_COMPANY=${ATE_DEMO_BROKER_COMPANY:-Exness Technologies Ltd}
+      - ATE_LIVE_LOGIN=${ATE_LIVE_LOGIN}
+      - ATE_LIVE_SERVER=${ATE_LIVE_SERVER}
+      - ATE_LIVE_BROKER_COMPANY=${ATE_LIVE_BROKER_COMPANY:-Exness Technologies Ltd}
       # Dashboard
-      - QUANTAI_DASHBOARD_PORT=8005
-      - QUANTAI_DASHBOARD_HOST=0.0.0.0
+      - ATE_DASHBOARD_PORT=8005
+      - ATE_DASHBOARD_HOST=0.0.0.0
       # Database
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
-      - POSTGRES_DB=quantai
-      - POSTGRES_USER=quantai
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-quantai_secure_2024}
+      - POSTGRES_DB=ate
+      - POSTGRES_USER=ate
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ate_secure_2024}
       # Redis
       - REDIS_HOST=redis
       - REDIS_PORT=6379
@@ -165,7 +165,7 @@ services:
 
   # Python Bridge to MT5 (Windows Host) - API/docs/health gateway.
   # NOTE: MT5 pip package on Linux cannot talk to a Windows-native terminal.
-  # The real MT5 execution is done by the MQL5 EA (QuantAI_XAUUSD.mq5) via WebRequest.
+  # The real MT5 execution is done by the MQL5 EA (ATE_XAUUSD.mq5) via WebRequest.
   python-bridge:
     build:
       context: ../dashboard
@@ -206,16 +206,16 @@ services:
     env_file:
       - .env
     environment:
-      - POSTGRES_DB=quantai
-      - POSTGRES_USER=quantai
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-quantai_secure_2024}
+      - POSTGRES_DB=ate
+      - POSTGRES_USER=ate
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-ate_secure_2024}
       - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
     volumes:
       - ./volumes/postgres:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U quantai -d quantai"]
+      test: ["CMD-SHELL", "pg_isready -U ate -d ate"]
       interval: 10s
       timeout: 5s
       retries: 5

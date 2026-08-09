@@ -88,7 +88,6 @@ DEMO_SERVER = os.getenv("ATE_DEMO_SERVER") or os.getenv("QUANTAI_DEMO_SERVER") o
 DEMO_BROKER_COMPANY = os.getenv("ATE_DEMO_BROKER_COMPANY") or os.getenv("QUANTAI_DEMO_BROKER_COMPANY", "")
 EXECUTION_SYMBOL = os.getenv("ATE_EXECUTION_SYMBOL") or os.getenv("QUANTAI_EXECUTION_SYMBOL", "XAUUSDm") or "XAUUSDm"
 ATE_MAGIC_NUMBER = int(os.getenv("ATE_MAGIC_NUMBER") or os.getenv("QUANTAI_EXECUTION_MAGIC") or os.getenv("QUANTAI_MAGIC_NUMBER", "888999") or "888999")
-QUANTAI_MAGIC_NUMBER = ATE_MAGIC_NUMBER
 EXECUTION_MAGIC = ATE_MAGIC_NUMBER
 DEMO_COMMAND_TTL = max(5, min(30, int(os.getenv("ATE_DEMO_COMMAND_TTL_SECONDS") or os.getenv("QUANTAI_DEMO_COMMAND_TTL_SECONDS", "10") or "10")))
 BRIDGE_TOKEN = os.getenv("ATE_BRIDGE_TOKEN") or os.getenv("QUANTAI_BRIDGE_TOKEN") or os.getenv("QUANTAI_EXECUTION_BRIDGE_TOKEN", "")
@@ -247,7 +246,7 @@ TELEGRAM_BOT_TOKEN = _saved_cfg.get("telegram_bot_token") or os.getenv("TELEGRAM
 TELEGRAM_CHAT_ID = _saved_cfg.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID", "")
 TELEGRAM_ENABLED = bool(_saved_cfg.get("telegram_enabled", True))
 
-ACTIVE_AI_MODEL = _saved_cfg.get("active_ai_model") or os.getenv("QUANTAI_AI_MODEL", "deepseek-v4-flash-free")
+ACTIVE_AI_MODEL = _saved_cfg.get("active_ai_model") or os.getenv("ATE_AI_MODEL") or os.getenv("QUANTAI_AI_MODEL", "deepseek-v4-flash-free")
 TRADING_METHOD = _saved_cfg.get("trading_method", "ULTRA_CONFLUENCE")
 USER_CUSTOM_MODEL_ID = _saved_cfg.get("custom_model_id", "")
 USER_GEMINI_KEY = _saved_cfg.get("gemini_api_key") or os.getenv("GEMINI_API_KEY", "")
@@ -696,12 +695,12 @@ async def _scheduled_evening_pnl_loop() -> None:
 
 # Autonomous AI decision loop (default OFF; operator arms it explicitly via Control Center).
 # Saved control-center state wins; env only supplies the initial default.
-AI_AUTO_LOOP = _saved_cfg.get("ai_auto_loop", os.getenv("QUANTAI_AI_AUTO_LOOP", "false").lower() == "true")
-AI_LOOP_SECONDS = max(15, int(os.getenv("QUANTAI_AI_LOOP_SECONDS", "120")))
+AI_AUTO_LOOP = _saved_cfg.get("ai_auto_loop", os.getenv("ATE_AI_AUTO_LOOP") or os.getenv("QUANTAI_AI_AUTO_LOOP", "false").lower() == "true")
+AI_LOOP_SECONDS = max(15, int(os.getenv("ATE_AI_LOOP_SECONDS") or os.getenv("QUANTAI_AI_LOOP_SECONDS", "120")))
 
 # Realtime broadcast cadence (seconds).
-WS_TICK_INTERVAL = float(os.getenv("QUANTAI_WS_TICK_INTERVAL", "1.0"))
-WS_FULL_INTERVAL = float(os.getenv("QUANTAI_WS_FULL_INTERVAL", "3.0"))
+WS_TICK_INTERVAL = float(os.getenv("ATE_WS_TICK_INTERVAL") or os.getenv("QUANTAI_WS_TICK_INTERVAL", "1.0"))
+WS_FULL_INTERVAL = float(os.getenv("ATE_WS_FULL_INTERVAL") or os.getenv("QUANTAI_WS_FULL_INTERVAL", "3.0"))
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in (os.getenv("ATE_ALLOWED_ORIGINS") or os.getenv("QUANTAI_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")).split(",")
@@ -745,8 +744,8 @@ def validate_environment_security() -> Dict[str, Any]:
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     validate_environment_security()
-    log_event(LogEvent.APP_STARTED, component="backend", port=int(os.getenv("QUANTAI_DASHBOARD_PORT", "8005")), mode=EXECUTION_MODE)
-    log_event(LogEvent.DB_CONNECTED, component="command-ledger", db=os.getenv("QUANTAI_COMMAND_DB", "quantai_commands.sqlite3"))
+    log_event(LogEvent.APP_STARTED, component="backend", port=int(os.getenv("ATE_DASHBOARD_PORT") or os.getenv("QUANTAI_DASHBOARD_PORT", "8005")), mode=EXECUTION_MODE)
+    log_event(LogEvent.DB_CONNECTED, component="command-ledger", db=os.getenv("ATE_COMMAND_DB") or os.getenv("QUANTAI_COMMAND_DB", "ate_commands.sqlite3"))
     if ensure_mt5_connected():
         log_event(LogEvent.MT5_CONNECTED, component="mt5", server=os.getenv("MT5_SERVER", ""))
     broadcaster = asyncio.create_task(_telemetry_broadcaster())
@@ -767,7 +766,7 @@ async def _lifespan(app: FastAPI):
         log_event(LogEvent.APP_STOPPED, component="backend")
 
 
-app = FastAPI(title="GoldQuant AI Telemetry & Analytics Engine", version="3.0.0", lifespan=_lifespan)
+app = FastAPI(title="Autonomous Trading Engine (ATE) Telemetry & Analytics", version="3.0.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -783,7 +782,7 @@ async def health_check():
     """Standard liveness healthcheck endpoint."""
     return {
         "status": "UP",
-        "service": "GoldQuant AI Engine",
+        "service": "Autonomous Trading Engine (ATE)",
         "version": "3.0.0",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "mt5_connected": ensure_mt5_connected(),
@@ -1212,7 +1211,7 @@ def get_account_performance():
 
     net_by_position = {}
     for deal in deals:
-        if int(getattr(deal, "magic", 0)) != QUANTAI_MAGIC_NUMBER:
+        if int(getattr(deal, "magic", 0)) != ATE_MAGIC_NUMBER:
             continue
         if getattr(deal, "entry", None) not in (1, 2):
             continue
@@ -1230,7 +1229,7 @@ def get_account_performance():
     metrics = calculate_performance(trades)
     if not metrics["sample_size"]:
         return {**unavailable, "data_status": "NO_CLOSED_TRADES"}
-    return {**metrics, "data_status": "LIVE_VERIFIED", "period_days": 60, "magic": QUANTAI_MAGIC_NUMBER}
+    return {**metrics, "data_status": "LIVE_VERIFIED", "period_days": 60, "magic": ATE_MAGIC_NUMBER}
 
 def generate_real_ai_signal(symbol: str = "XAUUSDm", ask: float = 0.0, bid: float = 0.0, indicators: dict = None, balance: float = 0.0):
     if not indicators:
@@ -2078,11 +2077,10 @@ def get_markup_cached(symbol: str) -> Dict[str, Any]:
     return payload
 
 # ── Persistent command protocol for the MQL5 EA bridge ─────────────────────
-COMMAND_STORE = CommandStore(os.getenv("QUANTAI_COMMAND_DB", os.path.join(os.path.dirname(__file__), "quantai_commands.sqlite3")))
-QUANTAI_MAGIC_NUMBER = int(os.getenv("QUANTAI_MAGIC_NUMBER", "888999"))
-BRAIN = BrainStore(os.getenv("QUANTAI_BRAIN_DB", os.path.join(os.path.dirname(__file__), "quantai_brain.sqlite3")))
-BRAIN_EVAL_INTERVAL_SECONDS = max(15, int(os.getenv("QUANTAI_BRAIN_EVAL_INTERVAL", "30")))
-BRAIN_AUTO_ADJUST_WINDOW = max(5, int(os.getenv("QUANTAI_BRAIN_ADJUST_WINDOW", "10")))
+COMMAND_STORE = CommandStore(os.getenv("ATE_COMMAND_DB") or os.getenv("QUANTAI_COMMAND_DB", os.path.join(os.path.dirname(__file__), "ate_commands.sqlite3")))
+BRAIN = BrainStore(os.getenv("ATE_BRAIN_DB") or os.getenv("QUANTAI_BRAIN_DB", os.path.join(os.path.dirname(__file__), "ate_brain.sqlite3")))
+BRAIN_EVAL_INTERVAL_SECONDS = max(15, int(os.getenv("ATE_BRAIN_EVAL_INTERVAL") or os.getenv("QUANTAI_BRAIN_EVAL_INTERVAL", "30")))
+BRAIN_AUTO_ADJUST_WINDOW = max(5, int(os.getenv("ATE_BRAIN_ADJUST_WINDOW") or os.getenv("QUANTAI_BRAIN_ADJUST_WINDOW", "10")))
 BRAIN_LOOP_HEARTBEAT = {"last_run": None, "cycles": 0, "last_error": None}
 
 # Tracks the most recent EA telemetry push so the dashboard can show EA liveness.
@@ -2127,7 +2125,7 @@ def _handle_telemetry(payload: TelemetryPayload):
         balance=payload.balance,
         equity=payload.equity,
     )
-    return {"status": "SUCCESS", "message": "Telemetry received from QuantAI MQL5 Protocol"}
+    return {"status": "SUCCESS", "message": "Telemetry received from ATE MQL5 Protocol"}
 
 
 class CalendarEventItem(BaseModel):
@@ -2209,9 +2207,9 @@ class PushCandlesRequest(BaseModel):
 
 
 # LIVE identity allowlist (empty login = LIVE not configured -> fail closed).
-LIVE_LOGIN = int(os.getenv("QUANTAI_LIVE_LOGIN", "0") or 0)
-LIVE_SERVER = os.getenv("QUANTAI_LIVE_SERVER", "")
-LIVE_BROKER_COMPANY = os.getenv("QUANTAI_LIVE_BROKER_COMPANY", "")
+LIVE_LOGIN = int(os.getenv("ATE_LIVE_LOGIN") or os.getenv("QUANTAI_LIVE_LOGIN", "0") or 0)
+LIVE_SERVER = os.getenv("ATE_LIVE_SERVER") or os.getenv("QUANTAI_LIVE_SERVER", "")
+LIVE_BROKER_COMPANY = os.getenv("ATE_LIVE_BROKER_COMPANY") or os.getenv("QUANTAI_LIVE_BROKER_COMPANY", "")
 
 
 @app.post("/api/v1/bridge/commands/claim", dependencies=[Depends(require_bridge_token)])
@@ -2720,7 +2718,7 @@ def get_symbol_spec(symbol: str) -> Optional[SymbolSpec]:
     if info is None:
         return None
     profile = get_risk_profile(symbol)
-    max_spread = profile["max_spread"] if profile else float(os.getenv("QUANTAI_MAX_SPREAD", "0.0003"))
+    max_spread = profile["max_spread"] if profile else float(os.getenv("ATE_MAX_SPREAD") or os.getenv("QUANTAI_MAX_SPREAD", "0.0003"))
     return SymbolSpec(
         symbol=symbol,
         volume_min=float(info.volume_min),
@@ -3032,7 +3030,7 @@ async def evaluate_trade_decision(req: OrderRequest):
     matching_positions = [
         position
         for position in (mt5.positions_get() or [])
-        if position.symbol == symbol and int(position.magic) == QUANTAI_MAGIC_NUMBER
+        if position.symbol == symbol and int(position.magic) == ATE_MAGIC_NUMBER
     ]
     profile = get_risk_profile(symbol)
     policy = profile["policy"] if profile else RiskPolicy(execution_enabled=False)
@@ -3041,7 +3039,7 @@ async def evaluate_trade_decision(req: OrderRequest):
         account=AccountSnapshot(
             equity=float(account_info.equity),
             margin_free=float(account_info.margin_free),
-            daily_realized_pnl=get_daily_realized_pnl(symbol, QUANTAI_MAGIC_NUMBER),
+            daily_realized_pnl=get_daily_realized_pnl(symbol, ATE_MAGIC_NUMBER),
         ),
         spec=spec,
         bid=float(tick.bid),
@@ -4360,7 +4358,7 @@ GEMINI_ROTATION_POOL = ["gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3-f
 GEMINI_ROTATION_IDX = 0
 OPENCODE_ROTATION_IDX = 0
 AI_MODEL_COOLDOWN: Dict[str, float] = {}
-AI_COOLDOWN_SECONDS = max(120, int(os.getenv("QUANTAI_AI_COOLDOWN_SECONDS", "7200")))
+AI_COOLDOWN_SECONDS = max(120, int(os.getenv("ATE_AI_COOLDOWN_SECONDS") or os.getenv("QUANTAI_AI_COOLDOWN_SECONDS", "7200")))
 
 USER_GROK_KEY = _saved_cfg.get("grok_api_key") or os.getenv("GROK_API_KEY", "")
 USER_QWEN_KEY = _saved_cfg.get("qwen_api_key") or os.getenv("QWEN_API_KEY", "")

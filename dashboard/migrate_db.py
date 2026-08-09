@@ -1,6 +1,6 @@
 """Database migration script for Autonomous Trading Engine (ATE).
 
-Migrates quantai_brain.sqlite3 to support multi-trading-method analytics.
+Migrates ate_brain.sqlite3 to support multi-trading-method analytics.
 - Adds trading_method column to brain_decisions table (default 'INDICATOR').
 - Recreates strategy_stats table with composite primary key (strategy_version, trading_method).
 - Adds index idx_decisions_method on brain_decisions (trading_method).
@@ -12,8 +12,8 @@ import sqlite3
 import shutil
 from pathlib import Path
 
-DB_PATH = Path(__file__).parent / "quantai_brain.sqlite3"
-BAK_PATH = Path(__file__).parent / "quantai_brain.sqlite3.bak"
+DB_PATH = Path(__file__).parent / "ate_brain.sqlite3"
+BAK_PATH = Path(__file__).parent / "ate_brain.sqlite3.bak"
 
 
 def migrate_database(db_file: Path = DB_PATH) -> bool:

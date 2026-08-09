@@ -1,4 +1,4 @@
-# QuantAI - Autonomous Trading Engine (ATE)
+# ATE - Autonomous Trading Engine (ATE)
 
 **Hệ thống Giao Dịch Tự Động cho XAUUSD (Vàng) | Phiên bản 2.4**
 
@@ -6,7 +6,7 @@
 
 ## Tổng Quan
 
-QuantAI là nền tảng giao dịch tự động hoàn chỉnh kết hợp phân tích định lượng thời gian thực, trí tuệ nhân tạo đa mô hình và kiểm soát rủi ro fail-closed, vận hành trên MetaTrader 5 với giao diện Bloomberg Terminal:
+ATE là nền tảng giao dịch tự động hoàn chỉnh kết hợp phân tích định lượng thời gian thực, trí tuệ nhân tạo đa mô hình và kiểm soát rủi ro fail-closed, vận hành trên MetaTrader 5 với giao diện Bloomberg Terminal:
 
 - **Dữ liệu thời gian thực MT5** (XAUUSD, khung M1 -> D1)
 - **Multi-AI Provider Engine**: Mặc định chạy miễn phí trên OpenCode Zen Free Pool (không cần API Key), tự động xoay vòng và failover sang các provider thương mại (Gemini, OpenAI, DeepSeek, Claude...) khi cần
@@ -127,7 +127,7 @@ npm run dev
 ```
 
 ### MT5 EA
-1. Copy `MQL5/Experts/tradeAI/QuantAI_XAUUSD.mq5` vào thư mục experts của MT5.
+1. Copy `MQL5/Experts/tradeAI/ATE_XAUUSD.mq5` vào thư mục experts của MT5.
 2. Biên dịch và attach vào chart XAUUSD.
 3. Cấu hình tham số trong EA settings (symbol, magic, token bridge).
 

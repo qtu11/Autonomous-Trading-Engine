@@ -219,7 +219,7 @@ if ($terminal) {
 
 # 4. Start backend
 Write-Step "[4/6] Starting FastAPI backend (port $BackendPort)"
-$backendCmd = "cd /d `"$Root`" && set QUANTAI_DASHBOARD_PORT=$BackendPort&& set QUANTAI_DASHBOARD_HOST=0.0.0.0&& python dashboard\server.py"
+$backendCmd = "cd /d `"$Root`" && set ATE_DASHBOARD_PORT=$BackendPort&& set ATE_DASHBOARD_HOST=0.0.0.0&& python dashboard\server.py"
 Start-Process -FilePath "cmd.exe" -ArgumentList "/k", $backendCmd -WindowStyle Minimized
 Start-Sleep -Seconds 2
 Write-Ok "Backend process launched"

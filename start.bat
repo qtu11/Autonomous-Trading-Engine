@@ -1,11 +1,12 @@
 @echo off
 chcp 65001 >nul
-title GoldQuant_AI_Launcher
+title ATE_Launcher
 color 0B
 cls
 
 echo =======================================================================
-echo          GOLDQUANT AI BLOOMBERG TRADING DESK (PORT 3000 / 8005)        
+echo     AUTONOMOUS TRADING ENGINE (ATE) - BLOOMBERG TRADING DESK
+echo                          PORT 3000 / 8005
 echo =======================================================================
 echo.
 
@@ -70,7 +71,7 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8005 ^| findstr LISTENING') 
 for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3000 ^| findstr LISTENING') do taskkill /f /pid %%a >nul 2>&1
 
 echo [1/3] Starting FastAPI Backend Telemetry Server (Port 8005)...
-start "Backend" /min cmd /k "cd /d ""%~dp0"" && set QUANTAI_DASHBOARD_PORT=8005 && python dashboard/server.py"
+start "Backend" /min cmd /k "cd /d ""%~dp0"" && set ATE_DASHBOARD_PORT=8005 && set ATE_DASHBOARD_HOST=0.0.0.0 && python dashboard/server.py"
 
 echo [2/3] Checking Node modules...
 if not exist "web\node_modules" (

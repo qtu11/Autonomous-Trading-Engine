@@ -54,7 +54,7 @@ string         g_protection_event = "";
 bool           g_protection_comment_shown = false;
 
 //--- Returns InpApiUrl with trailing slashes, /api/v1 and /api trimmed to construct endpoints cleanly
-string QuantAIApiBase()
+string ATEApiBase()
 {
    string u = InpApiUrl;
    while(StringLen(u) > 0 && StringGetCharacter(u, StringLen(u) - 1) == '/')
@@ -78,7 +78,7 @@ int OnInit()
    if(StringLen(g_symbol) == 0)
       g_symbol = Symbol();
 
-   QuantAILog(StringFormat("INIT_BEGIN url=%s token_len=%d exec=%s verify=%s poll=%ds", InpApiUrl, StringLen(InpBridgeToken), InpExecutionEnabled ? "true" : "false", InpVerifyAccount ? "true" : "false", InpPollIntervalSec));
+   ATELog(StringFormat("INIT_BEGIN url=%s token_len=%d exec=%s verify=%s poll=%ds", InpApiUrl, StringLen(InpBridgeToken), InpExecutionEnabled ? "true" : "false", InpVerifyAccount ? "true" : "false", InpPollIntervalSec));
 
    m_trade.SetExpertMagicNumber(InpMagicNumber);
    m_trade.SetDeviationInPoints(InpMaxDeviationPts);
@@ -86,14 +86,14 @@ int OnInit()
    
    if(InpPollIntervalSec < 1)
    {
-      QuantAILog("INIT_FAILED: poll interval is invalid.");
-      Print("QuantAI configuration rejected: poll interval is invalid.");
+      ATELog("INIT_FAILED: poll interval is invalid.");
+      Print("ATE configuration rejected: poll interval is invalid.");
       return(INIT_PARAMETERS_INCORRECT);
    }
    if(!SymbolSelect(g_symbol, true))
    {
-      QuantAILog(StringFormat("INIT_FAILED: symbol %s is unavailable.", g_symbol));
-      PrintFormat("QuantAI configuration rejected: symbol %s is unavailable.", g_symbol);
+      ATELog(StringFormat("INIT_FAILED: symbol %s is unavailable.", g_symbol));
+      PrintFormat("ATE configuration rejected: symbol %s is unavailable.", g_symbol);
       return(INIT_FAILED);
    }
    if(InpExecutionEnabled && !IsAuthorizedEnvironment())
@@ -104,15 +104,15 @@ int OnInit()
       // telemetry/heartbeat still flow; execution stays fail-closed because
       // PollAndExecuteAISignals() re-checks IsAuthorizedEnvironment() before
       // claiming/executing any command.
-      QuantAILog(StringFormat("INIT_WARNING: execution unauthorized. trade_allowed=%d mql_trade_allowed=%d account=#%I64d@%s company=%s mode=%s (will retry at claim time)", TerminalInfoInteger(TERMINAL_TRADE_ALLOWED), MQLInfoInteger(MQL_TRADE_ALLOWED), AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountInfoString(ACCOUNT_COMPANY), AccountModeLabel()));
+      ATELog(StringFormat("INIT_WARNING: execution unauthorized. trade_allowed=%d mql_trade_allowed=%d account=#%I64d@%s company=%s mode=%s (will retry at claim time)", TerminalInfoInteger(TERMINAL_TRADE_ALLOWED), MQLInfoInteger(MQL_TRADE_ALLOWED), AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountInfoString(ACCOUNT_COMPANY), AccountModeLabel()));
    }
 
    // Set 1-second timer for polling AI Protocol
    EventSetTimer(InpPollIntervalSec);
    
-   QuantAILog(StringFormat("INIT_OK account=#%I64d@%s company=%s mode=%s trade_allowed=%d mql_trade_allowed=%d", AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountInfoString(ACCOUNT_COMPANY), AccountModeLabel(), TerminalInfoInteger(TERMINAL_TRADE_ALLOWED), MQLInfoInteger(MQL_TRADE_ALLOWED)));
+   ATELog(StringFormat("INIT_OK account=#%I64d@%s company=%s mode=%s trade_allowed=%d mql_trade_allowed=%d", AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountInfoString(ACCOUNT_COMPANY), AccountModeLabel(), TerminalInfoInteger(TERMINAL_TRADE_ALLOWED), MQLInfoInteger(MQL_TRADE_ALLOWED)));
    PrintFormat("=================================================");
-   PrintFormat("QuantAI MQL5 Pure Execution Protocol v3.0 Started");
+   PrintFormat("ATE MQL5 Pure Execution Protocol v3.0 Started");
    PrintFormat("Connected AI Bridge: %s | Symbol: %s", InpApiUrl, g_symbol);
    PrintFormat("Account: #%I64d @ %s (mode: %s)", AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountModeLabel());
    PrintFormat("=================================================");
@@ -202,7 +202,7 @@ bool IsValidCommand(double volume, double stopLoss, double takeProfit, string ac
 void OnDeinit(const int reason)
 {
    EventKillTimer();
-   Print("QuantAI MQL5 Protocol Bridge Stopped. Reason: ", reason);
+   Print("ATE MQL5 Protocol Bridge Stopped. Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -216,11 +216,11 @@ void OnTimer()
       m_consecutive_failures++;
       if(m_consecutive_failures == 1)
       {
-         Print("QuantAI reconnect watchdog: Terminal disconnected from broker. Attempting to reconnect...");
+         Print("ATE reconnect watchdog: Terminal disconnected from broker. Attempting to reconnect...");
       }
       else if(m_consecutive_failures == InpMaxConsecutiveFailures)
       {
-         PrintFormat("QuantAI reconnect watchdog: Terminal offline for %d seconds. Backing off check interval to 10 seconds.", m_consecutive_failures);
+         PrintFormat("ATE reconnect watchdog: Terminal offline for %d seconds. Backing off check interval to 10 seconds.", m_consecutive_failures);
          EventSetTimer(10);
       }
       return; // Skip this cycle; timer fires again and retries automatically.
@@ -229,7 +229,7 @@ void OnTimer()
    // Restore normal polling if connection recovered
    if(m_consecutive_failures > 0)
    {
-      PrintFormat("QuantAI reconnect watchdog: Terminal reconnected successfully. Restoring poll interval to %d seconds.", InpPollIntervalSec);
+      PrintFormat("ATE reconnect watchdog: Terminal reconnected successfully. Restoring poll interval to %d seconds.", InpPollIntervalSec);
       m_consecutive_failures = 0;
       EventSetTimer(InpPollIntervalSec);
    }
@@ -302,7 +302,7 @@ void SendTelemetry()
 {
    if(StringLen(InpBridgeToken) == 0)
    {
-      Print("QuantAI bridge token is not configured; telemetry is blocked.");
+      Print("ATE bridge token is not configured; telemetry is blocked.");
       return;
    }
    string headers = BridgeHeaders();
@@ -327,16 +327,16 @@ void SendTelemetry()
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
    
-   int res = WebRequest("POST", QuantAIApiBase() + "/api/v1/telemetry", headers, 3000, data, result, result_headers);
+   int res = WebRequest("POST", ATEApiBase() + "/api/v1/telemetry", headers, 3000, data, result, result_headers);
    if(res != 200)
    {
       int err = GetLastError();
-      QuantAILogThrottled("TELEMETRY_HTTP_" + string(res), StringFormat("Telemetry push failed (HTTP %d, err=%d). Bridge may be down, URL not allowlisted, or network blocked.", res, err));
+      ATELogThrottled("TELEMETRY_HTTP_" + string(res), StringFormat("Telemetry push failed (HTTP %d, err=%d). Bridge may be down, URL not allowlisted, or network blocked.", res, err));
    }
    else if(!g_telemetry_ok_logged)
    {
       g_telemetry_ok_logged = true;
-      QuantAILog("TELEMETRY_OK: first successful heartbeat to " + InpApiUrl);
+      ATELog("TELEMETRY_OK: first successful heartbeat to " + InpApiUrl);
    }
 }
 
@@ -407,7 +407,7 @@ void SendCalendar()
    char result[];
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
-   WebRequest("POST", QuantAIApiBase() + "/api/v1/bridge/calendar", headers, 1000, data, result, result_headers);
+   WebRequest("POST", ATEApiBase() + "/api/v1/bridge/calendar", headers, 1000, data, result, result_headers);
 }
 
 //+------------------------------------------------------------------+
@@ -422,13 +422,13 @@ void CheckNewsProtection()
    char result[];
    string result_headers;
    char empty[];
-   int res = WebRequest("GET", QuantAIApiBase() + "/api/economic-calendar/protection", headers, 3000, empty, result, result_headers);
+   int res = WebRequest("GET", ATEApiBase() + "/api/economic-calendar/protection", headers, 3000, empty, result, result_headers);
    if(res != 200 || ArraySize(result) == 0)
    {
       if(g_protection_level != "unknown")
       {
          g_protection_level = "unknown";
-         QuantAILogThrottled("PROTECTION_UNREACHABLE", StringFormat("News protection state unreachable (HTTP %d, err=%d). Falling back to: allow entries.", res, GetLastError()));
+         ATELogThrottled("PROTECTION_UNREACHABLE", StringFormat("News protection state unreachable (HTTP %d, err=%d). Falling back to: allow entries.", res, GetLastError()));
       }
       return;
    }
@@ -447,11 +447,11 @@ void CheckNewsProtection()
 
    if(changed)
    {
-      QuantAILog(StringFormat("NEWS_PROTECTION_STATE level=%s event='%s' live_remaining=%ds", level, eventTitle, liveSeconds));
+      ATELog(StringFormat("NEWS_PROTECTION_STATE level=%s event='%s' live_remaining=%ds", level, eventTitle, liveSeconds));
       if(level == "lockdown" || level == "approaching")
-         QuantAILog("NEWS_PROTECTION: new BUY/SELL entries are BLOCKED until the news window passes (CLOSE/MODIFY still allowed).");
+         ATELog("NEWS_PROTECTION: new BUY/SELL entries are BLOCKED until the news window passes (CLOSE/MODIFY still allowed).");
       else if(level == "watch")
-         QuantAILog("NEWS_PROTECTION: watch mode - High impact news approaching, entries still allowed.");
+         ATELog("NEWS_PROTECTION: watch mode - High impact news approaching, entries still allowed.");
    }
 
    UpdateProtectionComment();
@@ -491,18 +491,18 @@ string g_ea_log_file = "";
 string g_ea_last_msg  = "";
 bool  g_telemetry_ok_logged = false;
 
-string QuantAILogFileName()
+string ATELogFileName()
 {
    if(StringLen(g_ea_log_file) == 0)
-      g_ea_log_file = "quantai_ea_" + TimeToString(TimeCurrent(), TIME_DATE) + ".log";
+      g_ea_log_file = "ate_ea_" + TimeToString(TimeCurrent(), TIME_DATE) + ".log";
    return g_ea_log_file;
 }
 
-void QuantAILog(const string message)
+void ATELog(const string message)
 {
    string line = StringFormat("[%s] %s", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS), message);
    Print(line);
-   int handle = FileOpen(QuantAILogFileName(), FILE_READ|FILE_WRITE|FILE_TXT|FILE_UNICODE);
+   int handle = FileOpen(ATELogFileName(), FILE_READ|FILE_WRITE|FILE_TXT|FILE_UNICODE);
    if(handle != INVALID_HANDLE)
    {
       FileSeek(handle, 0, SEEK_END);
@@ -511,12 +511,12 @@ void QuantAILog(const string message)
    }
 }
 
-void QuantAILogThrottled(const string key, string message)
+void ATELogThrottled(const string key, string message)
 {
    if(key == g_ea_last_msg)
       return;
    g_ea_last_msg = key;
-   QuantAILog(message);
+   ATELog(message);
 }
 
 //+------------------------------------------------------------------+
@@ -532,7 +532,7 @@ void PollAndExecuteAISignals()
    // MODIFY_SLTP are still claimable while a position is open.
    if(!IsAuthorizedEnvironment())
    {
-      QuantAILogThrottled("UNAUTH", StringFormat("Blocked poll: trade_allowed=%d mql_trade_allowed=%d account=#%I64d@%s company=%s mode=%s (allowlist: company=%s)", TerminalInfoInteger(TERMINAL_TRADE_ALLOWED), MQLInfoInteger(MQL_TRADE_ALLOWED), AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountInfoString(ACCOUNT_COMPANY), AccountModeLabel(), InpExpectedCompany));
+      ATELogThrottled("UNAUTH", StringFormat("Blocked poll: trade_allowed=%d mql_trade_allowed=%d account=#%I64d@%s company=%s mode=%s (allowlist: company=%s)", TerminalInfoInteger(TERMINAL_TRADE_ALLOWED), MQLInfoInteger(MQL_TRADE_ALLOWED), AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountInfoString(ACCOUNT_COMPANY), AccountModeLabel(), InpExpectedCompany));
       return;
    }
 
@@ -544,11 +544,11 @@ void PollAndExecuteAISignals()
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
 
-   int res = WebRequest("POST", QuantAIApiBase() + "/api/v1/bridge/commands/claim", headers, 3000, data, result, result_headers);
+   int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/commands/claim", headers, 3000, data, result, result_headers);
    if(res != 200 || ArraySize(result) == 0)
    {
       int err = GetLastError();
-      QuantAILogThrottled("CLAIM_HTTP_" + string(res), StringFormat("Claim request failed (HTTP %d, err=%d). Verify the bridge is up and '" + InpApiUrl + "' is in the MT5 WebRequest allowlist (use hostname/IP, not 127.0.0.1).", res, err));
+      ATELogThrottled("CLAIM_HTTP_" + string(res), StringFormat("Claim request failed (HTTP %d, err=%d). Verify the bridge is up and '" + InpApiUrl + "' is in the MT5 WebRequest allowlist (use hostname/IP, not 127.0.0.1).", res, err));
       return;
    }
 
@@ -570,18 +570,18 @@ void PollAndExecuteAISignals()
    string reason = ExtractJsonString(commandJson, "\"reason\":");
    if(StringLen(commandId) == 0 || commandSymbol != g_symbol || commandMagic != (long)InpMagicNumber)
    {
-      QuantAILog(StringFormat("REJECT_INVALID_COMMAND command=%s action=%s", commandId, action));
+      ATELog(StringFormat("REJECT_INVALID_COMMAND command=%s action=%s", commandId, action));
       SendCommandReceipt(commandId, "REJECTED", 0, 0, "REJECT_INVALID_COMMAND");
       return;
    }
    if(!IsAuthorizedEnvironment())
    {
-      QuantAILog(StringFormat("REJECT_EXECUTION_GUARD command=%s action=%s", commandId, action));
+      ATELog(StringFormat("REJECT_EXECUTION_GUARD command=%s action=%s", commandId, action));
       SendCommandReceipt(commandId, "REJECTED", 0, 0, "REJECT_EXECUTION_GUARD");
       return;
    }
 
-   QuantAILog(StringFormat("CLAIMED command=%s action=%s volume=%.2f sl=%.2f tp=%.2f reason=%s", commandId, action, volume, stopLoss, takeProfit, reason));
+   ATELog(StringFormat("CLAIMED command=%s action=%s volume=%.2f sl=%.2f tp=%.2f reason=%s", commandId, action, volume, stopLoss, takeProfit, reason));
 
    int symbolDigits = (int)SymbolInfoInteger(g_symbol, SYMBOL_DIGITS);
    m_trade.SetTypeFillingBySymbol(g_symbol);
@@ -593,20 +593,20 @@ void PollAndExecuteAISignals()
       // News Protection: fail-closed on new entries only; CLOSE/MODIFY stay claimable.
       if(InpNewsProtectionEnabled && (g_protection_level == "lockdown" || g_protection_level == "approaching"))
       {
-         QuantAILog(StringFormat("REJECT_NEWS_PROTECTION command=%s action=%s level=%s event='%s' live_remaining=%ds", commandId, action, g_protection_level, g_protection_event, g_protection_live_seconds));
+         ATELog(StringFormat("REJECT_NEWS_PROTECTION command=%s action=%s level=%s event='%s' live_remaining=%ds", commandId, action, g_protection_level, g_protection_event, g_protection_live_seconds));
          SendCommandReceipt(commandId, "REJECTED", 0, 0, "REJECT_NEWS_PROTECTION");
          return;
       }
       if(MatchingPositionCount() >= InpMaxPositions || !IsValidCommand(volume, stopLoss, takeProfit, action))
       {
-         QuantAILog(StringFormat("REJECT_EXECUTION_GUARD command=%s action=%s positions=%d reason=%s", commandId, action, MatchingPositionCount(), reason));
+         ATELog(StringFormat("REJECT_EXECUTION_GUARD command=%s action=%s positions=%d reason=%s", commandId, action, MatchingPositionCount(), reason));
          SendCommandReceipt(commandId, "REJECTED", 0, 0, "REJECT_EXECUTION_GUARD");
          return;
       }
       if(action == "BUY")
-         requestAccepted = m_trade.Buy(volume, g_symbol, SymbolInfoDouble(g_symbol, SYMBOL_ASK), NormalizeDouble(stopLoss, symbolDigits), NormalizeDouble(takeProfit, symbolDigits), "QuantAI v1 BUY");
+         requestAccepted = m_trade.Buy(volume, g_symbol, SymbolInfoDouble(g_symbol, SYMBOL_ASK), NormalizeDouble(stopLoss, symbolDigits), NormalizeDouble(takeProfit, symbolDigits), "ATE v1 BUY");
       else
-         requestAccepted = m_trade.Sell(volume, g_symbol, SymbolInfoDouble(g_symbol, SYMBOL_BID), NormalizeDouble(stopLoss, symbolDigits), NormalizeDouble(takeProfit, symbolDigits), "QuantAI v1 SELL");
+         requestAccepted = m_trade.Sell(volume, g_symbol, SymbolInfoDouble(g_symbol, SYMBOL_BID), NormalizeDouble(stopLoss, symbolDigits), NormalizeDouble(takeProfit, symbolDigits), "ATE v1 SELL");
       resultTicket = m_trade.ResultOrder();
    }
    else if(action == "MODIFY_SLTP")
@@ -614,7 +614,7 @@ void PollAndExecuteAISignals()
       ulong ticket = ExtractTicketFromReason(reason);
       if(ticket == 0 || !PositionSelectByTicket(ticket))
       {
-         QuantAILog(StringFormat("REJECT_TICKET_NOT_FOUND command=%s action=%s reason=%s", commandId, action, reason));
+         ATELog(StringFormat("REJECT_TICKET_NOT_FOUND command=%s action=%s reason=%s", commandId, action, reason));
          SendCommandReceipt(commandId, "REJECTED", 0, 0, "REJECT_TICKET_NOT_FOUND");
          return;
       }
@@ -626,7 +626,7 @@ void PollAndExecuteAISignals()
       ulong ticket = ExtractTicketFromReason(reason);
       if(ticket == 0)
       {
-         QuantAILog(StringFormat("REJECT_TICKET_NOT_FOUND command=%s action=%s reason=%s", commandId, action, reason));
+         ATELog(StringFormat("REJECT_TICKET_NOT_FOUND command=%s action=%s reason=%s", commandId, action, reason));
          SendCommandReceipt(commandId, "REJECTED", 0, 0, "REJECT_TICKET_NOT_FOUND");
          return;
       }
@@ -653,7 +653,7 @@ void PollAndExecuteAISignals()
       ulong orderTicket = ExtractOrderFromReason(reason);
       if(orderTicket == 0)
       {
-         QuantAILog(StringFormat("REJECT_ORDER_NOT_FOUND command=%s action=%s reason=%s", commandId, action, reason));
+         ATELog(StringFormat("REJECT_ORDER_NOT_FOUND command=%s action=%s reason=%s", commandId, action, reason));
          SendCommandReceipt(commandId, "REJECTED", 0, 0, "REJECT_ORDER_NOT_FOUND");
          return;
       }
@@ -662,7 +662,7 @@ void PollAndExecuteAISignals()
    }
    else
    {
-      QuantAILog(StringFormat("REJECT_UNSUPPORTED_ACTION command=%s action=%s", commandId, action));
+      ATELog(StringFormat("REJECT_UNSUPPORTED_ACTION command=%s action=%s", commandId, action));
       SendCommandReceipt(commandId, "REJECTED", 0, 0, "REJECT_UNSUPPORTED_ACTION");
       return;
    }
@@ -672,12 +672,12 @@ void PollAndExecuteAISignals()
    if(executed)
    {
       m_consecutive_failures = 0;
-      QuantAILog(StringFormat("EXECUTED command=%s action=%s ticket=%I64u retcode=%u (%s) reason=%s", commandId, action, resultTicket, retcode, m_trade.ResultRetcodeDescription(), reason));
+      ATELog(StringFormat("EXECUTED command=%s action=%s ticket=%I64u retcode=%u (%s) reason=%s", commandId, action, resultTicket, retcode, m_trade.ResultRetcodeDescription(), reason));
       SendCommandReceipt(commandId, "EXECUTED", resultTicket, retcode, m_trade.ResultRetcodeDescription());
    }
    else
    {
-      QuantAILog(StringFormat("FAILED command=%s action=%s retcode=%u (%s) reason=%s", commandId, action, retcode, m_trade.ResultRetcodeDescription(), reason));
+      ATELog(StringFormat("FAILED command=%s action=%s retcode=%u (%s) reason=%s", commandId, action, retcode, m_trade.ResultRetcodeDescription(), reason));
       SendCommandReceipt(commandId, "FAILED", 0, retcode, m_trade.ResultRetcodeDescription());
    }
 }
@@ -735,7 +735,7 @@ void SendCommandReceipt(string commandId, string receiptStatus, ulong orderTicke
    char result[];
    string resultHeaders;
    StringToCharArray(payload, data, 0, StringLen(payload));
-   WebRequest("POST", QuantAIApiBase() + "/api/v1/bridge/commands/" + commandId + "/receipt", headers, 1000, data, result, resultHeaders);
+   WebRequest("POST", ATEApiBase() + "/api/v1/bridge/commands/" + commandId + "/receipt", headers, 1000, data, result, resultHeaders);
 }
 
 //+------------------------------------------------------------------+
@@ -753,7 +753,7 @@ void FetchAndRenderChartMarkup()
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
 
-   int res = WebRequest("POST", QuantAIApiBase() + "/api/v1/bridge/markup", headers, 4000, data, result, result_headers);
+   int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/markup", headers, 4000, data, result, result_headers);
    if(res != 200 || ArraySize(result) == 0)
       return; // Retry next tick; no chart paint this cycle.
 
@@ -973,7 +973,7 @@ void RenderMarkupObjects(string response)
          ObjectDelete(0, stale);
    }
 
-   QuantAILog(StringFormat("MARKUP_RENDER objects=%d", drawn));
+   ATELog(StringFormat("MARKUP_RENDER objects=%d", drawn));
 }
 
 double ExtractDouble(string json, string key, double defaultValue)
@@ -1060,11 +1060,11 @@ void SendLiveCandles()
    StringToCharArray(payload, data, 0, StringLen(payload));
    
    string headers = BridgeHeaders();
-   int res = WebRequest("POST", QuantAIApiBase() + "/api/v1/bridge/candles", headers, 4000, data, result, result_headers);
+   int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 4000, data, result, result_headers);
    if(res != 200)
    {
       int err = GetLastError();
-      QuantAILogThrottled("CANDLES_HTTP_" + string(res), StringFormat("Candles push failed (HTTP %d, err=%d)", res, err));
+      ATELogThrottled("CANDLES_HTTP_" + string(res), StringFormat("Candles push failed (HTTP %d, err=%d)", res, err));
    }
 }
 //+------------------------------------------------------------------+
