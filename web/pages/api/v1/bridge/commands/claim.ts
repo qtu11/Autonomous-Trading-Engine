@@ -14,21 +14,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    let rawBody = '';
-    if (req.body) {
-      const chunks: string[] = [];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stream = req.body as AsyncIterable<Buffer>;
-      for await (const chunk of stream) {
-        chunks.push(Buffer.from(chunk).toString('utf8'));
-      }
-      rawBody = chunks.join('');
+    const chunks: Buffer[] = [];
+    for await (const chunk of req.body as AsyncIterable<Buffer>) {
+      chunks.push(chunk);
     }
+    const rawBody = Buffer.concat(chunks).toString('utf8');
 
     const response = await fetch(`${BACKEND_URL}/api/v1/bridge/commands/claim`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': (req.headers['content-type'] as string) || 'application/json',
         'Authorization': (req.headers.authorization as string) || '',
       },
       body: rawBody,

@@ -1138,6 +1138,57 @@ def get_technical_indicators(symbol: str = "XAUUSDm"):
         }
     return defaults
 
+
+def calc_indicators_from_candles(candles: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Compute technical indicators from EA-pushed candles (no MT5 required).
+    This lets the dashboard show live indicators even when MT5 Python SDK is unavailable (Docker/Linux).
+    """
+    defaults = {
+        "data_status": "UNAVAILABLE",
+        "rsi": 0.0, "atr": 0.0, "macd": "N/A", "stoch": "N/A",
+        "ema20": 0.0, "ema50": 0.0, "ema200": 0.0,
+        "volume": 0, "vol_ratio": "N/A",
+        "pivot": 0.0, "r1": 0.0, "r2": 0.0, "s1": 0.0, "s2": 0.0,
+    }
+    if not candles or len(candles) < 21:
+        return defaults
+    try:
+        closes = [float(c["c"]) for c in candles]
+        highs = [float(c["h"]) for c in candles]
+        lows = [float(c["l"]) for c in candles]
+        volumes = [float(c.get("v", 0)) for c in candles]
+        rates_like = [{"high": h, "low": l, "close": c} for h, l, c in zip(highs, lows, closes)]
+        rsi = calc_rsi(closes, 14)
+        atr = calc_atr(rates_like, 14)
+        stoch = calc_stoch(rates_like, 14)
+        ema20 = calc_ema(closes, 20)
+        ema50 = calc_ema(closes, 50)
+        ema200 = calc_ema(closes, 200)
+        ema12 = calc_ema(closes, 12)
+        ema26 = calc_ema(closes, 26)
+        macd = round(ema12 - ema26, 2)
+        vol = int(volumes[-1]) if volumes else 0
+        avg_vol = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else (sum(volumes) / len(volumes) if volumes else 1)
+        vol_ratio = round(vol / avg_vol, 2) if avg_vol > 0 else 1.0
+        last_c = closes[-1]
+        return {
+            "data_status": "LIVE_VERIFIED",
+            "rsi": rsi, "atr": atr,
+            "macd": f"{'+' if macd >= 0 else ''}{macd:.2f}",
+            "stoch": f"{stoch:.1f}",
+            "ema20": ema20, "ema50": ema50, "ema200": ema200,
+            "volume": vol, "vol_ratio": f"{vol_ratio:.2f}x",
+            "pivot": round(last_c, 2),
+            "r1": round(last_c + atr, 2),
+            "s1": round(last_c - atr, 2),
+            "r2": round(last_c + 2 * atr, 2),
+            "s2": round(last_c - 2 * atr, 2),
+        }
+    except Exception:
+        return defaults
+
+
 def get_account_performance():
     unavailable = {
         "data_status": "UNAVAILABLE",
@@ -1992,11 +2043,12 @@ async def get_market(symbol: str = "XAUUSD", tf: str = "M15"):
                 response["markup"] = markup
             return response
 
-    # Fallback to real candles pushed by the EA (e.g. inside Docker container)
+    # Fallback: use real candles pushed by the EA on Windows host
     global _EA_PUSHED_CANDLES
     if actual_symbol in _EA_PUSHED_CANDLES and tf in _EA_PUSHED_CANDLES[actual_symbol]:
         candles = _EA_PUSHED_CANDLES[actual_symbol][tf]
-        indicators = get_technical_indicators(actual_symbol)
+        # Compute indicators from EA-pushed candles (no MT5 required)
+        indicators = calc_indicators_from_candles(candles)
         response = {"symbol": actual_symbol, "timeframe": tf, "candles": candles, "indicators": indicators}
         markup = get_markup_cached(actual_symbol)
         if markup and markup.get("objects"):
