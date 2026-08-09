@@ -4,6 +4,7 @@ const BACKEND_URL = process.env.ATE_BACKEND_URL || 'http://113.173.192.226:8848'
 
 export const config = {
   api: {
+    // Disable body parsing — let us forward the raw buffered body
     bodyParser: false,
   },
 };
@@ -14,10 +15,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    // Collect raw body from Node.js IncomingMessage
+    // Collect raw body from the Node.js buffered stream
     const chunks: Buffer[] = [];
-    for await (const chunk of req.body as AsyncIterable<Buffer>) {
-      chunks.push(chunk);
+    const body = req.body as unknown as NodeJS.ReadableStream;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const stream = body as any;
+    if (stream && typeof stream.on === 'function') {
+      await new Promise<void>((resolve, reject) => {
+        stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+        stream.on('end', resolve);
+        stream.on('error', reject);
+      });
     }
     const rawBody = Buffer.concat(chunks).toString('utf8');
 
