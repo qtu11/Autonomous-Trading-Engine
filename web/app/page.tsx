@@ -1396,7 +1396,7 @@ export default function App() {
         if (statusResult.news) setNews(statusResult.news);
       }
 
-      if (marketResult && statusResult?.mt5_connected) { setCandles(marketResult.candles); if (marketResult.indicators) setIndicators(marketResult.indicators); if (marketResult.markup) setMarkup(marketResult.markup); }
+      if (marketResult && marketResult.candles && marketResult.candles.length > 0) { setCandles(marketResult.candles); if (marketResult.indicators) setIndicators(marketResult.indicators); if (marketResult.markup) setMarkup(marketResult.markup); }
       if (positionsResult && statusResult?.mt5_connected) setPositions(positionsResult);
       if (historyResult && statusResult?.mt5_connected) setTradeHistory(historyResult);
 

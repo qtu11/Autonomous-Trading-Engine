@@ -14,6 +14,7 @@ import {
   updateAIConfig,
   testAIConnection,
   createStreamSocket,
+  updateForceUnlock,
   type ControlCenterStatus,
 } from '../../lib/api';
 
@@ -386,6 +387,7 @@ export default function ControlCenter({
   const killActive = cc?.safeguards?.kill_switch_active ?? false;
   const demoArmed = cc?.safeguards?.demo_armed ?? false;
   const aiLoop = cc?.safeguards?.ai_auto_loop ?? false;
+  const forceUnlock = cc?.safeguards?.force_unlock ?? false;
   const mode = cc?.execution?.mode ?? 'DISABLED';
 
   const run = async (key: string, fn: () => Promise<boolean>, okMsg: string) => {
@@ -412,6 +414,9 @@ export default function ControlCenter({
 
   const handleAiLoop = () =>
     run('ailoop', async () => (await updateAiAutoLoop(!aiLoop)) !== null, aiLoop ? 'AI Auto-Loop OFF' : 'AI AUTO-LOOP ON — AI tự sinh lệnh qua Risk Gate');
+
+  const handleForceUnlock = (active: boolean) =>
+    run('force-unlock', async () => (await updateForceUnlock(active)) !== null, active ? 'Đã MỞ KHÓA hệ thống' : 'Đã KHÓA hệ thống');
 
   const handleLogin = async () => {
     if (!loginId || !loginPw || !loginSrv) {
@@ -652,21 +657,75 @@ export default function ControlCenter({
               </div>
             </div>
           </div>
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 800,
-              fontFamily: C.mono,
-              padding: '6px 12px',
-              borderRadius: 6,
-              background: 'rgba(0,0,0,0.4)',
-              color: locked ? C.red : C.green,
-              border: `1px solid ${locked ? 'rgba(244,63,94,0.4)' : 'rgba(34,211,160,0.4)'}`,
-              letterSpacing: '0.05em',
-            }}
-          >
-            {cc?.readiness?.reason_code || 'LOADING'}
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 800,
+                fontFamily: C.mono,
+                padding: '6px 12px',
+                borderRadius: 6,
+                background: 'rgba(0,0,0,0.4)',
+                color: locked ? C.red : C.green,
+                border: `1px solid ${locked ? 'rgba(244,63,94,0.4)' : 'rgba(34,211,160,0.4)'}`,
+                letterSpacing: '0.05em',
+              }}
+            >
+              {cc?.readiness?.reason_code || 'LOADING'}
+            </span>
+
+            {locked ? (
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => handleForceUnlock(true)}
+                style={{
+                  fontSize: 10,
+                  fontWeight: 800,
+                  fontFamily: C.mono,
+                  padding: '6px 12px',
+                  borderRadius: 6,
+                  background: `linear-gradient(135deg, ${C.red}, rgba(244,63,94,0.8))`,
+                  color: '#fff',
+                  border: 'none',
+                  cursor: busy !== null ? 'not-allowed' : 'pointer',
+                  letterSpacing: '0.05em',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                  transition: 'opacity 0.15s',
+                  opacity: busy !== null ? 0.6 : 1,
+                }}
+                onMouseEnter={(e) => { if (busy === null) e.currentTarget.style.opacity = '0.85'; }}
+                onMouseLeave={(e) => { if (busy === null) e.currentTarget.style.opacity = '1'; }}
+              >
+                🔓 UNLOCK
+              </button>
+            ) : forceUnlock ? (
+              <button
+                type="button"
+                disabled={busy !== null}
+                onClick={() => handleForceUnlock(false)}
+                style={{
+                  fontSize: 10,
+                  fontWeight: 800,
+                  fontFamily: C.mono,
+                  padding: '6px 12px',
+                  borderRadius: 6,
+                  background: `linear-gradient(135deg, ${C.gold}, rgba(212,180,131,0.8))`,
+                  color: '#000',
+                  border: 'none',
+                  cursor: busy !== null ? 'not-allowed' : 'pointer',
+                  letterSpacing: '0.05em',
+                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                  transition: 'opacity 0.15s',
+                  opacity: busy !== null ? 0.6 : 1,
+                }}
+                onMouseEnter={(e) => { if (busy === null) e.currentTarget.style.opacity = '0.85'; }}
+                onMouseLeave={(e) => { if (busy === null) e.currentTarget.style.opacity = '1'; }}
+              >
+                🔒 LOCK
+              </button>
+            ) : null}
+          </div>
         </div>
 
         {loadErr && <Toast msg={loadErr} err />}

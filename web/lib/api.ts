@@ -188,7 +188,7 @@ export interface ControlCenterStatus {
   generated_at: string;
   status: 'READY' | 'BLOCKED';
   execution: { mode: string; browser_execution_enabled: boolean; execution_locked: boolean; symbol: string; magic: number; command_ttl_seconds: number };
-  safeguards: { kill_switch_active: boolean; demo_armed: boolean; live_armed?: boolean; trading_enabled?: boolean; ai_auto_loop?: boolean; bridge_auth_configured: boolean; operator_auth_configured: boolean; risk_policy_execution_enabled: boolean; trading_method?: string };
+  safeguards: { kill_switch_active: boolean; demo_armed: boolean; live_armed?: boolean; trading_enabled?: boolean; ai_auto_loop?: boolean; bridge_auth_configured: boolean; operator_auth_configured: boolean; risk_policy_execution_enabled: boolean; trading_method?: string; force_unlock?: boolean };
   readiness: { ready: boolean; reason_code: string };
   account: { mt5_connected: boolean; trade_mode: string; identity_matches_expected: boolean; login?: number; server?: string; balance?: number; equity?: number; leverage?: number; currency?: string };
   bridge: { status: string; mt5_connected: boolean };
@@ -562,6 +562,20 @@ export async function updateAiAutoLoop(armed: boolean): Promise<{ status: string
   }
 }
 
+export async function updateForceUnlock(force_unlock: boolean): Promise<{ status: string; force_unlock?: boolean } | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/control-center/force-unlock`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
+      body: JSON.stringify({ force_unlock }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchChatHistory(): Promise<ChatMsg[] | null> {
   try {
     const res = await fetch(`${API_BASE}/api/copilot/chat/history`);
@@ -585,15 +599,50 @@ export interface StreamSocketHandle {
 }
 
 /**
+ * Resolve the WebSocket endpoint for the backend realtime stream.
+ *
+ * Priority:
+ *  1. NEXT_PUBLIC_ATE_WS_URL        (explicit override, e.g. wss://host/ws/stream)
+ *  2. NEXT_PUBLIC_ATE_API_ORIGIN    (http(s) origin -> ws(s) + /ws/stream)
+ *  3. Local dev convenience         (non-HTTPS page -> ws://<hostname>:8005/ws/stream)
+ *  4. Otherwise null                (e.g. Vercel HTTPS with no WS proxy — callers
+ *                                    must fall back to polling; no reconnect spam)
+ */
+export function resolveStreamSocketUrl(): string | null {
+  const explicit = process.env.NEXT_PUBLIC_ATE_WS_URL;
+  if (explicit) return explicit;
+
+  const apiOrigin = (process.env.NEXT_PUBLIC_ATE_API_ORIGIN || '').replace(/\/+$/, '');
+  if (apiOrigin) {
+    return `${apiOrigin.replace(/^https/, 'wss').replace(/^http/, 'ws')}/ws/stream`;
+  }
+
+  if (typeof window !== 'undefined' && window.location.protocol !== 'https:') {
+    return `ws://${window.location.hostname || '127.0.0.1'}:8005/ws/stream`;
+  }
+
+  return null;
+}
+
+/**
  * Subscribe to the backend realtime stream with automatic reconnect + backoff.
  * onEvent fires for every server push; onStateChange reports connectivity.
+ *
+ * When no WS endpoint is available (see resolveStreamSocketUrl), returns a
+ * no-op handle so the UI gracefully relies on the HTTP polling channel.
  */
 export function createStreamSocket(
   onEvent: (event: StreamEvent) => void,
   onStateChange?: (connected: boolean) => void,
 ): StreamSocketHandle {
-  const wsBase = API_BASE.replace(/^http/, 'ws');
-  const url = `${wsBase}/ws/stream`;
+  const url = resolveStreamSocketUrl();
+  if (!url) {
+    return {
+      close: () => {
+        /* no-op: no realtime endpoint configured on this deployment */
+      },
+    };
+  }
   let socket: WebSocket | null = null;
   let closedByUser = false;
   let attempt = 0;
