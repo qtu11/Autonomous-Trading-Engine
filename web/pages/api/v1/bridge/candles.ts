@@ -1,12 +1,17 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { proxyToBackend } from '../../../../lib/rawFetch';
-
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
+const BACKEND_URL = process.env.ATE_BACKEND_URL || 'http://113.173.192.226:8848';
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  await proxyToBackend(req, res, '/api/v1/bridge/candles');
+  if (req.method !== 'POST') { return res.status(405).end(); }
+  try {
+    const body = JSON.stringify(req.body);
+    const response = await fetch(`${BACKEND_URL}/api/v1/bridge/candles`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': (req.headers.authorization as string) || '' },
+      body,
+    });
+    const data = await response.json().catch(() => ({ raw: 'ok' }));
+    return res.status(response.status).json(data);
+  } catch (error) {
+    return res.status(502).json({ error: 'Backend unavailable', details: error instanceof Error ? error.message : 'Unknown error' });
+  }
 }

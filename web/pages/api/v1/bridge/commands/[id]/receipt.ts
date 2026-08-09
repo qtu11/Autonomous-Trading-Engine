@@ -1,52 +1,18 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-
 const BACKEND_URL = process.env.ATE_BACKEND_URL || 'http://113.173.192.226:8848';
-
-export const config = {
-  api: {
-    bodyParser: false,
-  },
-};
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') {
-    res.status(405).end();
-    return;
-  }
-
+  if (req.method !== 'POST') { return res.status(405).end(); }
   try {
-    const chunks: string[] = [];
-    if (req.body) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const stream = req.body as any;
-      for await (const chunk of stream) {
-        chunks.push(Buffer.from(chunk).toString('utf8'));
-      }
-    }
-    const rawBody = chunks.join('');
+    const body = JSON.stringify(req.body);
     const commandId = req.query.id as string;
-    const url = `${BACKEND_URL}/api/v1/bridge/commands/${commandId}/receipt`;
-
-    const response = await fetch(url, {
+    const response = await fetch(`${BACKEND_URL}/api/v1/bridge/commands/${commandId}/receipt`, {
       method: 'POST',
-      headers: {
-        'Content-Type': (req.headers['content-type'] as string) || 'application/json',
-        'Authorization': (req.headers.authorization as string) || '',
-      },
-      body: rawBody,
+      headers: { 'Content-Type': 'application/json', 'Authorization': (req.headers.authorization as string) || '' },
+      body,
     });
-
-    const text = await response.text();
-    try {
-      const json = JSON.parse(text);
-      res.status(response.status).json(json);
-    } catch {
-      res.status(response.status).send(text);
-    }
+    const data = await response.json().catch(() => ({ raw: 'ok' }));
+    return res.status(response.status).json(data);
   } catch (error) {
-    res.status(502).json({
-      error: 'Backend unavailable',
-      details: error instanceof Error ? error.message : 'Unknown error',
-    });
+    return res.status(502).json({ error: 'Backend unavailable', details: error instanceof Error ? error.message : 'Unknown error' });
   }
 }
