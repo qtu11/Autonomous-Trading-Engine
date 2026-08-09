@@ -97,7 +97,7 @@ _configured = False
 
 
 def _log_directory() -> Path:
-    override = os.getenv("QUANTAI_LOG_DIR")
+    override = os.getenv("ATE_LOG_DIR")
     directory = Path(override) if override else _DEFAULT_LOG_DIR
     directory.mkdir(parents=True, exist_ok=True)
     return directory
