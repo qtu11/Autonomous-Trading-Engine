@@ -43,6 +43,14 @@ from detectors import (
     link_fvg_to_order_blocks,
     mark_ob_mitigated,
 )
+from method_overlays import (
+    METHOD_OBJECT_GROUPS,
+    compute_confluence_score,
+    compute_ict_overlay,
+    compute_pa_overlay,
+    compute_smc_overlay,
+    compute_sniper_overlay,
+)
 
 
 def _dt(ts: pd.Timestamp) -> str:
@@ -306,10 +314,60 @@ def build_chart_markup(
         for key in list(advanced["counts"].keys()):
             advanced["counts"][key] = 0
 
+    # 12. Per-method overlays — Sniper / SMC / ICT / Price Action. Each method
+    # exposes its own object types; ULTRA_CONFLUENCE merges all four.
+    method_specific_objects: list[dict[str, Any]] = []
+    if method_upper in ("SNIPER", "ULTRA_CONFLUENCE"):
+        method_specific_objects.extend(compute_sniper_overlay(
+            symbol, m15, mtf_data.get("M5"), broker_utc_offset_hours=broker_utc_offset_hours,
+        ))
+    if method_upper in ("SMC", "ICT", "ULTRA_CONFLUENCE"):
+        method_specific_objects.extend(compute_smc_overlay(m15))
+    if method_upper in ("ICT", "ULTRA_CONFLUENCE"):
+        method_specific_objects.extend(compute_ict_overlay(
+            m15, broker_utc_offset_hours=broker_utc_offset_hours,
+        ))
+    if method_upper in ("PRICE_ACTION", "ULTRA_CONFLUENCE"):
+        method_specific_objects.extend(compute_pa_overlay(m15))
+
+    # Filter by METHOD_OBJECT_GROUPS if method-specific (so e.g. SNIPER shows
+    # sniper objects + a few core SMC confluence ones, but not all ICT zones).
+    allowed_method_types = METHOD_OBJECT_GROUPS.get(method_upper)
+    if allowed_method_types:
+        objects = [obj for obj in objects if obj.get("type") in allowed_method_types]
+        method_specific_objects = [obj for obj in method_specific_objects if obj.get("type") in allowed_method_types]
+
+    objects.extend(method_specific_objects)
+
+    # Cap to InpMarkupMaxObjects (default 120) but keep highest-priority types
+    # (signals, score, TP/SL) at the end so they survive truncation.
+    priority_types = {"SNIPER_SIGNAL", "SNIPER_SL", "SNIPER_TP1", "SNIPER_TP2",
+                      "SNIPER_TP3", "SNIPER_TP4", "SNIPER_TP5", "SNIPER_SCORE",
+                      "SNIPER_DASH", "JUDAS_SWING", "UNICORN", "PO3"}
+    try:
+        max_objects = 240  # server-side cap, frontend/EA can re-cap further
+    except Exception:
+        max_objects = 240
+    if len(objects) > max_objects:
+        priority = [o for o in objects if o.get("type") in priority_types]
+        non_priority = [o for o in objects if o.get("type") not in priority_types]
+        keep_count = max_objects - len(priority)
+        if keep_count < 0:
+            priority = priority[:max_objects]
+            non_priority = []
+        else:
+            non_priority = non_priority[-keep_count:]
+        objects = non_priority + priority
+
+    # 13. Confluence score (signal action + confidence + RRR) for AI / auto-trade.
+    last_close = float(m15["close"].iloc[-1])
+    confluence = compute_confluence_score(objects, method_upper, last_close)
+
     return {
         "symbol": symbol,
         "method": method_upper,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "objects": objects,
         "advanced_counts": advanced["counts"],
+        "confluence": confluence,
     }

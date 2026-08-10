@@ -20,6 +20,30 @@ export interface MarkupItem {
   label?: string;
   status?: string;
   strength?: number;
+  // Sniper extended
+  bull_pct?: number;
+  bear_pct?: number;
+  bias?: string;
+  factors?: Record<string, boolean>;
+  adx?: number;
+  plus_di?: number;
+  minus_di?: number;
+  strong?: boolean;
+  macd?: number;
+  signal?: number;
+  hist?: number;
+  value?: number;
+  series?: number[];
+  ema9_series?: number[];
+  ema21_series?: number[];
+  // SMC/ICT extended
+  is_london?: boolean;
+  is_ny?: boolean;
+  is_asian?: boolean;
+  touches?: number;
+  slope?: number;
+  confluence?: boolean;
+  ce?: number;
 }
 
 export interface MarkupResponse {
@@ -28,6 +52,17 @@ export interface MarkupResponse {
   generated_at?: string;
   objects: MarkupItem[];
   advanced_counts?: Record<string, number>;
+  confluence?: {
+    score: number;
+    direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+    signal: 'BUY' | 'SELL' | 'WAIT';
+    factors: Array<{ reason: string; direction: string; weight: number }>;
+    rrr?: number | null;
+    entry?: number | null;
+    sl?: number | null;
+    tp?: number | null;
+    method?: string;
+  };
 }
 
 export interface TechnicalIndicators {
