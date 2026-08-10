@@ -582,11 +582,25 @@ export default function TradingChart({
         background: 'rgba(5,7,12,0.85)', padding: 4, borderRadius: 4,
       }}>
         <button
-          onClick={() => chartRef.current?.timeScale().zoomIn()}
+          onClick={() => {
+            const ts = chartRef.current?.timeScale();
+            if (!ts) return;
+            const range = ts.getVisibleLogicalRange();
+            if (!range) return;
+            const width = ((range.to as number) - (range.from as number)) / 1.4;
+            ts.setVisibleLogicalRange({ from: (range.from as number) + width * 0.3, to: (range.to as number) - width * 0.3 });
+          }}
           title="Zoom in"
           style={zoomBtn}>+</button>
         <button
-          onClick={() => chartRef.current?.timeScale().zoomOut()}
+          onClick={() => {
+            const ts = chartRef.current?.timeScale();
+            if (!ts) return;
+            const range = ts.getVisibleLogicalRange();
+            if (!range) return;
+            const width = ((range.to as number) - (range.from as number)) / 1.4;
+            ts.setVisibleLogicalRange({ from: (range.from as number) - width * 0.3, to: (range.to as number) + width * 0.3 });
+          }}
           title="Zoom out"
           style={zoomBtn}>−</button>
         <button
