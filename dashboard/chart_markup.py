@@ -82,6 +82,13 @@ METHOD_ALLOWED_TYPES: dict[str, set | None] = {
         "KILLZONE", "TURTLE_SOUP", "JUDAS_SWING", "SMT_DIVERGENCE",
         "SILVER_BULLET", "AMD", "SESSION_HL", "PDH_PDL", "WEEKLY_MONTHLY_HL",
     },
+    "SNIPER": {
+        "EMA", "EMA_RIBBON", "VWAP", "ADX", "MACD_LINE", "RSI_LEVEL",
+        "SNIPER_SIGNAL", "SNIPER_SL",
+        "SNIPER_TP1", "SNIPER_TP2", "SNIPER_TP3", "SNIPER_TP4", "SNIPER_TP5",
+        "SNIPER_SCORE", "SNIPER_DASH",
+        "SWING", "BOS", "CHoCH",
+    },
     "ULTRA_CONFLUENCE": None,  # everything
     "INDICATOR": set(),        # indicators only — no markup objects
 }

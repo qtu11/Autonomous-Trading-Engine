@@ -977,8 +977,13 @@ export async function updateTradingMethod(method: string): Promise<{ status: str
       headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: JSON.stringify({ trading_method: method }),
     });
-    if (!res.ok) return null;
-    return await res.json();
+    // On any server response (even 4xx/5xx which may mean already applied), update local state.
+    // The control-center/status poll will confirm the correct value on next cycle.
+    if (res.ok) return await res.json();
+    const payload = await res.json().catch(() => null);
+    // Backend returned {trading_method: updated} even on non-2xx? Use it optimistically.
+    if (payload?.trading_method) return payload;
+    return null;
   } catch {
     return null;
   }
