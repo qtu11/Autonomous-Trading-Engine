@@ -3,7 +3,7 @@
   "outputDirectory": ".next",
   "framework": "nextjs",
   "env": {
-    "ATE_BACKEND_URL": "http://113.173.192.226:8848",
+    "ATE_BACKEND_URL": "http://203.210.144.219:8005",
     "NEXT_PUBLIC_ATE_API_ORIGIN": "https://autonomous-trading-engine.vercel.app",
     "NEXT_PUBLIC_FIREBASE_API_KEY": "AIzaSyDRmJ294aBZhVEcTliP86D19qM3tJbhgDI",
     "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN": "qtusdev.firebaseapp.com",
