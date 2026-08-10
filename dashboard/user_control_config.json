@@ -7,7 +7,7 @@
   "enable_trading": true,
   "active_ai_model": "deepseek-v4-flash-free",
   "custom_model_id": "",
-  "trading_method": "SMC",
+  "trading_method": "SNIPER",
   "gemini_api_key": "enc:v1:QVEuQWI4Uk42TGhPSXk1eFVoZHE3azVpcWVDSUNzTml0ZU5GbFFQeU9sWlJnVlZiNDNyZlE=",
   "claude_api_key": "",
   "deepseek_api_key": "",
@@ -25,5 +25,10 @@
   "max_open_positions": 10,
   "max_spread": 3.35,
   "oauth_test": true,
-  "config_updated_at": "2026-08-09T02:25:21.115133+00:00"
+  "config_updated_at": "2026-08-10T02:57:54.745447+00:00",
+  "mt5_login": 429061361,
+  "mt5_server": "Exness-MT5Real18",
+  "execution_symbol": "XAUUSDm",
+  "execution_timeframe": "M15",
+  "symbol_resolution_reason": "Symbol XAUUSDm có sẵn trên broker (đúng như yêu cầu)."
 }

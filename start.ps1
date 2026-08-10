@@ -154,7 +154,7 @@ if ($ChooseDocker) {
             }
         } catch {}
         try {
-            $resDirect = Invoke-WebRequest -Uri "http://localhost:3001" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue
+            $resDirect = Invoke-WebRequest -Uri "http://localhost:3000" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue
             if ($null -ne $resDirect -and $resDirect.StatusCode -eq 200) {
                 $dockerHealthy = $true
                 break
@@ -174,7 +174,7 @@ if ($ChooseDocker) {
     
     Write-Host "`n[SUCCESS] Docker Stack Services active." -ForegroundColor Green
     Write-Host "  Nginx Proxy (public entry):  $DockerUrl" -ForegroundColor Gray
-    Write-Host "  Next.js Frontend (direct):   http://localhost:3001" -ForegroundColor Gray
+    Write-Host "  Next.js Frontend (direct):   http://localhost:3000" -ForegroundColor Gray
     Write-Host "  FastAPI Backend (direct):    http://localhost:8005" -ForegroundColor Gray
     exit 0
 }
