@@ -1,0 +1,11 @@
+\[working-dir]/
+Cloudlocal/
+dashboard/
+logs/
+scratch/
+docs/
+tests/
+__pycache__/
+*.ex5
+*.bak
+compile.log
