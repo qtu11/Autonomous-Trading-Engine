@@ -96,15 +96,34 @@ export default function TradingChart({
       },
       rightPriceScale: {
         borderColor: 'rgba(255,255,255,0.1)',
-        scaleMargins: { top: 0.1, bottom: 0.2 },
+        scaleMargins: { top: 0.15, bottom: 0.15 },
+        autoScale: true,
       },
       timeScale: {
         borderColor: 'rgba(255,255,255,0.1)',
         timeVisible: true,
         secondsVisible: false,
+        rightOffset: 4,
+        barSpacing: 8,
+        minBarSpacing: 2,
       },
-      handleScroll: true,
-      handleScale: true,
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
+        vertTouchDrag: true,
+      },
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
+        pinch: true,
+      },
+      kineticScroll: {
+        mouse: true,
+        touch: true,
+      },
+      width: containerRef.current.clientWidth,
+      height: containerRef.current.clientHeight,
     });
 
     // v5 API: use addSeries with series definition
@@ -115,6 +134,7 @@ export default function TradingChart({
       borderDownColor: C.bearish,
       wickUpColor: C.bullish,
       wickDownColor: C.bearish,
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
     });
 
     chartRef.current = chart;
@@ -555,6 +575,44 @@ export default function TradingChart({
         ))}
       </div>
 
+      {/* Zoom toolbar — bottom-right, mirrors MT5 zoom/pan/fit buttons */}
+      <div style={{
+        position: 'absolute', bottom: 8, right: 8, zIndex: 10,
+        display: 'flex', flexDirection: 'column', gap: 2,
+        background: 'rgba(5,7,12,0.85)', padding: 4, borderRadius: 4,
+      }}>
+        <button
+          onClick={() => chartRef.current?.timeScale().zoomIn()}
+          title="Zoom in"
+          style={zoomBtn}>+</button>
+        <button
+          onClick={() => chartRef.current?.timeScale().zoomOut()}
+          title="Zoom out"
+          style={zoomBtn}>−</button>
+        <button
+          onClick={() => chartRef.current?.timeScale().fitContent()}
+          title="Fit content"
+          style={zoomBtn}>⤢</button>
+        <button
+          onClick={() => {
+            const ts = chartRef.current?.timeScale();
+            if (!ts) return;
+            const range = ts.getVisibleLogicalRange();
+            if (range) ts.setVisibleLogicalRange({ from: (range.from as number) - 5, to: (range.to as number) + 5 });
+          }}
+          title="Pan left"
+          style={zoomBtn}>‹</button>
+        <button
+          onClick={() => {
+            const ts = chartRef.current?.timeScale();
+            if (!ts) return;
+            const range = ts.getVisibleLogicalRange();
+            if (range) ts.setVisibleLogicalRange({ from: (range.from as number) + 5, to: (range.to as number) - 5 });
+          }}
+          title="Pan right"
+          style={zoomBtn}>›</button>
+      </div>
+
       {/* Loading overlay */}
       {loading && (
         <div style={{
@@ -598,3 +656,16 @@ function LegendItem({ color, label }: { color: string; label: string }) {
     </span>
   );
 }
+
+const zoomBtn: React.CSSProperties = {
+  width: 28,
+  height: 24,
+  background: 'transparent',
+  color: '#94a3b8',
+  border: '1px solid rgba(255,255,255,0.1)',
+  borderRadius: 3,
+  fontSize: 14,
+  fontFamily: 'JetBrains Mono, monospace',
+  cursor: 'pointer',
+  lineHeight: 1,
+};
