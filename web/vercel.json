@@ -12,5 +12,15 @@
     "NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "98060679867",
     "NEXT_PUBLIC_FIREBASE_APP_ID": "1:98060679867:web:563015a0a052b2f432879e",
     "NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID": "G-F4F16X1TW4"
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/backend/:path*",
+      "destination": "http://203.210.144.219:8005/:path*"
+    },
+    {
+      "source": "/api/v1/:path*",
+      "destination": "http://203.210.144.219:8005/api/v1/:path*"
+    }
+  ]
 }
