@@ -2823,6 +2823,464 @@ def get_symbol_spec(symbol: str) -> SymbolSpec | None:
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# AI-NATIVE AUTONOMOUS TRADING ENGINE
+# OpenCode deepseek-v4-flash-free phân tích thị trường thật
+# → quyết định BUY / SELL / WAIT → execute LIVE hoặc DEMO
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _df_to_text_rows(df: pd.DataFrame, n: int = 20) -> str:
+    """Convert last N rows of a OHLCV DataFrame to readable text for AI prompt."""
+    if df is None or df.empty:
+        return "  (no data)"
+    rows = df.tail(n).copy()
+    if "time" in rows.columns:
+        rows["time"] = pd.to_datetime(rows["time"]).dt.strftime("%Y-%m-%d %H:%M")
+    cols = ["time", "open", "high", "low", "close", "tick_volume"]
+    available = [c for c in cols if c in rows.columns]
+    return rows[available].to_string(index=False)
+
+
+def build_ai_trading_prompt(
+    symbol: str,
+    mtf_data: dict[str, pd.DataFrame],
+    tick: Any,
+    account: Any,
+    indicators: dict[str, Any],
+    positions: list,
+    trading_method: str,
+    balance: float,
+    equity: float,
+    margin_free: float,
+) -> tuple[str, str]:
+    """Build system + user prompts for AI trading analysis. Returns (system_prompt, user_prompt)."""
+    vn_now = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S %d/%m/%Y")
+
+    # ── Market Data ────────────────────────────────────────────────────────
+    m15_text = _df_to_text_rows(mtf_data.get("M15"), 20)
+    h1_text  = _df_to_text_rows(mtf_data.get("H1"),  10)
+    h4_text  = _df_to_text_rows(mtf_data.get("H4"),  5)
+    m5_text  = _df_to_text_rows(mtf_data.get("M5"),  20)
+
+    ema20  = indicators.get("ema20")
+    ema50  = indicators.get("ema50")
+    ema200 = indicators.get("ema200")
+    rsi    = indicators.get("rsi")
+    atr    = indicators.get("atr")
+    macd   = indicators.get("macd")
+
+    spread = round(float(tick.ask - tick.bid), 2) if tick else 0
+    pos_summary = "\n".join(
+        f"  #{i+1}: {getattr(p,'type',0)==0 and 'BUY' or 'SELL'} "
+        f"{getattr(p,'volume',0):.2f} @ {getattr(p,'price_open',0):.2f} "
+        f"P/L: {getattr(p,'profit',0):+.2f}"
+        for i, p in enumerate(positions[:3])
+    ) or "  (no open positions)"
+
+    # ── Method context ──────────────────────────────────────────────────────
+    method_note = {
+        "SNIPER": "SNIPER METHOD: EMA9/21 crossover, VWAP, RSI, MACD, ADX, Volume. "
+                  "BUY when EMA9 crosses above EMA21 + RSI>50 + close>VWAP. "
+                  "SELL when EMA9 crosses below EMA21 + RSI<50 + close<VWAP.",
+        "ICT":    "ICT METHOD: Killzones (London 08-09, NY 13-14 UTC+7), OTE 62-79%, "
+                  "Premium/Discount zone, Judas Swing. BUY in Discount zone during killzone. "
+                  "SELL in Premium zone during killzone.",
+        "SMC":    "SMC METHOD: BOS/CHoCH/MSS, BSL/SSL liquidity sweep, OB/FVG, "
+                  "EQH/EQL. BUY after BSL sweep + BOS + bull FVG.",
+        "PRICE_ACTION": "PRICE ACTION: candlestick patterns, support/resistance, "
+                  "trendlines, pivots, triangles. BUY on bullish pin bar / engulfing at S/R.",
+        "ULTRA_CONFLUENCE": "ULTRA CONFLUENCE: All 5 layers must align — "
+                  "HTF bias + Killzone + Liquidity sweep + FVG displacement + OTE entry.",
+    }.get(trading_method.upper(), "DEFAULT METHOD: Trend EMA + RSI confluence.")
+
+    system_prompt = (
+        "Bạn là GOLDQUANT AI Trading System — chuyên gia phân tích XAUUSDm.\n"
+        "Nhiệm vụ: PHÂN TÍCH THỊ TRƯỜNG → QUYẾT ĐỊNH BUY / SELL / WAIT.\n"
+        "Rủi ro: Chỉ risk 1% equity mỗi lệnh. Lot = (Equity × 0.01) / (SL_distance × 100).\n"
+        "Luôn xưng 'tôi' khi phân tích, báo cáo 'chủ tịch' khi kết luận.\n"
+        f"\n{method_note}\n"
+        "\nQUY TẮC VÀNG:\n"
+        "1. SL = Entry ± 1.5×ATR | TP = Entry ± 3×ATR (RRR 1:2)\n"
+        "2. Chỉ BUY khi trend tăng (EMA9>EMA21 hoặc price>EMA50) VÀ RSI 50-70.\n"
+        "3. Chỉ SELL khi trend giảm (EMA9<EMA21 hoặc price<EMA50) VÀ RSI 30-50.\n"
+        "4. WAIT khi sideway, spread > 30 points XAUUSD, hoặc news high impact sắp đến.\n"
+        "5. Không trade ngược trend lớn (H4/D1).\n"
+        "6. Max 3 vị thế cùng lúc, tổng risk basket không quá 5% equity.\n"
+        "\nPHÂN TÍCH TỪNG BƯỚC:\n"
+        "1. Đọc H4 + H1 → xác định trend lớn\n"
+        "2. Đọc M15 + M5 → tìm entry point\n"
+        "3. Kiểm tra EMA, RSI, MACD, VWAP\n"
+        "4. Tính SL và TP theo ATR\n"
+        "5. Tính lot size theo công thức rủi ro 1%\n"
+        "6. ĐƯA RA QUYẾT ĐỊNH: BUY / SELL / WAIT\n"
+        "\nOUTPUT FORMAT BẮT BUỘC (chỉ JSON, không thêm gì khác):\n"
+        "{\n"
+        '  "decision": "BUY" | "SELL" | "WAIT",\n'
+        '  "confidence": 0-100,\n'
+        '  "entry": float (giá entry, 3 decimals),\n'
+        '  "stop_loss": float (SL, 3 decimals),\n'
+        '  "take_profit": float (TP, 3 decimals),\n'
+        '  "lot_size": float (volume lot, 2 decimals),\n'
+        '  "reason": "tóm tắt lý do quyết định bằng tiếng Việt, 1-2 câu",\n'
+        '  "rrr": "1:2" | "1:3" | "1:1.5" | "N/A",\n'
+        '  "wait_reason": "lý do WAIT bằng tiếng Việt, 1 câu (chỉ khi decision=WAIT)"\n'
+        "}\n"
+        "\nQUAN TRỌNG: Chỉ trả JSON thuần, không markdown, không giải thích gì thêm."
+    )
+
+    user_prompt = (
+        f"PHÂN TÍCH THỊ TRƯỜNG XAUUSDM — {vn_now} (UTC+7)\n"
+        f"{'='*60}\n"
+        f"\n📊 TÀI KHOẢN:\n"
+        f"  Balance: ${balance:,.2f} | Equity: ${equity:,.2f} | Margin Free: ${margin_free:,.2f}\n"
+        f"  Spread: {spread:.1f} points | Symbol: {symbol}\n"
+        f"  Open Positions: {len(positions)} | Max: 3\n"
+        f"\n📈 CHỈ BÁO KỸ THUẬT (M15):\n"
+        f"  EMA20={ema20}, EMA50={ema50}, EMA200={ema200}\n"
+        f"  RSI(14)={rsi}, ATR(14)={atr}, MACD={macd}\n"
+        f"\n📉 DỮ LIỆU H4 (trend lớn):\n{h4_text}\n"
+        f"\n📊 DỮ LIỆU H1 (trend trung):\n{h1_text}\n"
+        f"\n📊 DỮ LIỆU M15 (entry):\n{m15_text}\n"
+        f"\n📊 DỮ LIỆU M5 (entry nhanh):\n{m5_text}\n"
+        f"\n💼 VỊ THẾ ĐANG MỞ:\n{pos_summary}\n"
+        f"\n{'='*60}\n"
+        f"Phương pháp: {trading_method}\n"
+        f"Nhiệm vụ: Đọc dữ liệu trên → phân tích → đưa ra quyết định BUY/SELL/WAIT.\n"
+        f"Chỉ trả JSON thuần túy, không markdown code block, không giải thích gì thêm."
+    )
+    return system_prompt, user_prompt
+
+
+def parse_ai_trade_decision(raw_text: str) -> dict | None:
+    """Parse AI response into trade decision dict. Returns None if parse fails."""
+    try:
+        text = raw_text.strip()
+        # Strip markdown code fences if present
+        if text.startswith("```"):
+            lines = text.splitlines()
+            text = "\n".join(lines[1:] if lines[0].startswith("```") else lines)
+            text = text.rstrip("`").strip()
+        # Try direct JSON parse
+        data = json.loads(text)
+        required = ("decision", "confidence", "entry", "stop_loss", "take_profit", "lot_size", "reason")
+        if not all(k in data for k in required):
+            return None
+        if data["decision"] not in ("BUY", "SELL", "WAIT"):
+            return None
+        return {
+            "decision":    data["decision"],
+            "confidence": max(0, min(100, int(data["confidence"]))),
+            "entry":      round(float(data["entry"]), 3),
+            "stop_loss":  round(float(data["stop_loss"]), 3),
+            "take_profit": round(float(data["take_profit"]), 3),
+            "lot_size":   round(float(data["lot_size"]), 2),
+            "reason":     str(data.get("reason", "")),
+            "rrr":         str(data.get("rrr", "N/A")),
+            "wait_reason": str(data.get("wait_reason", "")),
+        }
+    except Exception:
+        # Fallback: try extracting JSON from within text
+        import re
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            try:
+                data = json.loads(m.group())
+                return parse_ai_trade_decision(json.dumps(data))
+            except Exception:
+                pass
+        return None
+
+
+def issue_ai_trade_command(is_live: bool = True) -> dict[str, Any]:
+    """
+    AI-native autonomous trading command.
+    1. Fetch MT5 multi-timeframe data
+    2. Build AI prompt with real market data
+    3. Call OpenCode deepseek-v4-flash-free
+    4. Parse AI decision
+    5. Evaluate risk (lot, margin, basket)
+    6. Execute LIVE (if is_live=True) or DEMO (if is_live=False)
+    Returns dict matching issue_demo_command() schema so _ai_decision_loop() works unchanged.
+    """
+    global TRADING_METHOD
+
+    mode_label = "LIVE" if is_live else "DEMO"
+    armed = LIVE_ARMED if is_live else DEMO_ARMED
+
+    if not armed:
+        return {
+            "status": "SKIPPED",
+            "reason_codes": [f"REJECT_{mode_label}_NOT_ARMED"],
+            "command": None, "pos_count": 0, "total_pnl": 0.0,
+            "indicators": {}, "proposal": {},
+        }
+
+    if mt5 is None or not (mt5.terminal_info() if mt5 else False):
+        return {
+            "status": "SKIPPED",
+            "reason_codes": ["REJECT_MT5_UNAVAILABLE"],
+            "command": None, "pos_count": 0, "total_pnl": 0.0,
+            "indicators": {}, "proposal": {},
+        }
+
+    tick = mt5.symbol_info_tick(EXECUTION_SYMBOL)
+    account = mt5.account_info()
+    spec = _get_symbol_spec(EXECUTION_SYMBOL)
+    if tick is None or account is None or spec is None:
+        return {
+            "status": "SKIPPED",
+            "reason_codes": ["REJECT_MARKET_DATA_UNAVAILABLE"],
+            "command": None, "pos_count": 0, "total_pnl": 0.0,
+            "indicators": {}, "proposal": {},
+        }
+
+    indicators = get_technical_indicators(EXECUTION_SYMBOL)
+    mtf_data = fetch_mt5_multi_timeframe(EXECUTION_SYMBOL)
+    positions = list(mt5.positions_get(symbol=EXECUTION_SYMBOL) or [])
+    balance    = float(account.balance)
+    equity     = float(account.equity)
+    margin_free = float(account.margin_free)
+
+    system_prompt, user_prompt = build_ai_trading_prompt(
+        symbol=EXECUTION_SYMBOL,
+        mtf_data=mtf_data,
+        tick=tick,
+        account=account,
+        indicators=indicators,
+        positions=positions,
+        trading_method=TRADING_METHOD,
+        balance=balance,
+        equity=equity,
+        margin_free=margin_free,
+    )
+
+    raw_ai, provider_name, model_used, fallback_used = call_multi_ai_completion(
+        system_prompt=system_prompt,
+        user_msg=user_prompt,
+        preferred_model="deepseek-v4-flash-free",
+        max_tokens=1024,
+    )
+
+    ai_decision = parse_ai_trade_decision(raw_ai) if raw_ai else None
+
+    if ai_decision is None or ai_decision["decision"] == "WAIT":
+        reason = ai_decision["wait_reason"] if ai_decision else "AI_RESPONSE_EMPTY"
+        log_event(LogEvent.AI_RESPONSE, component="ai-native",
+                  result="WAIT", reason=reason,
+                  provider=provider_name, model=model_used)
+        return {
+            "status": "WAIT",
+            "reason_codes": [reason or "AI_WAIT_NO_SIGNAL"],
+            "command": None,
+            "pos_count": len(positions),
+            "total_pnl": sum(float(getattr(p, "profit", 0)) for p in positions),
+            "indicators": indicators,
+            "proposal": {},
+            "ai_decision": ai_decision,
+        }
+
+    action_str = ai_decision["decision"]
+    action_enum = SignalAction.BUY if action_str == "BUY" else SignalAction.SELL
+
+    # Build DecisionProposal from AI decision
+    proposal = DecisionProposal(
+        action=action_enum,
+        symbol=EXECUTION_SYMBOL,
+        timeframe="M15",
+        confidence=ai_decision["confidence"],
+        entry=float(ai_decision["entry"]),
+        stop_loss=float(ai_decision["stop_loss"]),
+        take_profit=float(ai_decision["take_profit"]),
+        reason_codes=(f"AI_{action_str}", ai_decision["reason"], ai_decision["rrr"]),
+        strategy_version=f"AI-NATIVE-{TRADING_METHOD}",
+        created_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+    # ── Risk evaluation ──────────────────────────────────────────────────────
+    from risk_gate import (
+        AccountSnapshot, SymbolSpec as RSSymbolSpec,
+        RiskPolicy, evaluate_risk,
+        compute_dca_volume, cap_volume_to_basket_risk,
+        DCA_DEFAULT_MAX_LOT, MAX_BASKET_LOSS_FRACTION,
+    )
+
+    rs_spec = RSSymbolSpec(
+        symbol=EXECUTION_SYMBOL,
+        volume_min=float(spec.volume_min),
+        volume_max=float(spec.volume_max),
+        volume_step=float(spec.volume_step),
+        tick_size=float(spec.trade_tick_size),
+        tick_value=float(spec.trade_tick_value),
+        max_spread=30.0,
+    )
+    rs_snapshot = AccountSnapshot(
+        equity=float(account.equity),
+        margin_free=float(account.margin_free),
+        daily_realized_pnl=0.0,
+    )
+    rs_policy = RiskPolicy(execution_enabled=True)
+
+    pos_count = len(positions)
+    total_pnl  = sum(float(getattr(p, "profit", 0)) for p in positions)
+    decision   = evaluate_risk(
+        proposal=proposal,
+        account=rs_snapshot,
+        spec=rs_spec,
+        bid=float(tick.bid),
+        ask=float(tick.ask),
+        open_position_count=pos_count,
+        policy=rs_policy,
+    )
+
+    if not decision.approved or decision.volume is None:
+        log_event(LogEvent.RISK_REJECTED, component="ai-native",
+                  action=action_str, reasons=list(decision.reason_codes))
+        BRAIN.record_decision(
+            strategy_version=f"AI-NATIVE-{TRADING_METHOD}",
+            trading_method=TRADING_METHOD,
+            symbol=EXECUTION_SYMBOL, timeframe="M15",
+            action=action_str,
+            confidence=ai_decision["confidence"],
+            entry=ai_decision["entry"],
+            stop_loss=ai_decision["stop_loss"],
+            take_profit=ai_decision["take_profit"],
+            volume=None,
+            reason_codes=list(decision.reason_codes),
+            indicators={k: indicators.get(k) for k in ("ema20", "ema50", "ema200", "rsi", "atr")},
+            account={"equity": equity, "margin_free": margin_free},
+            context={"open_positions": pos_count, "spread": round(float(tick.ask - tick.bid), 2)},
+            status="REJECTED",
+            decision_detail=f"AI decision: {ai_decision['reason']} | Risk gate: {', '.join(decision.reason_codes)}",
+        )
+        return {
+            "status": "REJECTED",
+            "reason_codes": list(decision.reason_codes),
+            "command": None,
+            "pos_count": pos_count,
+            "total_pnl": total_pnl,
+            "indicators": indicators,
+            "proposal": {
+                "action": action_str,
+                "entry": ai_decision["entry"],
+                "stop_loss": ai_decision["stop_loss"],
+                "take_profit": ai_decision["take_profit"],
+                "volume": None,
+                "confidence": ai_decision["confidence"],
+            },
+            "ai_decision": ai_decision,
+        }
+
+    # ── Lot sizing & DCA ─────────────────────────────────────────────────────
+    base_vol = decision.volume
+    prev_pos = positions
+    same_dir = True
+    if prev_pos:
+        last = prev_pos[-1]
+        last_is_buy = (getattr(last, "type", 0) == 0)
+        same_dir = last_is_buy == (action_str == "BUY")
+        dca_vol = compute_dca_volume(
+            base_volume=base_vol,
+            entry_index=pos_count,
+            same_direction=same_dir,
+            spec=rs_spec,
+            volume_max=DCA_DEFAULT_MAX_LOT,
+        )
+        if dca_vol is None:
+            return {
+                "status": "REJECTED",
+                "reason_codes": ["REJECT_DCA_VOLUME"],
+                "command": None, "pos_count": pos_count, "total_pnl": total_pnl,
+                "indicators": indicators, "proposal": {},
+                "ai_decision": ai_decision,
+            }
+        base_vol = dca_vol
+
+    cap_vol = cap_volume_to_basket_risk(
+        desired_volume=base_vol,
+        existing_lot_volumes=[float(getattr(p, "volume", 0)) for p in prev_pos],
+        risk_per_lot=(abs(float(proposal.entry or 0) - float(proposal.stop_loss or 0))
+                      / spec.tick_size * spec.trade_tick_value),
+        equity=equity,
+        spec=rs_spec,
+        max_basket_loss_fraction=MAX_BASKET_LOSS_FRACTION,
+    )
+    if cap_vol is None:
+        return {
+            "status": "REJECTED",
+            "reason_codes": ["REJECT_BASKET_RISK"],
+            "command": None, "pos_count": pos_count, "total_pnl": total_pnl,
+            "indicators": indicators, "proposal": {},
+            "ai_decision": ai_decision,
+        }
+    effective_vol = cap_vol
+
+    # ── Issue command to MT5 ────────────────────────────────────────────────
+    key_base = f"ai-native-v1:{'LIVE' if is_live else 'DEMO'}:{EXECUTION_SYMBOL}:{ATE_MAGIC_NUMBER}:{action_str}"
+    command = COMMAND_STORE.create_command(
+        idempotency_key=key_base,
+        action=action_str,
+        symbol=EXECUTION_SYMBOL,
+        magic=ATE_MAGIC_NUMBER,
+        volume=effective_vol,
+        stop_loss=ai_decision["stop_loss"],
+        take_profit=ai_decision["take_profit"],
+        reason=f"AI:{ai_decision['reason']}|RRR:{ai_decision['rrr']}|Conf:{ai_decision['confidence']}%",
+        ttl_seconds=DEMO_COMMAND_TTL,
+    )
+
+    # Record brain
+    BRAIN.record_decision(
+        strategy_version=f"AI-NATIVE-{TRADING_METHOD}",
+        trading_method=TRADING_METHOD,
+        symbol=EXECUTION_SYMBOL, timeframe="M15",
+        action=action_str,
+        confidence=ai_decision["confidence"],
+        entry=ai_decision["entry"],
+        stop_loss=ai_decision["stop_loss"],
+        take_profit=ai_decision["take_profit"],
+        volume=effective_vol,
+        reason_codes=[f"AI_{action_str}", ai_decision["reason"], ai_decision["rrr"]],
+        indicators={k: indicators.get(k) for k in ("ema20", "ema50", "ema200", "rsi", "atr")},
+        account={"equity": equity, "margin_free": margin_free},
+        context={
+            "open_positions": pos_count,
+            "spread": round(float(tick.ask - tick.bid), 2),
+            "provider": provider_name,
+            "model": model_used,
+            "ai_confidence": ai_decision["confidence"],
+            "ai_reason": ai_decision["reason"],
+        },
+        status="ISSUED",
+        command_id=command.get("command_id"),
+        decision_detail=f"AI:{ai_decision['reason']} | Lot:{effective_vol} | RRR:{ai_decision['rrr']}",
+    )
+
+    log_event(LogEvent.ORDER_SENT, component="ai-native",
+              mode=mode_label, action=action_str, volume=effective_vol,
+              entry=ai_decision["entry"], sl=ai_decision["stop_loss"],
+              tp=ai_decision["take_profit"], provider=provider_name)
+
+    return {
+        "status": "ISSUED",
+        "reason_codes": [f"AI_{action_str}", ai_decision["reason"], ai_decision["rrr"]],
+        "command": command,
+        "pos_count": pos_count,
+        "total_pnl": total_pnl,
+        "indicators": indicators,
+        "proposal": {
+            "action": action_str,
+            "entry": ai_decision["entry"],
+            "stop_loss": ai_decision["stop_loss"],
+            "take_profit": ai_decision["take_profit"],
+            "volume": effective_vol,
+            "confidence": ai_decision["confidence"],
+            "rrr": ai_decision["rrr"],
+            "ai_reason": ai_decision["reason"],
+        },
+        "ai_decision": ai_decision,
+    }
+
+
 def issue_demo_command() -> dict[str, Any]:
     ready, reason = demo_execution_status()
     if not ready:
@@ -3698,7 +4156,9 @@ async def _ai_decision_loop() -> None:
                 ready, reason = execution_readiness(EXECUTION_MODE)
                 if ready:
                     log_event(LogEvent.AI_REQUEST, component="ai-loop", symbol=EXECUTION_SYMBOL)
-                    result = await asyncio.to_thread(issue_demo_command)
+                    # ── AI-NATIVE: OpenCode analyzes market → decides BUY/SELL/WAIT → executes ──
+                    is_live = (EXECUTION_MODE == "LIVE")
+                    result = await asyncio.to_thread(issue_ai_trade_command, is_live=is_live)
                     status_str = result.get("status")
                     log_event(
                         LogEvent.AI_RESPONSE,
@@ -3720,6 +4180,7 @@ async def _ai_decision_loop() -> None:
                         cmd_info = result.get("command") or {}
                         ind_info = result.get("indicators") or {}
                         prop_info = result.get("proposal") or {}
+                        ai_dec  = result.get("ai_decision") or {}
                         raw_positions = (mt5.positions_get(symbol=EXECUTION_SYMBOL) or mt5.positions_get() or [])
                         active_cnt = len(raw_positions)
 
@@ -3746,6 +4207,26 @@ async def _ai_decision_loop() -> None:
                             f"└─ Lý do kích hoạt: " + ", ".join(reason_codes)
                         )
 
+                        mode_tag = "LIVE" if is_live else "DEMO"
+                        entry_price = prop_info.get("entry") or ai_dec.get("entry") or 0
+                        rrr = prop_info.get("rrr") or ai_dec.get("rrr") or "N/A"
+                        ai_reason = ai_dec.get("reason") or ", ".join(reason_codes)
+
+                        tg_msg = (
+                            f"<b>🤖 AI-NATIVE AUTONOMOUS TRADE [{mode_tag}]</b>\n"
+                            f"────────────────────────\n"
+                            f"<b>Chủ tịch:</b> Nguyễn Quang Tú\n"
+                            f"🆔 <b>Symbol:</b> {EXECUTION_SYMBOL} | <b>Method:</b> {TRADING_METHOD}\n"
+                            f"📊 <b>Hành động:</b> <b>{cmd_info.get('action')}</b>\n"
+                            f"💰 <b>Entry:</b> <code>{entry_price:.3f}</code> | <b>Lot:</b> <code>{cmd_info.get('volume')}</code>\n"
+                            f"🛡️ <b>SL:</b> <code>{cmd_info.get('stop_loss')}</code> | <b>TP:</b> <code>{cmd_info.get('take_profit')}</code>\n"
+                            f"📐 <b>RRR:</b> {rrr} | <b>Confidence:</b> {prop_info.get('confidence') or ai_dec.get('confidence') or 'N/A'}%\n"
+                            f"────────────────────────\n"
+                            f"🧠 <b>AI Analysis:</b> {ai_reason}\n"
+                            f"📊 <b>Vị thế #{active_cnt}:</b> SL/TP đã set, lệnh vào MT5 Ledger.\n"
+                        )
+                        send_telegram_alert(tg_msg)
+
                         if active_cnt <= 1:
                             append_chat_message("ai", (
                                 f"[AUTO TRADE] Báo cáo anh Tú: Phát hiện cơ hội bứt phá! Đặt lệnh đầu tiên "
@@ -3762,6 +4243,16 @@ async def _ai_decision_loop() -> None:
                                 f"Lệnh đã được đẩy lên MT5 Ledger.\n"
                                 f"{analysis_str}"
                             ))
+                    elif status_str == "WAIT":
+                        # AI quyết định chờ — log để monitor nhưng không alert
+                        log_event(LogEvent.AI_RESPONSE, component="ai-loop", result="WAIT",
+                                  reason=result.get("reason_codes"))
+                    elif status_str == "REJECTED":
+                        # Bị risk gate từ chối
+                        append_chat_message("ai", (
+                            f"[AI AUTO TRADE] Risk gate từ chối: {', '.join(result.get('reason_codes', []))}\n"
+                            f"AI decision: {ai_dec.get('reason', 'N/A')}"
+                        ))
                 else:
                     log_event(LogEvent.AI_RESPONSE, component="ai-loop", result="SKIPPED", reason=reason)
         except Exception as exc:
