@@ -118,17 +118,6 @@ export async function registerEASymbol(payload: { symbol: string; company?: stri
 }
 
 
-// FIX LỖI 4: EA Symbol Registration - called automatically on page load
-// When EA connects, it registers its symbol, and we update watchlist
-export async function registerEASymbol(payload: { 
-  symbol: string; 
-  company?: string; 
-  broker?: string; 
-  account_id?: number; 
-  executor_id?: string 
-}) {
-  return postJson<{ status: string; symbol: string }>(`${API_BASE}/api/v1/symbol/register`, payload);
-}
 
 // FIX LỖI 4: Subscribe to symbol registration events from WebSocket/backend
 export function subscribeToSymbolRegistration(callback: (data: { symbol: string; company: string; broker: string }) => void) {
