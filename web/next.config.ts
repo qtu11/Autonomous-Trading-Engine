@@ -1,63 +1,64 @@
 import type { NextConfig } from 'next';
 
 /*
- * ATE Architecture (Aug 2026):
+ * ATE Architecture:
  * 
- * URLs:
+ * Canonical URL Structure (Vercel Deployment):
  *   Website : https://autonomous-trading-engine.vercel.app/
  *   Backend : https://autonomous-trading-engine.vercel.app/backend
- *   API/v1 : https://autonomous-trading-engine.vercel.app/api/v1
+ *   API/v1  : https://autonomous-trading-engine.vercel.app/api/v1
  * 
- * Frontend calls API via:
- *   1. Next.js API routes (web/pages/api/*) - PROXY to ATE_BACKEND_URL
- *   2. Direct browser calls using NEXT_PUBLIC_ATE_API_ORIGIN
- *   3. Rewrites for /backend/* and /api/v1/* fallback
+ * Flow:
+ *   Browser → Vercel (Frontend) → Vercel Backend (server.py)
+ *   MT5 EA → Vercel /api/v1/* (server.py handles routing)
  * 
- * MT5 EA sends to: /api/v1/* → proxied via Next.js
+ * Local Development:
+ *   ATE_BACKEND_URL=http://127.0.0.1:8005 (dashboard server)
  */
+
+const ATE_BACKEND_URL = process.env.ATE_BACKEND_URL || 'https://autonomous-trading-engine.vercel.app/backend';
+const ATE_MT5_API    = process.env.ATE_MT5_API    || 'https://autonomous-trading-engine.vercel.app/api/v1';
 
 const nextConfig: NextConfig = {
   output: process.env.VERCEL ? undefined : 'standalone',
   devIndicators: false,
 
   async rewrites() {
-    const backendUrl = process.env.ATE_BACKEND_URL || 'https://autonomous-trading-engine.vercel.app/backend';
-    
     return [
-      // MT5 EA sends to /api/v1/* — rewrite to backend
+      // MT5 EA sends to /api/v1/* — rewrite to backend server
       {
         source: '/api/v1/telemetry',
-        destination: `${backendUrl}/api/v1/telemetry`,
+        destination: `${ATE_MT5_API}/telemetry`,
       },
       {
         source: '/api/v1/bridge/commands/claim',
-        destination: `${backendUrl}/api/v1/bridge/commands/claim`,
+        destination: `${ATE_MT5_API}/bridge/commands/claim`,
       },
       {
         source: '/api/v1/bridge/candles',
-        destination: `${backendUrl}/api/v1/bridge/candles`,
+        destination: `${ATE_MT5_API}/bridge/candles`,
       },
       {
         source: '/api/v1/bridge/markup',
-        destination: `${backendUrl}/api/v1/bridge/markup`,
+        destination: `${ATE_MT5_API}/bridge/markup`,
       },
       {
         source: '/api/v1/bridge/calendar',
-        destination: `${backendUrl}/api/v1/bridge/calendar`,
+        destination: `${ATE_MT5_API}/bridge/calendar`,
       },
       {
         source: '/api/v1/bridge/commands/:commandId/receipt',
-        destination: `${backendUrl}/api/v1/bridge/commands/:commandId/receipt`,
+        destination: `${ATE_MT5_API}/bridge/commands/:commandId/receipt`,
       },
-      // Standard browser API proxy (fallback for paths without route files)
+      // Standard API proxy (Vercel → backend)
       {
         source: '/api/:path*',
-        destination: `${backendUrl}/api/:path*`,
+        destination: `${ATE_BACKEND_URL}/api/:path*`,
       },
-      // /backend/* proxy
+      // /backend/* proxy (self-referential on Vercel — server.py handles)
       {
         source: '/backend/:path*',
-        destination: `${backendUrl}/api/:path*`,
+        destination: `${ATE_BACKEND_URL}/:path*`,
       },
     ];
   },

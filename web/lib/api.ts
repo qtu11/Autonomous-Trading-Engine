@@ -1,993 +1,107 @@
-export interface Candle {
-  t: string;
-  ts?: string;
-  o: number;
-  h: number;
-  l: number;
-  c: number;
-  v: number;
-}
+// API client for ATE Trading Desk
 
-export interface MarkupItem {
-  type: string;
-  direction?: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-  top?: number;
-  bottom?: number;
-  price?: number;
-  time_start?: string;
-  time_end?: string;
-  index?: number;
-  label?: string;
-  status?: string;
-  strength?: number;
-  // Sniper extended
-  bull_pct?: number;
-  bear_pct?: number;
-  bias?: string;
-  factors?: Record<string, boolean>;
-  adx?: number;
-  plus_di?: number;
-  minus_di?: number;
-  strong?: boolean;
-  macd?: number;
-  signal?: number;
-  hist?: number;
-  value?: number;
-  series?: number[];
-  ema9_series?: number[];
-  ema21_series?: number[];
-  // SMC/ICT extended
-  is_london?: boolean;
-  is_ny?: boolean;
-  is_asian?: boolean;
-  touches?: number;
-  slope?: number;
-  confluence?: boolean;
-  ce?: number;
-}
-
-export interface MarkupResponse {
-  symbol?: string;
-  method?: string;
-  generated_at?: string;
-  objects: MarkupItem[];
-  advanced_counts?: Record<string, number>;
-  confluence?: {
-    score: number;
-    direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
-    signal: 'BUY' | 'SELL' | 'WAIT';
-    factors: Array<{ reason: string; direction: string; weight: number }>;
-    rrr?: number | null;
-    entry?: number | null;
-    sl?: number | null;
-    tp?: number | null;
-    method?: string;
-  };
-}
-
-export interface TechnicalIndicators {
-  data_status?: 'LIVE_VERIFIED' | 'UNAVAILABLE';
-  rsi: number;
-  atr: number;
-  macd: string;
-  stoch: string;
-  ema20: number;
-  ema50: number;
-  ema200: number;
-  volume: number;
-  vol_ratio: string;
-  pivot: number;
-  r1: number;
-  r2: number;
-  s1: number;
-  s2: number;
-}
-
-export interface EquityPoint {
-  i: number;
-  v: number;
-}
-
-export interface AccountPerformance {
-  data_status?: 'LIVE_VERIFIED' | 'NO_CLOSED_TRADES' | 'UNAVAILABLE';
-  sample_size?: number;
-  period_days?: number;
-  win_rate: string | number | null;
-  profit_factor: string | number | null;
-  max_drawdown: string | number | null;
-  recovery_factor: string | number | null;
-  best_trade: string | number | null;
-  worst_trade: string | number | null;
-  equity_curve?: EquityPoint[];
-}
-
-export interface AISignalData {
-  primary_signal: 'BUY' | 'SELL' | 'NO_TRADE';
-  confidence: string;
-  win_prob?: string;
-  rr_ratio?: string;
-  suggested_lot?: string;
-  entry_zone?: string;
-  stop_loss?: string;
-  take_profit?: string;
-  rec_sl_pips?: string;
-  rec_tp_pips?: string;
-  reason_codes?: string[];
-  data_status?: 'LIVE_VERIFIED' | 'STALE' | 'UNAVAILABLE';
-}
-
-export interface NewsItem {
-  id?: string;
-  day?: string;
-  date?: string;
-  time: string;
-  currency?: string;
-  title: string;
-  impact: 'HIGH' | 'MED' | 'LOW';
-  actual?: string;
-  forecast?: string;
-  previous?: string;
-  status?: string;
-  countdown?: string;
-}
-
-export interface Position {
-  id: string;
-  ticket?: number;
-  type: 'BUY' | 'SELL';
-  lot: number;
-  entry: number;
-  sl: number;
-  tp: number;
-  profit: number;
-  pips: number;
-}
-
-export interface TradeHistory {
-  time: string;
-  type: 'BUY' | 'SELL';
-  lot: number;
-  symbol: string;
-  price: number;
-  sl: number;
-  tp: number;
-  pl: number;
-  reason: string;
-}
-
-export interface PendingOrder {
-  ticket: number;
-  symbol: string;
-  type: 'BUY_LIMIT' | 'SELL_LIMIT' | 'BUY_STOP' | 'SELL_STOP' | string;
-  price: number;
-  sl: number;
-  tp: number;
-  volume: number;
-  expiration: string;
-}
-
-export interface LogEntry {
-  ts: string;
-  level: string;
-  event: string;
-  component: string;
-  message: string;
-}
-
-export interface TodayPerformance {
-  realized_pl: number;
-  trades_today: number;
-  wins: number;
-  losses: number;
-  best_trade_today: number;
-  worst_trade_today: number;
-}
-
-export interface ChatMsg {
-  role: 'ai' | 'user';
-  text: string;
-  time: string;
-}
-
-export interface SystemStatus {
-  data_status?: 'LIVE_VERIFIED' | 'UNAVAILABLE';
-  generated_at?: string;
-  server?: string;
-  mt5_connected: boolean;
-  balance: number;
-  equity: number;
-  margin: number;
-  margin_free: number;
-  floating_pnl: number;
-  open_positions: number;
-  current_ask: number;
-  current_bid: number;
-  current_spread: number;
-  ai_score: number;
-  cpu: number;
-  ram: string;
-  account_id: number;
-  currency: string;
-  leverage: number;
-  broker: string;
-  margin_level: number;
-  latency_ms: number;
-  today_performance?: TodayPerformance;
-  indicators?: TechnicalIndicators;
-  performance?: AccountPerformance;
-  ai_signal?: AISignalData;
-  news?: NewsItem[];
-}
-
-export interface ControlCenterStatus {
-  generated_at: string;
-  status: 'READY' | 'BLOCKED';
-  execution: { mode: string; browser_execution_enabled: boolean; execution_locked: boolean; symbol: string; magic: number; command_ttl_seconds: number };
-  safeguards: { kill_switch_active: boolean; demo_armed: boolean; live_armed?: boolean; trading_enabled?: boolean; ai_auto_loop?: boolean; bridge_auth_configured: boolean; operator_auth_configured: boolean; risk_policy_execution_enabled: boolean; trading_method?: string; force_unlock?: boolean };
-  readiness: { ready: boolean; reason_code: string };
-  account: { mt5_connected: boolean; trade_mode: string; identity_matches_expected: boolean; login?: number; server?: string; balance?: number; equity?: number; leverage?: number; currency?: string };
-  bridge: { status: string; mt5_connected: boolean };
-  risk: { profile_found: boolean; policy_version: string; risk_per_trade_fraction: number; max_daily_loss_fraction: number; max_open_positions: number; max_spread: number | null };
-  command_ledger: { available: boolean; counts: Record<string, number>; last_command: { state: string; created_at: string; claimed_at: string | null; executed_at: string | null; retcode: number | null } | null };
-  data_sources: { mt5: string; ai_signal: string; performance: string };
-  realtime?: { ws_clients: number; ea_online: boolean; ea_last_heartbeat: string | null; calendar_status: string };
-  telegram?: { bot_token: string; chat_id: string; enabled: boolean };
-}
-
-// Sử dụng relative path - Next.js API routes sẽ proxy đến backend
 const API_BASE = '';
 
-export function adminAuthHeaders(): Record<string, string> {
+function adminHeaders(): Record<string, string> {
   try {
     const token = localStorage.getItem('quantai_auth_token');
     return token ? { Authorization: `Bearer ${token}` } : {};
-  } catch {
-    return {};
-  }
+  } catch { return {}; }
 }
 
-export type RequestOptions = { signal?: AbortSignal };
+// Types
+export interface Candle { t: string; o: number; h: number; l: number; c: number; v: number; }
+export interface Position { id: string; ticket?: number; type: 'BUY' | 'SELL' | string; lot: number; entry: number; sl: number; tp: number; profit: number; pips: number; }
+export interface TradeHistory { time?: string; type: 'BUY' | 'SELL' | string; lot: number; symbol: string; price?: number; sl: number; tp: number; pl: number; reason: string; }
+export interface PendingOrder { ticket: number; symbol: string; type: string; price: number; sl: number; tp: number; volume: number; expiration: string; }
+export interface LogEntry { ts?: string; level: string; event?: string; component?: string; message: string; }
+export interface ChatMsg { role: 'ai' | 'user'; text: string; time: string; }
+export interface TechnicalIndicators { rsi: number; atr: number; macd: string; stoch: string; ema20: number; ema50: number; ema200: number; volume: number; }
+export interface ControlCenterStatus { generated_at: string; execution: { mode: string; browser_execution_enabled: boolean; symbol: string; }; safeguards: { kill_switch_active: boolean; demo_armed: boolean; ai_auto_loop?: boolean; trading_method?: string; }; account: { mt5_connected: boolean; login?: number; balance?: number; equity?: number; }; bridge: { mt5_connected: boolean; status: string; }; risk: { risk_per_trade_fraction: number; max_open_positions: number; }; }
+export interface BrainState { strategies: Array<{ strategy_version: string; status: string; wins: number; losses: number; win_rate: number | null; total_pnl: number; }>; recent_decisions: Array<{ decision_id: string; ts: string; action: string; confidence: number; entry: number | null; stop_loss: number | null; take_profit: number | null; volume: number | null; reason_codes: string[]; status: string; order_ticket: number | null; }>; recent_evaluations: Array<{ decision_id: string; order_ticket: number; closed_at: string; exit_price: number; net_profit: number; r_multiple: number; outcome: string; exit_reason: string; }>; }
+export interface BrainAdjustment { adjustment_id: string; decision_id: string; strategy_version: string; kind: string; params: Record<string, unknown>; reason: string; status: string; created_at: string; applied_at: string | null; }
+export interface MarkupItem {
+  label?: string; type: string; direction?: 'BULLISH' | 'BEARISH' | 'NEUTRAL'; top?: number; bottom?: number; price?: number; }
+export interface MarkupResponse {
+  advanced_counts?: Record<string, number>; symbol?: string; method?: string; objects: MarkupItem[]; confluence?: { score: number; direction: 'BULLISH' | 'BEARISH' | 'NEUTRAL'; signal: 'BUY' | 'SELL' | 'WAIT'; factors: Array<{ reason: string; direction: string; weight: number }>; rrr?: number | null; entry?: number | null; sl?: number | null; tp?: number | null; }; }
+export interface EconomicEvent { id: string; title: string; country: string; currency: string; impact: 'LOW' | 'MEDIUM' | 'HIGH'; datetime: string; forecast: string; previous: string; actual: string | null; unit: string; source: string; description: string; category: string; status: 'upcoming' | 'live' | 'released'; }
+export interface NewsAnalysisResponse { status: string; title: string; analysis: string; recommendation: 'BUY' | 'SELL' | 'HOLD'; }
+export interface AIConfig { active_model: string; trading_method?: string; available_models?: Array<{ id: string; name: string; provider: string; }>; }
 
-async function readJson<T>(url: string, options?: RequestOptions): Promise<T | null> {
+// HTTP helpers
+async function getJson<T>(url: string): Promise<T | null> {
   try {
-    const res = await fetch(url, { cache: 'no-store', signal: options?.signal });
+    const res = await fetch(url, { cache: 'no-store' });
     if (!res.ok) return null;
     return await res.json() as T;
-  } catch (error) {
-    return null;
-  }
+  } catch { return null; }
 }
 
-export function fetchStatus(options?: RequestOptions): Promise<SystemStatus | null> {
-  return readJson<SystemStatus>(`${API_BASE}/api/status`, options);
+async function postJson<T>(url: string, body?: Record<string, unknown>): Promise<T | null> {
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) return null;
+    return await res.json() as T;
+  } catch { return null; }
 }
 
-export function fetchControlCenterStatus(options?: RequestOptions): Promise<ControlCenterStatus | null> {
-  return readJson<ControlCenterStatus>(`${API_BASE}/api/control-center/status`, options);
-}
+// API Functions
+export function fetchStatus() { return getJson<any>(`${API_BASE}/api/status`); }
+export function fetchControlCenterStatus() { return getJson<ControlCenterStatus>(`${API_BASE}/api/control-center/status`); }
 
-export async function fetchMarket(symbol = 'XAUUSD', tf = 'M15', options?: RequestOptions): Promise<{ candles: Candle[]; indicators?: TechnicalIndicators; markup?: MarkupResponse } | null> {
-  const data = await readJson<{ candles?: Candle[]; indicators?: TechnicalIndicators; markup?: MarkupResponse }>(
-    `${API_BASE}/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}`,
-    options,
-  );
+export async function fetchMarket(symbol = 'XAUUSD', tf = 'M15') {
+  const data = await getJson<{ candles?: Candle[]; markup?: MarkupResponse }>(`${API_BASE}/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}`);
   if (!data || !Array.isArray(data.candles)) return null;
-  return { candles: data.candles, indicators: data.indicators, markup: data.markup };
+  return data;
 }
 
-export async function fetchPositions(options?: RequestOptions): Promise<Position[] | null> {
-  const data = await readJson<unknown>(`${API_BASE}/api/positions`, options);
-  if (!Array.isArray(data)) return data === null ? null : [];
-  return data.map((value) => {
-    const p = value as Record<string, unknown>;
-    return {
-      id: `#${String(p.ticket ?? p.id ?? 'unknown')}`,
-      ticket: typeof p.ticket === 'number' ? p.ticket : undefined,
-      type: p.type === 0 || p.type === 'BUY' ? 'BUY' : 'SELL',
-      lot: Number(p.volume ?? p.lot ?? 0),
-      entry: Number(p.price_open ?? p.entry ?? 0),
-      sl: Number(p.sl ?? 0),
-      tp: Number(p.tp ?? 0),
-      profit: Number(p.pnl ?? p.profit ?? 0),
-      pips: Number(p.pips ?? 0),
-    };
-  });
+export async function fetchPositions() {
+  const data = await getJson<any[]>(`${API_BASE}/api/positions`);
+  if (!Array.isArray(data)) return [];
+  return data.map(p => ({
+    id: `#${p.ticket || p.id || 'unknown'}`,
+    ticket: typeof p.ticket === 'number' ? p.ticket : undefined,
+    type: p.type === 0 || p.type === 'BUY' ? 'BUY' : 'SELL',
+    lot: Number(p.volume ?? p.lot ?? 0),
+    entry: Number(p.price_open ?? p.entry ?? 0),
+    sl: Number(p.sl ?? 0),
+    tp: Number(p.tp ?? 0),
+    profit: Number(p.pnl ?? p.profit ?? 0),
+    pips: Number(p.pips ?? 0),
+  }));
 }
 
-export async function fetchHistory(options?: RequestOptions): Promise<TradeHistory[] | null> {
-  const data = await readJson<unknown>(`${API_BASE}/api/history`, options);
-  return Array.isArray(data) ? data as TradeHistory[] : null;
+export async function fetchHistory() { return getJson<TradeHistory[]>(`${API_BASE}/api/history`) || []; }
+export async function fetchPendingOrders() { return getJson<PendingOrder[]>(`${API_BASE}/api/pending-orders`) || []; }
+export async function fetchLogs(_?: any) { return getJson<LogEntry[]>(`${API_BASE}/api/logs`) || []; }
+export function fetchBrain() { return getJson<BrainState>(`${API_BASE}/api/brain`); }
+export function fetchAdjustments() { return getJson<BrainAdjustment[]>(`${API_BASE}/api/brain/adjustments`); }
+export function fetchAIConfig() { return getJson<AIConfig>(`${API_BASE}/api/control-center/ai-config`); }
+export function fetchEconomicCalendar(days = 7) { return getJson<EconomicEvent[]>(`${API_BASE}/api/economic-calendar?days=${days}`); }
+
+export async function sendCopilotChat(message: string, symbol = 'XAUUSD', timeframe = 'M15') {
+  return postJson<ChatMsg>(`${API_BASE}/api/copilot/chat`, { message, symbol, timeframe });
 }
 
-export async function fetchPendingOrders(options?: RequestOptions): Promise<PendingOrder[] | null> {
-  const data = await readJson<unknown>(`${API_BASE}/api/pending-orders`, options);
-  return Array.isArray(data) ? data as PendingOrder[] : null;
+export async function analyzeNewsEvent(news: { title: string; impact?: string; actual?: string; forecast?: string; previous?: string; date?: string; time?: string; }) {
+  return postJson<NewsAnalysisResponse>(`${API_BASE}/api/news/analyze`, news);
 }
 
-export async function fetchLogs(options?: RequestOptions): Promise<LogEntry[] | null> {
-  const data = await readJson<unknown>(`${API_BASE}/api/logs`, options);
-  return Array.isArray(data) ? data as LogEntry[] : null;
+// Control actions
+export async function updateControlMode(mode: string) { return postJson<{ status: string }>(`${API_BASE}/api/control-center/mode`, { mode }); }
+export async function updateControlKillSwitch(active: boolean) { return postJson<{ status: string }>(`${API_BASE}/api/control-center/kill-switch`, { active }); }
+export async function updateControlDemoArm(armed: boolean) { return postJson<{ status: string }>(`${API_BASE}/api/control-center/demo-arm`, { armed }); }
+export async function updateAiAutoLoop(armed: boolean) { return postJson<{ status: string }>(`${API_BASE}/api/control-center/ai-loop`, { armed }); }
+export async function updateTradingMethod(method: string) { return postJson<{ status: string; trading_method: string }>(`${API_BASE}/api/control-center/trading-method`, { trading_method: method }); }
+
+export async function loginMT5Account(login: number, password: string, server: string) {
+  return postJson<{ status: string; message?: string }>(`${API_BASE}/api/control-center/login-mt5`, { login, password, server });
 }
 
-export interface BrainDecision {
-  decision_id: string;
-  ts: string;
-  strategy_version: string;
-  action: string;
-  confidence: number;
-  entry: number | null;
-  stop_loss: number | null;
-  take_profit: number | null;
-  volume: number | null;
-  reason_codes: string[];
-  context?: Record<string, unknown>;
-  status: string;
-  order_ticket: number | null;
-  decision_detail?: string;
+export async function testAIConnection(payload: { key_type: string; model: string; api_key?: string }) {
+  return postJson<{ status: string; result: { ok: boolean; message: string } }>(`${API_BASE}/api/ai/test`, payload);
 }
-
-export interface BrainEvaluation {
-  decision_id: string;
-  order_ticket: number;
-  closed_at: string;
-  exit_price: number;
-  net_profit: number;
-  r_multiple: number;
-  outcome: string;
-  exit_reason: string;
-  lesson?: string;
-  action?: string;
-  strategy_version?: string;
-}
-
-export interface StrategyStat {
-  strategy_version: string;
-  status: string;
-  sample_size: number;
-  wins: number;
-  losses: number;
-  breakevens: number;
-  win_rate: number | null;
-  profit_factor: number | null;
-  total_pnl: number;
-  avg_r: number | null;
-  updated_at: string;
-  notes?: string;
-}
-
-export interface BrainState {
-  strategies: StrategyStat[];
-  recent_decisions: BrainDecision[];
-  recent_evaluations: BrainEvaluation[];
-  adjustments: Array<Record<string, unknown>>;
-}
-
-export function fetchBrain(options?: RequestOptions): Promise<BrainState | null> {
-  return readJson<BrainState>(`${API_BASE}/api/brain`, options);
-}
-
-export interface BrainAdjustment {
-  adjustment_id: string;
-  decision_id: string;
-  strategy_version: string;
-  kind: string;
-  params: Record<string, unknown>;
-  reason: string;
-  status: string;
-  created_at: string;
-  applied_at: string | null;
-  result: string | null;
-}
-
-export function fetchAdjustments(options?: RequestOptions): Promise<BrainAdjustment[] | null> {
-  return readJson<BrainAdjustment[]>(`${API_BASE}/api/brain/adjustments`, options);
-}
-
-export function patchAdjustment(adjustmentId: string, action: string, reason?: string): Promise<{ status: string; adjustment_id: string; action: string } | null> {
-  return patchJson<{ status: string; adjustment_id: string; action: string }>(
-    `${API_BASE}/api/brain/adjustments/${adjustmentId}`,
-    { action, reason },
-  );
-}
-
-export function executeCloseProfit(): Promise<ExecutionResponse> {
-  return executeOrder('/api/orders/close-profitable');
-}
-
-export function executeCloseLosing(): Promise<ExecutionResponse> {
-  return executeOrder('/api/orders/close-losing');
-}
-
-export async function fetchAIModels(options?: RequestOptions): Promise<{ models: Array<{ id: string; name: string; model: string; active: boolean }>; default: string } | null> {
-  return readJson(`${API_BASE}/api/copilot/models`, options);
-}
-
-export async function sendCopilotChat(message: string, symbol = 'XAUUSD', timeframe = 'M15', modelId = 'auto'): Promise<ChatMsg | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/copilot/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify({ message, symbol, timeframe, model_id: modelId }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return {
-      role: 'ai',
-      text: data.text || 'Đã xử lý yêu cầu phân tích.',
-      time: data.time || new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
-    };
-  } catch (err) {
-    return null;
-  }
-}
-
-export interface ExecutionResponse {
-  status: 'SUCCESS' | 'ANALYSIS_ONLY' | 'REJECTED' | 'ERROR';
-  message: string;
-  detail?: { code?: string; execution_mode?: string; message?: string };
-}
-
-async function executeOrder(path: string, body?: Record<string, unknown>): Promise<ExecutionResponse> {
-  try {
-    const res = await fetch(`${API_BASE}${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
-      return {
-        status: 'REJECTED',
-        message: data?.detail?.message || data?.message || `Yêu cầu bị từ chối (${res.status}).`,
-        detail: data?.detail,
-      };
-    }
-    return data as ExecutionResponse;
-  } catch {
-    return { status: 'ERROR', message: 'Không thể kết nối API; không có lệnh nào được xác nhận thực thi.' };
-  }
-}
-
-async function patchJson<T>(path: string, body?: Record<string, unknown>, options?: RequestOptions): Promise<T | null> {
-  try {
-    const res = await fetch(`${API_BASE}${path}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: body ? JSON.stringify(body) : undefined,
-      signal: options?.signal,
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-export function executeOrderBuy(volume = 0.10): Promise<ExecutionResponse> {
-  return executeOrder('/api/order/buy', { symbol: 'XAUUSD', volume });
-}
-
-export function executeOrderSell(volume = 0.10): Promise<ExecutionResponse> {
-  return executeOrder('/api/order/sell', { symbol: 'XAUUSD', volume });
-}
-
-export function executeOrderCloseAll(): Promise<ExecutionResponse> {
-  return executeOrder('/api/order/close_all');
-}
-
-export function executeResetAll(): Promise<ExecutionResponse> {
-  return executeOrder('/api/reset_all');
-}
-
-export function executeOrderModifyTPSL(): Promise<ExecutionResponse> {
-  return executeOrder('/api/order/modify_tpsl');
-}
-
-export async function triggerAIScanNow(): Promise<any> {
-  try {
-    const res = await fetch(`${API_BASE}/api/ai_scan_now`, { cache: 'no-store' });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (err) {
-    return null;
-  }
-}
-export async function updateControlMode(mode: string): Promise<{ status: string; execution_mode?: string } | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/mode`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify({ mode }),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-export async function updateControlKillSwitch(active: boolean): Promise<{ status: string; kill_switch_active?: boolean } | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/kill-switch`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify({ active }),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-export async function updateControlDemoArm(armed: boolean): Promise<{ status: string; demo_armed?: boolean } | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/demo-arm`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify({ armed }),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-export async function loginMT5Account(
-  login: number,
-  password: string,
-  server: string,
-  extra?: { terminal_path?: string; symbol?: string; timeframe?: string; auto_deploy?: boolean },
-): Promise<{ status: string; message?: string; account?: any; symbol?: any; timeframe?: string; deploy?: any; detail?: any }> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/login-mt5`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify({ login, password, server, ...(extra || {}) }),
-    });
-    const data = await res.json().catch(() => null);
-    if (!res.ok) {
-      return { status: 'ERROR', message: data?.detail?.message || data?.message || 'Không thể đăng nhập tài khoản MT5.' };
-    }
-    return data;
-  } catch {
-    return { status: 'ERROR', message: 'Lỗi kết nối API Server khi đăng nhập MT5.' };
-  }
-}
-
-export async function updateControlRisk(risk_per_trade_fraction: number, max_open_positions: number, max_spread: number): Promise<{ status: string } | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/risk`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify({ risk_per_trade_fraction, max_open_positions, max_spread }),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-// ── Full trade actions ────────────────────────────────────────────────────────
-export function executeOrderModifyTPSLReal(ticket: number, stopLoss: number, takeProfit: number): Promise<ExecutionResponse> {
-  return executeOrder('/api/order/modify_tpsl', { ticket, stop_loss: stopLoss, take_profit: takeProfit });
-}
-
-export function executeOrderClosePosition(ticket: number): Promise<ExecutionResponse> {
-  return executeOrder('/api/order/close', { ticket });
-}
-
-export function executeOrderCancelPending(orderTicket: number): Promise<ExecutionResponse> {
-  return executeOrder('/api/order/cancel_pending', { order_ticket: orderTicket });
-}
-
-export async function updateAiAutoLoop(armed: boolean): Promise<{ status: string; ai_auto_loop?: boolean } | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/ai-loop`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify({ armed }),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-export async function updateForceUnlock(force_unlock: boolean): Promise<{ status: string; force_unlock?: boolean } | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/force-unlock`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify({ force_unlock }),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-export async function fetchChatHistory(): Promise<ChatMsg[] | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/copilot/chat/history`);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-// ── Realtime WebSocket stream ─────────────────────────────────────────────────
-export type StreamEvent =
-  | { type: 'telemetry'; data: SystemStatus }
-  | { type: 'command_update'; data: { command_id: string; action: string; state: string; retcode: number | null; order_ticket: number | null } }
-  | { type: 'ai_signal'; data: { status: string; reason_codes?: string[]; command: boolean } }
-  | { type: 'config_updated'; data: Record<string, unknown> }
-  | { type: 'log'; data: Record<string, unknown> };
-
-export interface StreamSocketHandle {
-  close: () => void;
-}
-
-/**
- * Resolve the WebSocket endpoint for the backend realtime stream.
- *
- * Priority:
- *  1. NEXT_PUBLIC_ATE_WS_URL        (explicit override, e.g. wss://host/ws/stream)
- *  2. NEXT_PUBLIC_ATE_API_ORIGIN    (http(s) origin -> ws(s) + /ws/stream)
- *  3. Local dev convenience         (non-HTTPS page -> ws://<hostname>:8005/ws/stream)
- *  4. Otherwise null                (e.g. Vercel HTTPS with no WS proxy — callers
- *                                    must fall back to polling; no reconnect spam)
- */
-export function resolveStreamSocketUrl(): string | null {
-  const explicit = process.env.NEXT_PUBLIC_ATE_WS_URL;
-  if (explicit) return explicit;
-
-  const apiOrigin = (process.env.NEXT_PUBLIC_ATE_API_ORIGIN || '').replace(/\/+$/, '');
-  if (apiOrigin) {
-    return `${apiOrigin.replace(/^https/, 'wss').replace(/^http/, 'ws')}/ws/stream`;
-  }
-
-  if (typeof window !== 'undefined' && window.location.protocol !== 'https:') {
-    return `ws://${window.location.hostname || '127.0.0.1'}:8005/ws/stream`;
-  }
-
-  return null;
-}
-
-/**
- * Subscribe to the backend realtime stream with automatic reconnect + backoff.
- * onEvent fires for every server push; onStateChange reports connectivity.
- *
- * When no WS endpoint is available (see resolveStreamSocketUrl), returns a
- * no-op handle so the UI gracefully relies on the HTTP polling channel.
- */
-export function createStreamSocket(
-  onEvent: (event: StreamEvent) => void,
-  onStateChange?: (connected: boolean) => void,
-): StreamSocketHandle {
-  const url = resolveStreamSocketUrl();
-  if (!url) {
-    return {
-      close: () => {
-        /* no-op: no realtime endpoint configured on this deployment */
-      },
-    };
-  }
-  let socket: WebSocket | null = null;
-  let closedByUser = false;
-  let attempt = 0;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-  const connect = () => {
-    if (closedByUser) return;
-    try {
-      socket = new WebSocket(url);
-    } catch {
-      scheduleReconnect();
-      return;
-    }
-    socket.onopen = () => {
-      attempt = 0;
-      onStateChange?.(true);
-    };
-    socket.onmessage = (msg) => {
-      try {
-        const parsed = JSON.parse(msg.data) as StreamEvent;
-        onEvent(parsed);
-      } catch {
-        /* ignore malformed frames */
-      }
-    };
-    socket.onclose = () => {
-      onStateChange?.(false);
-      scheduleReconnect();
-    };
-    socket.onerror = () => {
-      socket?.close();
-    };
-  };
-
-  const scheduleReconnect = () => {
-    if (closedByUser || reconnectTimer) return;
-    attempt += 1;
-    const delay = Math.min(30000, 1000 * Math.pow(2, Math.min(attempt, 5)));
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, delay);
-  };
-
-  connect();
-
-  return {
-    close: () => {
-      closedByUser = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      socket?.close();
-    },
-  };
-}
-
-export async function updateTelegramConfig(botToken: string, chatId: string, enabled = true): Promise<{ status: string; message: string } | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/telegram`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify({ bot_token: botToken, chat_id: chatId, enabled }),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-export interface NewsAnalysisResponse {
-  status: string;
-  title: string;
-  analysis: string;
-  recommendation: 'BUY' | 'SELL' | 'HOLD';
-}
-
-export async function analyzeNewsEvent(newsItem: {
-  title: string;
-  impact?: string;
-  actual?: string;
-  forecast?: string;
-  previous?: string;
-  date?: string;
-  time?: string;
-}): Promise<NewsAnalysisResponse | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/news/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newsItem),
-    });
-    if (!res.ok) return null;
-    return (await res.json()) as NewsAnalysisResponse;
-  } catch {
-    return null;
-  }
-}
-
-export interface EconomicEvent {
-  id: string;
-  title: string;
-  country: string;
-  currency: string;
-  impact: "LOW" | "MEDIUM" | "HIGH";
-  datetime: string;
-  forecast: string;
-  previous: string;
-  actual: string | null;
-  unit: string;
-  source: string;
-  description: string;
-  category: string;
-  status: "upcoming" | "live" | "released";
-}
-
-export async function fetchEconomicCalendar(days = 7, country?: string, impact?: string): Promise<EconomicEvent[] | null> {
-  try {
-    const params = new URLSearchParams({ days: String(days) });
-    if (country) params.set("country", country);
-    if (impact) params.set("impact", impact);
-    const res = await fetch(`${API_BASE}/api/economic-calendar?${params.toString()}`);
-    if (!res.ok) return null;
-    return (await res.json()) as EconomicEvent[];
-  } catch {
-    return null;
-  }
-}
-
-export interface AIAnalysisResponse {
-  status: string;
-  event: {
-    title: string;
-    country: string;
-    currency: string;
-    impact: string;
-    releaseTime: string;
-    forecast: string;
-    previous: string;
-    actual: string | null;
-  };
-  aiExplanation: {
-    whatIsIt: string;
-    whyItMatters: string;
-    impactOnUSD: string;
-    impactOnGold: string;
-  };
-  historicalImpact: {
-    averageGoldMove: number;
-    averageDollarMove: number;
-    volatility: number;
-    largestSpike: number;
-    winRate: number;
-    sampleSize: number;
-  };
-  aiPrediction: {
-    usdDirection: "Bullish" | "Bearish" | "Neutral";
-    usdConfidence: number;
-    goldDirection: "Bullish" | "Bearish" | "Neutral";
-    goldConfidence: number;
-  };
-  tradingRecommendation: {
-    recommendation: string;
-    reason: string;
-    pair: string;
-    direction: "BUY" | "SELL" | "HOLD";
-    target: string;
-    stopLoss: string;
-  };
-  riskScore: {
-    marketVolatility: number;
-    liquidity: string;
-    spreadExpansion: string;
-    falseBreakout: string;
-    newsRisk: string;
-  };
-  tradingStrategy: {
-    beforeNews: string;
-    afterRelease: string;
-    entryCondition: string;
-    target: string;
-    stop: string;
-  };
-  expectedMarketReaction: {
-    ifAboveForecast: string;
-    ifBelowForecast: string;
-    ifInLine: string;
-  };
-  aiConfidence: {
-    predictionConfidence: number;
-    dataQuality: string;
-    historicalSimilarity: number;
-  };
-  relatedNews: string[];
-  symbolImpact: Record<string, string>;
-  timeline: Array<{ time: string; label: string; value?: string }>;
-  aiInsight: string;
-}
-
-export async function fetchEconomicEventAnalysis(eventId: string): Promise<AIAnalysisResponse | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/news/analyze`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: eventId, impact: "HIGH", actual: "", forecast: "", previous: "", date: "", time: "" }),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-export interface AIConfig {
-  active_model: string;
-  custom_model_id?: string;
-  trading_method?: string;
-  gemini_api_key?: string;
-  claude_api_key?: string;
-  deepseek_api_key?: string;
-  openai_api_key?: string;
-  zplay_api_key?: string;
-  grok_api_key?: string;
-  qwen_api_key?: string;
-  gateway_url?: string;
-  gateway_key?: string;
-  has_gemini_key?: boolean;
-  has_claude_key?: boolean;
-  has_deepseek_key?: boolean;
-  has_openai_key?: boolean;
-  has_zplay_key?: boolean;
-  has_grok_key?: boolean;
-  has_qwen_key?: boolean;
-  has_gateway?: boolean;
-  available_models?: Array<{ id: string; name: string; provider: string; key_type: string }>;
-}
-
-export async function fetchAIConfig(): Promise<AIConfig | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/ai-config`);
-    if (!res.ok) return null;
-    return (await res.json()) as AIConfig;
-  } catch {
-    return null;
-  }
-}
-
-export async function updateAIConfig(payload: {
-  active_model: string;
-  custom_model_id?: string;
-  trading_method?: string;
-  gemini_api_key?: string;
-  claude_api_key?: string;
-  deepseek_api_key?: string;
-  openai_api_key?: string;
-  zplay_api_key?: string;
-  grok_api_key?: string;
-  qwen_api_key?: string;
-  gateway_url?: string;
-  gateway_key?: string;
-}): Promise<{ status: string; message: string; active_model: string } | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/ai-config`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-export async function testAIConnection(payload: {
-  key_type: string;
-  api_key?: string;
-  model: string;
-  base_url?: string;
-}): Promise<{ status: string; result: { ok: boolean; message: string; latency_ms?: number; status_code?: number | null; error_code?: string | null } } | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/ai/test`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
-}
-
-export async function updateTradingMethod(method: string): Promise<{ status: string; message: string; trading_method: string } | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/control-center/trading-method`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
-      body: JSON.stringify({ trading_method: method }),
-    });
-    // On any server response (even 4xx/5xx which may mean already applied), update local state.
-    // The control-center/status poll will confirm the correct value on next cycle.
-    if (res.ok) return await res.json();
-    const payload = await res.json().catch(() => null);
-    // Backend returned {trading_method: updated} even on non-2xx? Use it optimistically.
-    if (payload?.trading_method) return payload;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-
-

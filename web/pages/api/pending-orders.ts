@@ -1,6 +1,5 @@
+import { BACKEND_URL } from '../../lib/api-config';
 import type { NextApiRequest, NextApiResponse } from 'next';
-
-const BACKEND_URL = process.env.ATE_BACKEND_URL || 'http://127.0.0.1:8005';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,7 +9,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { query } = req;
     const params = new URLSearchParams();
-    
+
     // Copy query params
     Object.entries(query).forEach(([key, value]) => {
       if (key !== '_next' && value) {
@@ -23,9 +22,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.query.id) {
       path = path.replace('[id]', req.query.id as string).replace('{id}', req.query.id as string);
     }
-    
+
     const url = BACKEND_URL + path + (params.toString() ? '?' + params.toString() : '');
-    
+
     const response = await fetch(url, {
       method: 'GET',
       headers: {

@@ -1,6 +1,5 @@
+import { BACKEND_URL } from '../../../../../lib/api-config';
 import type { NextApiRequest, NextApiResponse } from 'next';
-
-const BACKEND_URL = process.env.ATE_BACKEND_URL || 'http://127.0.0.1:8005';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {

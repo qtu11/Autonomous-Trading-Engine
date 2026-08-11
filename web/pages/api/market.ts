@@ -1,6 +1,5 @@
+import { BACKEND_URL } from '../../lib/api-config';
 import type { NextApiRequest, NextApiResponse } from 'next';
-
-const BACKEND_URL = process.env.ATE_BACKEND_URL || 'http://127.0.0.1:8005';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -10,7 +9,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const { query } = req;
     const params = new URLSearchParams();
-    
+
     // Copy query params
     Object.entries(query).forEach(([key, value]) => {
       if (key !== '_next' && value !== undefined && value !== null) {
@@ -28,11 +27,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     if (req.query.id) {
       path = path.replace('[id]', req.query.id as string).replace('{id}', req.query.id as string);
     }
-    
+
     const url = BACKEND_URL + path + (params.toString() ? '?' + params.toString() : '');
-    
+
     console.log('[Market API] Fetching:', url);
-    
+
     const response = await fetch(url, {
       method: 'GET',
       headers: {
@@ -42,12 +41,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const data = await response.json();
-    
+
     // Log candle count for debugging
     if (data.candles) {
       console.log(`[Market API] Received ${data.candles.length} candles`);
     }
-    
+
     return res.status(response.status).json(data);
   } catch (error) {
     console.error('API error:', error);
