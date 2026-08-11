@@ -36,7 +36,7 @@ _logs: List[Dict[str, Any]] = []
 _account = {
     "balance": 10000.0, "equity": 10000.0, "margin": 0.0, "margin_free": 10000.0,
     "open_positions": 0, "total_pnl": 0.0, "win_rate": 0.0, "total_trades": 0,
-    "mt5_connected": False, "login": None, "server": None,
+    "mt5_connected": False, "login": 0, "server": "",
 }
 _config = {
     "execution_mode": "DEMO", "kill_switch": False, "demo_armed": True, "live_armed": False,
@@ -271,14 +271,14 @@ async def list_positions(symbol: Optional[str] = Query(None)):
     result = []
     for p in _positions:
         if symbol and p.get("symbol") != symbol: continue
-        current_price = p.get("current_price", p.get("entry_price", 2350))
+        current_price = float(p.get("current_price") or p.get("entry_price") or 2350)
         pnl = (current_price - p.get("entry_price", 2350)) * p.get("quantity", 0.1) * 100 if p.get("direction") == "BUY" else (p.get("entry_price", 2350) - current_price) * p.get("quantity", 0.1) * 100
         result.append({"id": f"#{p.get('ticket', abs(hash(p.get('id', str(uuid.uuid4())))) % 100000)}",
             "ticket": p.get("ticket", abs(hash(p.get("id", str(uuid.uuid4())))) % 100000),
             "type": p.get("direction", "BUY"), "lot": p.get("quantity", 0.1), "volume": p.get("quantity", 0.1),
             "entry": p.get("entry_price", 2350), "price_open": p.get("entry_price", 2350), "current_price": current_price,
             "sl": p.get("stop_loss", 0), "tp": p.get("take_profit", 0), "profit": round(pnl, 2), "pnl": round(pnl, 2),
-            "pips": _calculate_pips(p.get("entry_price", 2350), current_price, p.get("direction", "BUY")),
+            "pips": _calculate_pips(float(p.get("entry_price", 2350)), current_price, p.get("direction", "BUY")),
             "symbol": p.get("symbol", "XAUUSD"), "opened_at": p.get("opened_at", datetime.now(timezone.utc).isoformat())})
     return result
 
@@ -349,7 +349,7 @@ async def set_trading_method(req: TradingMethodRequest):
 
 @app.post("/api/control-center/login-mt5")
 async def login_mt5(req: MT5LoginRequest):
-    _account["mt5_connected"] = True; _account["login"] = req.login; _account["server"] = req.server
+    _account["mt5_connected"] = True; _account["login"] = req.login or 0; _account["server"] = req.server or ""
     _add_log("INFO", "MT5_LOGIN", f"MT5 logged in: {req.login}@{req.server}")
     return {"status": "SUCCESS", "message": f"Logged in to MT5 account {req.login}"}
 

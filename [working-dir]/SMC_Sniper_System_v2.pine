@@ -138,8 +138,6 @@ var color C_OB_BULL   = color.new(#00BFFF, obOpacity)
 var color C_OB_BEAR   = color.new(#FF6D00, obOpacity)
 var color C_BB_BULL   = color.new(#76FF03, obOpacity)
 var color C_BB_BEAR   = color.new(#FF3D00, obOpacity)
-var color C_LIQ_BULL  = color.new(#00E676, liqOpacity)
-var color C_LIQ_BEAR  = color.new(#FF1744, liqOpacity)
 var color C_EQH_COLOR = color.new(#FFEA00, 60)
 var color C_EQL_COLOR = color.new(#00E5FF, 60)
 

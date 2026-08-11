@@ -1,4 +1,4 @@
-import { BACKEND_URL } from '../../../../../lib/api-config';
+import { BACKEND_URL } from '../../../lib/api-config';
 import type { NextApiRequest, NextApiResponse } from 'next';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
