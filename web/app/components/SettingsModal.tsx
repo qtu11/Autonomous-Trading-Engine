@@ -157,7 +157,7 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                   </select>
                 </Field>
                 <Field label="AI Auto Loop">
-                  <Toggle on={!!cfg.ai_auto_loop} onChange={v => update({ ai_auto_loop: v })} />
+                  <Toggle on={!!cfg.ai_auto_loop} onChange={(v: boolean) => update({ ai_auto_loop: v })} />
                 </Field>
               </Card>
 
@@ -180,15 +180,15 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
               <Card title="RISK MANAGEMENT">
                 <Field label="Risk per Trade (%)">
                   <NumInput value={cfg.risk_per_trade_fraction ?? 0.01} step={0.005} min={0.001} max={0.10}
-                    onCommit={v => update({ risk_per_trade_fraction: v })} />
+                    onCommit={(v: number) => update({ risk_per_trade_fraction: v })} />
                 </Field>
                 <Field label="Max Open Positions">
                   <NumInput value={cfg.max_open_positions ?? 5} step={1} min={1} max={20} int
-                    onCommit={v => update({ max_open_positions: v })} />
+                    onCommit={(v: number) => update({ max_open_positions: v })} />
                 </Field>
                 <Field label="Max Spread (pips)">
                   <NumInput value={cfg.max_spread ?? 4.5} step={0.5} min={0.5} max={50}
-                    onCommit={v => update({ max_spread: v })} />
+                    onCommit={(v: number) => update({ max_spread: v })} />
                 </Field>
               </Card>
 
@@ -198,7 +198,7 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                     <div style={{ fontSize: 11, color: C.red, fontWeight: 800 }}>KILL SWITCH</div>
                     <div style={{ fontSize: 9, color: C.muted, marginTop: 2 }}>Immediately closes all positions</div>
                   </div>
-                  <Toggle on={!!cfg.kill_switch} onChange={v => update({ kill_switch: v })} color="red" />
+                  <Toggle on={!!cfg.kill_switch} onChange={(v: boolean) => update({ kill_switch: v })} color="red" />
                 </div>
                 <button onClick={() => fetch('/api/order/close_all', { method: 'POST' }).then(onClose)} style={{
                   width: '100%', padding: '8px', background: C.redDim, border: `1px solid ${C.red}`,
@@ -221,13 +221,13 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
 
               <Card title="NOTIFICATION SETTINGS">
                 <Field label="Notify on Open">
-                  <Toggle on={data?.notify_on_open ?? true} onChange={v => update({ notify_on_open: v })} />
+                  <Toggle on={data?.notify_on_open ?? true} onChange={(v: boolean) => update({ notify_on_open: v })} />
                 </Field>
                 <Field label="Notify on Close">
-                  <Toggle on={data?.notify_on_close ?? true} onChange={v => update({ notify_on_close: v })} />
+                  <Toggle on={data?.notify_on_close ?? true} onChange={(v: boolean) => update({ notify_on_close: v })} />
                 </Field>
                 <Field label="Notify on Signal">
-                  <Toggle on={data?.notify_on_signal ?? true} onChange={v => update({ notify_on_signal: v })} />
+                  <Toggle on={data?.notify_on_signal ?? true} onChange={(v: boolean) => update({ notify_on_signal: v })} />
                 </Field>
               </Card>
             </div>
