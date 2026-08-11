@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 export const BACKEND_URL =
   process.env.ATE_BACKEND_URL || 'http://113.173.192.226:8848';
 

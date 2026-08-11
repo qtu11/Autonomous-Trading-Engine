@@ -36,41 +36,36 @@ interface Pattern {
 interface PatternAlertProps {
   patterns?: Pattern[];
   onViewChart?: (pattern: Pattern) => void;
+  inlineBelow?: boolean; // when true, position below chart instead of overlay
 }
 
 export default function PatternAlert({ patterns = [], onViewChart }: PatternAlertProps) {
   const [alerts, setAlerts] = useState<Pattern[]>([]);
   const [showAll, setShowAll] = useState(false);
 
-  // Demo patterns
-  const demoPatterns: Pattern[] = [
-    { id: 1, type: 'FVG', direction: 'BULLISH', symbol: 'XAUUSD', price: 2845.50, size: 25, time: '10:30', pattern: 'Fair Value Gap' },
-    { id: 2, type: 'BOS', direction: 'BULLISH', symbol: 'XAUUSD', price: 2848.00, size: 40, time: '11:15', pattern: 'Break of Structure' },
-    { id: 3, type: 'OB', direction: 'BEARISH', symbol: 'EURUSD', price: 1.0850, size: 30, time: '14:20', pattern: 'Order Block' },
-  ];
-
-  // Auto-dismiss after 10 seconds
   const dismissAlert = useCallback((id: number) => {
     setAlerts(prev => prev.filter(a => a.id !== id));
   }, []);
 
-  // Add new alert
-  const addAlert = useCallback((pattern: Pattern) => {
-    setAlerts(prev => [{ ...pattern, id: Date.now() }, ...prev]);
-    // Auto dismiss after 10s
-    setTimeout(() => dismissAlert(pattern.id), 10000);
-  }, [dismissAlert]);
-
-  // Demo: add a pattern every 30s
+  // Fetch real patterns from backend every 30s
   useEffect(() => {
-    const interval = setInterval(() => {
-      if (Math.random() > 0.7 && demoPatterns.length > 0) {
-        const randomPattern = demoPatterns[Math.floor(Math.random() * demoPatterns.length)];
-        addAlert({ ...randomPattern, id: Date.now() });
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [addAlert]);
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/patterns?symbol=XAUUSD&tf=M15');
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          // Show only the most recent 5 patterns (avoid spamming)
+          const fresh = data.slice(0, 5);
+          setAlerts(fresh);
+        }
+      } catch { /* silent */ }
+    };
+    load();
+    const id = setInterval(load, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   const getPatternColor = (direction: string) => direction === 'BULLISH' ? C.green : C.red;
   const getPatternBg = (direction: string) => direction === 'BULLISH' ? C.greenDim : C.redDim;
@@ -78,7 +73,7 @@ export default function PatternAlert({ patterns = [], onViewChart }: PatternAler
   const displayAlerts = showAll ? alerts : alerts.slice(0, 3);
 
   return (
-    <div style={{ position: 'fixed', top: 60, right: 16, width: 320, zIndex: 1000, display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ position: 'absolute', bottom: 60, left: 10, width: 320, maxHeight: 200, overflowY: 'auto', zIndex: 50, display: 'flex', flexDirection: 'column', gap: 8 }}>
       {displayAlerts.length === 0 && (
         <div style={{
           background: 'rgba(8,12,22,0.95)',

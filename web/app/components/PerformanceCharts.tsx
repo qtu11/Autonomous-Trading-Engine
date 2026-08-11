@@ -27,12 +27,25 @@ interface PerformanceChartsProps {
   maxDrawdown?: number;
   currentDrawdown?: number;
   monthlyReturns?: Array<{ month: string; pnl: number }>;
+  liveStats?: null | { wins: number; losses: number; total_pl: number; best_trade: number; max_drawdown: number; };
 }
 
 // Pie Chart Component
-function PieChart({ wins = 13, losses = 7 }: { wins?: number; losses?: number }) {
+function PieChart({ wins = 0, losses = 0 }: { wins?: number; losses?: number }) {
   const total = wins + losses;
   const winPercent = total > 0 ? (wins / total) * 100 : 0;
+  if (total === 0) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: 8 }}>
+        <div style={{ width: 100, height: 100, borderRadius: '50%', background: 'rgba(0,0,0,0.3)', border: `3px dashed ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <span style={{ fontSize: 8, color: C.muted, fontFamily: C.mono }}>NO DATA</span>
+        </div>
+        <div style={{ flex: 1, fontSize: 8, color: C.muted, fontFamily: C.mono }}>
+          Close trades to see win rate.
+        </div>
+      </div>
+    );
+  }
   const lossPercent = 100 - winPercent;
 
   const radius = 40;
@@ -183,7 +196,14 @@ function MonthlyReturns({ returns }: { returns?: Array<{ month: string; pnl: num
 }
 
 // Main Component
-export default function PerformanceCharts({ winRate = 0.65, wins = 13, losses = 7, maxDrawdown = 12.3, currentDrawdown = 3.2, monthlyReturns }: PerformanceChartsProps) {
+export default function PerformanceCharts({ winRate, wins, losses, maxDrawdown, currentDrawdown, monthlyReturns, liveStats }: PerformanceChartsProps) {
+  // Prefer live data over mocks
+  const _wins = liveStats?.wins ?? wins ?? 0;
+  const _losses = liveStats?.losses ?? losses ?? 0;
+  const _maxDD = liveStats?.max_drawdown ?? maxDrawdown ?? 0;
+  const _best = liveStats?.best_trade ?? (monthlyReturns ? Math.max(...monthlyReturns.map(r => r.pnl)) : 0);
+  const _total = liveStats?.total_pl ?? (monthlyReturns ? monthlyReturns.reduce((s, d) => s + d.pnl, 0) : 0);
+  const _profFactor = (_wins / Math.max(_losses, 1)).toFixed(2);
   return (
     <div style={{ padding: '0 12px 12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${C.border}`, marginBottom: 8 }}>
@@ -191,10 +211,10 @@ export default function PerformanceCharts({ winRate = 0.65, wins = 13, losses = 
       </div>
 
       {/* Win Rate Pie */}
-      <PieChart wins={wins} losses={losses} />
+      <PieChart wins={_wins} losses={_losses} />
 
       {/* Drawdown */}
-      <DrawdownChart maxDD={maxDrawdown} currentDD={currentDrawdown} />
+      <DrawdownChart maxDD={_maxDD} currentDD={currentDrawdown || 0} />
 
       {/* Monthly Returns */}
       <MonthlyReturns returns={monthlyReturns} />
@@ -203,11 +223,11 @@ export default function PerformanceCharts({ winRate = 0.65, wins = 13, losses = 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 12 }}>
         <div style={{ padding: '6px 8px', background: 'rgba(0,0,0,0.3)', borderRadius: 4, border: `1px solid ${C.border}`, textAlign: 'center' }}>
           <div style={{ fontSize: 7, color: C.muted }}>Profit Factor</div>
-          <div style={{ fontSize: 12, fontFamily: C.mono, fontWeight: 800, color: C.cyan }}>{(wins / Math.max(losses, 1)).toFixed(2)}</div>
+          <div style={{ fontSize: 12, fontFamily: C.mono, fontWeight: 800, color: C.cyan }}>{_profFactor}</div>
         </div>
         <div style={{ padding: '6px 8px', background: 'rgba(0,0,0,0.3)', borderRadius: 4, border: `1px solid ${C.border}`, textAlign: 'center' }}>
           <div style={{ fontSize: 7, color: C.muted }}>Best Trade</div>
-          <div style={{ fontSize: 12, fontFamily: C.mono, fontWeight: 800, color: C.green }}>+${(monthlyReturns ? Math.max(...monthlyReturns.map(r => r.pnl)) : 1245).toFixed(0)}</div>
+          <div style={{ fontSize: 12, fontFamily: C.mono, fontWeight: 800, color: C.green }}>{_best > 0 ? `+$${_best.toFixed(0)}` : '—'}</div>
         </div>
       </div>
     </div>

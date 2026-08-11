@@ -91,9 +91,20 @@ export default function TradingChart({
   const [askPrice, setAskPrice] = useState<number | null>(null);
   const [crosshairInfo, setCrosshairInfo] = useState<{time: string; price: number} | null>(null);
 
-  const toTime = useCallback((ts: string): Time => {
-    const d = new Date(ts);
-    return Math.floor(d.getTime() / 1000) as Time;
+  const toTime = useCallback((candle: Candle): Time => {
+    // Prefer full ISO timestamp (c.ts) over short string (c.t)
+    const raw = (candle as any).ts || candle.t;
+    if (typeof raw === 'number') return raw as Time;
+    const str = String(raw || '');
+    if (str.includes('T') || str.includes('-')) {
+      const d = new Date(str);
+      const sec = Math.floor(d.getTime() / 1000);
+      if (!isNaN(sec)) return sec as Time;
+    }
+    const d = new Date(str);
+    const sec = Math.floor(d.getTime() / 1000);
+    if (!isNaN(sec)) return sec as Time;
+    return Math.floor(Date.now() / 1000) as Time;
   }, []);
 
   // ── Initialize Chart ─────────────────────────────────────────────────────────
@@ -137,9 +148,9 @@ export default function TradingChart({
         borderColor: 'rgba(255,255,255,0.08)',
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 8,
-        barSpacing: 12,
-        minBarSpacing: 4,
+        rightOffset: 2,
+        barSpacing: 4,
+        minBarSpacing: 2,
         fixLeftEdge: false,
         fixRightEdge: false,
         rightBarStaysOnScroll: true,
@@ -155,8 +166,7 @@ export default function TradingChart({
         mouseWheel: true, 
         pinch: true,
       },
-      width: containerRef.current.clientWidth,
-      height: containerRef.current.clientHeight,
+      autoSize: true,
     });
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
@@ -214,16 +224,34 @@ export default function TradingChart({
   useEffect(() => {
     if (!candleSeriesRef.current || !candles.length) return;
     
-    const chartData: CandlestickData<Time>[] = candles.map(c => ({
-      time: toTime(c.t),
-      open: c.o,
-      high: c.h,
-      low: c.l,
-      close: c.c,
-    }));
-    
+    const timeMap = new Map<number, CandlestickData<Time>>();
+    candles.forEach(c => {
+      const t = toTime(c) as number;
+      if (!isNaN(t) && t > 0) {
+        timeMap.set(t, {
+          time: t as Time,
+          open: Number(c.o),
+          high: Number(c.h),
+          low: Number(c.l),
+          close: Number(c.c),
+        });
+      }
+    });
+
+    const chartData = Array.from(timeMap.values()).sort((a, b) => (a.time as number) - (b.time as number));
+
+    if (!chartData.length) return;
+
     candleSeriesRef.current.setData(chartData);
-    chartRef.current?.timeScale().fitContent();
+    try {
+      const lastIdx = chartData.length - 1;
+      const fromIdx = Math.max(0, lastIdx - 149);
+      const fromTs = chartData[fromIdx].time as number;
+      const toTs = chartData[lastIdx].time as number;
+      chartRef.current?.timeScale().setVisibleRange({ from: fromTs as any, to: toTs as any });
+    } catch {
+      chartRef.current?.timeScale().fitContent();
+    }
   }, [candles, toTime]);
 
   // ── Update Bid/Ask Lines ─────────────────────────────────────────────────────
@@ -433,6 +461,11 @@ export default function TradingChart({
     });
   }, []);
 
+  const handleZoomFit = useCallback(() => {
+    // Fit all candles across viewport - shows full 2000-candle history
+    chartRef.current?.timeScale().fitContent();
+  }, []);
+
   const handleFitContent = useCallback(() => {
     chartRef.current?.timeScale().fitContent();
   }, []);
@@ -560,9 +593,10 @@ export default function TradingChart({
         background: 'rgba(5,7,12,0.9)', padding: 5, borderRadius: 6,
         border: '1px solid rgba(255,255,255,0.06)',
       }}>
-        <button onClick={handleZoomIn} style={zoomBtn}>+</button>
-        <button onClick={handleZoomOut} style={zoomBtn}>-</button>
-        <button onClick={handleFitContent} style={zoomBtn}>[]</button>
+        <button onClick={handleZoomIn} style={zoomBtn} title="Zoom in">+</button>
+        <button onClick={handleZoomOut} style={zoomBtn} title="Zoom out">-</button>
+        <button onClick={handleFitContent} style={zoomBtn} title="Fit 150 last">150</button>
+        <button onClick={handleZoomFit} style={zoomBtn} title="Fit ALL candles">ALL</button>
       </div>
 
       {/* Loading Overlay */}

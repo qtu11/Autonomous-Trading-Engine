@@ -57,7 +57,8 @@ function Panel({ children, title, live, style, className }: {
   return (
     <div className={className} style={{
       background: C.panelBg, backdropFilter: 'blur(20px)',
-      borderRadius: 10, overflow: 'hidden', display: 'flex', flexDirection: 'column', ...style,
+      borderRadius: 10, overflow: 'hidden', display: 'flex', flexDirection: 'column',
+      position: 'relative', ...style,
     }}>
       {title && (
         <div style={{
@@ -147,7 +148,7 @@ export default function DashboardPage() {
       } catch { /* silent */ }
     };
     loadAll();
-    const interval = setInterval(loadAll, 3000);
+    const interval = setInterval(loadAll, 2000);
     return () => clearInterval(interval);
   }, [isAuthenticated, chartTf, selectedSymbol]);
 
@@ -208,7 +209,8 @@ export default function DashboardPage() {
   // AI Brain
   const aiSignal = brain?.recent_decisions?.[0];
   const aiBias = aiSignal?.action === 'BUY' ? 'BULLISH' : aiSignal?.action === 'SELL' ? 'BEARISH' : 'NEUTRAL';
-  const aiConfidence = aiSignal?.confidence ? Math.round(aiSignal.confidence * 100) : 0;
+  const _rawConf = aiSignal?.confidence ?? 0;
+  const aiConfidence = Math.max(0, Math.min(100, Math.round(_rawConf > 1 ? _rawConf : _rawConf * 100)));
 
   // Actions
   const handleClosePosition = async (ticket?: number) => {
@@ -318,7 +320,7 @@ export default function DashboardPage() {
       {/* MAIN CONTENT */}
       <div style={{
         flex: 1, display: 'grid',
-        gridTemplateColumns: showCompact ? '240px 1fr 280px' : '300px 1fr 320px',
+        gridTemplateColumns: showCompact ? '220px 1fr 300px' : '280px 1fr 280px',
         gridTemplateRows: showCompact ? '1fr' : '1fr 220px',
         gap: 8, padding: 8, minHeight: 0, overflow: 'hidden',
         background: `radial-gradient(ellipse at 0% 0%, rgba(212,175,55,0.04) 0%, transparent 50%), radial-gradient(ellipse at 100% 100%, rgba(34,211,160,0.03) 0%, transparent 50%), ${C.bgMain}`,
@@ -341,7 +343,7 @@ export default function DashboardPage() {
         {/* CENTER COLUMN */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0, overflow: 'hidden' }}>
           {showChart && (
-            <div style={{ flex: showCompact ? 1 : 0.6, minHeight: 0 }}>
+            <div style={{ flex: showCompact ? 1 : 0.78, minHeight: 0 }}>
               <Panel title={`${selectedSymbol} ${chartTf}`} live style={{ height: '100%', position: 'relative' }}>
                 <div style={{ position: 'absolute', top: 8, right: 8, zIndex: 10, display: 'flex', gap: 4 }}>
                   {['M1', 'M5', 'M15', 'H1', 'H4', 'D1'].map(tf => (
@@ -354,7 +356,7 @@ export default function DashboardPage() {
           )}
 
           {/* Positions/Orders/Journal */}
-          <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+          <div style={{ flex: showCompact ? 0 : 0.22, minHeight: 0, overflow: 'hidden', maxHeight: showCompact ? 0 : 180 }}>
             <Panel title="Positions" live style={{ height: '100%' }}>
               <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}` }}>
                 {(['positions', 'orders', 'history', 'journal'] as const).map(tab => (
@@ -411,14 +413,14 @@ export default function DashboardPage() {
         {/* RIGHT COLUMN */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0, overflow: 'hidden' }}>
           {/* Watchlist */}
-          <div style={{ flex: 0.5, minHeight: 0 }}>
+          <div style={{ flex: showCompact ? 0.4 : 0.42, minHeight: 0, maxHeight: showCompact ? 200 : 220 }}>
             <Panel title="Watchlist" live style={{ height: '100%' }}>
               <Watchlist onSymbolSelect={setSelectedSymbol} selectedSymbol={selectedSymbol} />
             </Panel>
           </div>
 
           {/* AI Brain + Performance */}
-          <div style={{ flex: 1, minHeight: 0 }}>
+          <div style={{ flex: showCompact ? 1 : 1.2, minHeight: 0, overflow: 'hidden' }}>
             <Panel title="AI Brain" live style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
               <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
                 {/* Sentiment */}
@@ -455,10 +457,19 @@ export default function DashboardPage() {
                 )}
 
                 {/* Performance Charts */}
-                <PerformanceCharts />
+                <PerformanceCharts liveStats={history ? (() => { const wins = history.filter(h => (h.pl || 0) > 0).length; const losses = history.filter(h => (h.pl || 0) < 0).length; const total_pl = history.reduce((s, h) => s + (h.pl || 0), 0); const best = Math.max(0, ...history.map(h => h.pl || 0)); const worst = Math.min(0, ...history.map(h => h.pl || 0)); return { wins, losses, total_pl, best_trade: best, max_drawdown: worst }; })() : null} />
               </div>
             </Panel>
           </div>
+
+          {/* Pattern alerts panel */}
+          {!showCompact && (
+            <div style={{ maxHeight: 160 }}>
+              <Panel title="Alerts" style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+                <PatternAlert onViewChart={(p) => { setSelectedSymbol(p.symbol); setShowChart(true); }} />
+              </Panel>
+            </div>
+          )}
 
           {/* AI Copilot */}
           {!showCompact && (
@@ -515,10 +526,10 @@ export default function DashboardPage() {
       </button>
 
       {/* QUICK TRADE PANEL */}
-      <QuickTradePanel isOpen={showQuickTrade} onClose={() => setShowQuickTrade(false)} onExecute={handleQuickTrade} currentPrice={2850} />
+      <QuickTradePanel isOpen={showQuickTrade} onClose={() => setShowQuickTrade(false)} onExecute={handleQuickTrade} currentPrice={market?.candles?.[market.candles.length - 1]?.c || 2845} />
 
       {/* PATTERN ALERTS */}
-      <PatternAlert onViewChart={(p) => { setSelectedSymbol(p.symbol); setShowChart(true); }} />
+      
     </div>
   );
 }

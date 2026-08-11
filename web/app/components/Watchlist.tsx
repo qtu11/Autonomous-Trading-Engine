@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 
 const C = {
   gold: '#D4B483',
@@ -21,13 +21,29 @@ const C = {
 
 // Default watchlist data
 const DEFAULT_SYMBOLS = [
-  { symbol: 'XAUUSD', name: 'Gold', price: 2845.50, change: 0.85, type: 'CRYPTO' },
-  { symbol: 'EURUSD', name: 'Euro', price: 1.0845, change: 0.12, type: 'FOREX' },
-  { symbol: 'GBPUSD', name: 'Pound', price: 1.2650, change: -0.05, type: 'FOREX' },
-  { symbol: 'USDJPY', name: 'Yen', price: 149.80, change: 0.15, type: 'FOREX' },
-  { symbol: 'AUDUSD', name: 'Aussie', price: 0.6540, change: 0.08, type: 'FOREX' },
-  { symbol: 'USDCAD', name: 'Loonie', price: 1.3650, change: -0.02, type: 'FOREX' },
+  { symbol: 'XAUUSD', name: 'Gold', price: 0, change: 0, type: 'METAL' },
+  { symbol: 'EURUSD', name: 'Euro', price: 0, change: 0, type: 'FOREX' },
+  { symbol: 'GBPUSD', name: 'Pound', price: 0, change: 0, type: 'FOREX' },
+  { symbol: 'USDJPY', name: 'Yen', price: 0, change: 0, type: 'FOREX' },
+  { symbol: 'AUDUSD', name: 'Aussie', price: 0, change: 0, type: 'FOREX' },
+  { symbol: 'USDCAD', name: 'Loonie', price: 0, change: 0, type: 'FOREX' },
 ];
+
+async function fetchQuote(symbol: string): Promise<{ price: number; change: number } | null> {
+  try {
+    const tf = symbol === 'XAUUSD' || symbol === 'BTCUSDT' ? 'H1' : 'H1';
+    const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${tf}&count=2`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data.candles || data.candles.length < 2) return null;
+    const last = data.candles[data.candles.length - 1];
+    const prev = data.candles[data.candles.length - 2];
+    const price = Number(last.c);
+    const prevClose = Number(prev.c);
+    const change = prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : 0;
+    return { price, change };
+  } catch { return null; }
+}
 
 // Correlation data (simplified)
 const CORRELATION_MATRIX = [
@@ -46,14 +62,28 @@ interface WatchlistProps {
 export default function Watchlist({ onSymbolSelect, selectedSymbol = 'XAUUSD' }: WatchlistProps) {
   const [filter, setFilter] = useState('');
   const [showCorrelation, setShowCorrelation] = useState(false);
+  const [symbols, setSymbols] = useState(DEFAULT_SYMBOLS);
+
+  useEffect(() => {
+    const load = async () => {
+      const updates = await Promise.all(DEFAULT_SYMBOLS.map(async s => {
+        const q = await fetchQuote(s.symbol);
+        return q ? { ...s, price: q.price, change: q.change } : s;
+      }));
+      setSymbols(updates);
+    };
+    load();
+    const id = setInterval(load, 15000);
+    return () => clearInterval(id);
+  }, []);
 
   const filteredSymbols = useMemo(() => {
-    if (!filter) return DEFAULT_SYMBOLS;
-    return DEFAULT_SYMBOLS.filter(s =>
+    if (!filter) return symbols;
+    return symbols.filter(s =>
       s.symbol.toLowerCase().includes(filter.toLowerCase()) ||
       s.name.toLowerCase().includes(filter.toLowerCase())
     );
-  }, [filter]);
+  }, [filter, symbols]);
 
   const getCorrelationColor = (value: number) => {
     if (value >= 0.7) return C.green;
@@ -153,16 +183,17 @@ export default function Watchlist({ onSymbolSelect, selectedSymbol = 'XAUUSD' }:
                 <span style={{ fontSize: 7, color: C.muted }}>{sym.name}</span>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 700, color: C.text }}>
-                  {sym.price.toLocaleString('en-US', { minimumFractionDigits: sym.price < 10 ? 4 : 2, maximumFractionDigits: sym.price < 10 ? 4 : 2 })}
+                <span style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 700, color: sym.price > 0 ? C.text : C.muted }}>
+                  {sym.price > 0 ? sym.price.toLocaleString('en-US', { minimumFractionDigits: sym.price < 10 ? 4 : 2, maximumFractionDigits: sym.price < 10 ? 4 : 2 }) : '—'}
                 </span>
                 <span style={{
                   fontSize: 9, fontFamily: C.mono, fontWeight: 700,
                   color: isUp ? C.green : C.red,
                   background: isUp ? C.greenDim : C.redDim,
                   padding: '2px 6px', borderRadius: 4,
+                  opacity: sym.price > 0 ? 1 : 0.3,
                 }}>
-                  {isUp ? '▲' : '▼'} {Math.abs(sym.change).toFixed(2)}%
+                  {sym.price > 0 ? (isUp ? '▲' : '▼') + ' ' + Math.abs(sym.change).toFixed(2) + '%' : '—'}
                 </span>
               </div>
             </div>

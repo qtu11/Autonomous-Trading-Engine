@@ -48,8 +48,54 @@ datetime       m_last_candles_push = 0;
 string         g_symbol;
 string         g_protection_level = "none";
 int            g_protection_live_seconds = 0;
+string         g_trading_method = "SNIPER";
+datetime       g_last_config_fetch = 0;
+string         g_kill_switch = "false";
+string         g_execution_mode = "DEMO";
 string         g_protection_event = "";
 bool           g_protection_comment_shown = false;
+
+//--- Fetch /api/v1/bridge/config every 30s to honor dashboard trading_method & kill_switch
+void ATEFetchConfig()
+{
+   if(TimeCurrent() - g_last_config_fetch < 30) return;
+   g_last_config_fetch = TimeCurrent();
+
+   string headers = "Authorization: Bearer " + InpBridgeToken + "\r\n";
+   char   post[]; char result[];
+   string resultHeaders;
+   ArrayResize(post, 0);
+
+   string url = ATEApiBase() + "/api/v1/bridge/config";
+   ResetLastError();
+   int res = WebRequest("GET", url, headers, 3000, post, result, resultHeaders);
+   if(res != 200) return;
+
+   string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   int idx = StringFind(body, "\"trading_method\":\"");
+   if(idx >= 0)
+   {
+      int s = idx + StringLen("\"trading_method\":\"");
+      int e = StringFind(body, "\"", s);
+      if(e > s) g_trading_method = StringSubstr(body, s, e - s);
+   }
+   idx = StringFind(body, "\"kill_switch\":");
+   if(idx >= 0)
+   {
+      int s = idx + StringLen("\"kill_switch\":");
+      string chunk = StringSubstr(body, s, 5);
+      if(StringFind(chunk, "true") >= 0) g_kill_switch = "true";
+      else g_kill_switch = "false";
+   }
+   idx = StringFind(body, "\"execution_mode\":\"");
+   if(idx >= 0)
+   {
+      int s = idx + StringLen("\"execution_mode\":\"");
+      int e = StringFind(body, "\"", s);
+      if(e > s) g_execution_mode = StringSubstr(body, s, e - s);
+   }
+   PrintFormat("CONFIG_FETCH: method=%s kill=%s mode=%s", g_trading_method, g_kill_switch, g_execution_mode);
+}
 
 //--- Returns InpApiUrl with trailing slashes, /api/v1 and /api trimmed to construct endpoints cleanly
 string ATEApiBase()
@@ -279,6 +325,8 @@ void OnTimer()
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   ATEFetchConfig();
+
    // Pure Protocol Mode: Tick logic is handled via AI Timer polling
 }
 

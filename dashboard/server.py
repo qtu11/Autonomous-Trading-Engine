@@ -61,9 +61,13 @@ def generate_candles(count: int = 2000, tf: str = "M15", symbol: str = "XAUUSD")
         dates = pd.date_range(end=datetime.now(), periods=count, freq=freq)
     except Exception:
         dates = pd.date_range(end=datetime.now(), periods=count, freq="h")
-    base_prices = {"BTCUSDT": 65000, "ETHUSDT": 3500, "BNBUSDT": 600, "SOLUSDT": 180, "XAUUSD": 2350, "XAUUSDm": 2350, "EURUSD": 1.08}
+    base_prices = {"BTCUSDT": 65000, "ETHUSDT": 3500, "BNBUSDT": 600, "SOLUSDT": 180, "XAUUSD": 2845, "XAUUSDm": 2845, "EURUSD": 1.08}
     base = base_prices.get(symbol, 2350)
     volatility = base * 0.008
+    # Seed by hour so repeated polls within same hour yield the same chart
+    seed = int(datetime.now().strftime("%Y%m%d%H")) + hash((symbol, tf)) % 100000
+    np.random.seed(seed)
+    random.seed(seed)
     data = {"timestamp": dates, "open": np.zeros(count), "high": np.zeros(count), "low": np.zeros(count), "close": np.zeros(count), "volume": np.random.uniform(100, 5000, count)}
     close = base
     trend = 1
@@ -146,7 +150,9 @@ class ControlModeRequest(BaseModel): mode: str
 class KillSwitchRequest(BaseModel): active: bool
 class DemoArmRequest(BaseModel): armed: bool
 class AiLoopRequest(BaseModel): enabled: bool
-class TradingMethodRequest(BaseModel): method: str
+class TradingMethodRequest(BaseModel):
+    method: Optional[str] = None
+    trading_method: Optional[str] = None
 class MT5LoginRequest(BaseModel): login: int; password: str; server: str
 class CopilotChatRequest(BaseModel): message: str; symbol: str = "XAUUSD"; timeframe: str = "M15"
 
@@ -229,25 +235,76 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
     ]
     for fvg in fvgs[-5:]: markup_objects.append({"label": fvg["type"], "type": "FVG", "direction": "BULLISH" if "BULL" in fvg["type"] else "BEARISH", "price": (fvg["top"] + fvg["bottom"]) / 2})
     for ob in obs[-5:]: markup_objects.append({"label": ob["type"], "type": "OB", "direction": "BULLISH" if "BULL" in ob["type"] else "BEARISH", "price": (ob["top"] + ob["bottom"]) / 2})
-    buy_signals = sell_signals = 0
-    if indicators["rsi"] < 30: buy_signals += 1
-    elif indicators["rsi"] > 70: sell_signals += 1
-    if indicators["macd"] == "BULLISH": buy_signals += 1
-    elif indicators["macd"] == "BEARISH": sell_signals += 1
-    buy_signals += len([f for f in fvgs if "BULL" in f["type"]])
-    sell_signals += len([f for f in fvgs if "BEAR" in f["type"]])
-    total_signals = buy_signals + sell_signals
-    if total_signals > 0:
-        if buy_signals > sell_signals: direction, signal, score = "BULLISH", "BUY", int(buy_signals / max(total_signals, 1) * 100)
-        elif sell_signals > buy_signals: direction, signal, score = "BEARISH", "SELL", int(sell_signals / max(total_signals, 1) * 100)
-        else: direction, signal, score = "NEUTRAL", "WAIT", 50
-    else: direction, signal, score = "NEUTRAL", "WAIT", 50
+    # Method-aware scoring: each method weights different confluence factors
+    method = _config.get("trading_method", "SNIPER").upper()
+    rsi = indicators["rsi"]; macd = indicators["macd"]; ema_f = indicators["ema_fast"]; ema_m = indicators["ema_medium"]; ema_s = indicators["ema_slow"]
+    bull_evidence = 0.0; bear_evidence = 0.0; factors = []
+    if method == "SNIPER":
+        # SNIPER: aggressive, weighted on RSI extremes + MACD + EMA stack
+        if rsi < 30: bull_evidence += 0.45; factors.append({"reason": "RSI oversold", "direction": "BUY", "weight": 0.45})
+        elif rsi < 45: bull_evidence += 0.20; factors.append({"reason": "RSI recovering", "direction": "BUY", "weight": 0.20})
+        if rsi > 70: bear_evidence += 0.45; factors.append({"reason": "RSI overbought", "direction": "SELL", "weight": 0.45})
+        elif rsi > 55: bear_evidence += 0.20; factors.append({"reason": "RSI weakening", "direction": "SELL", "weight": 0.20})
+        if macd == "BULLISH": bull_evidence += 0.35; factors.append({"reason": "MACD bullish", "direction": "BUY", "weight": 0.35})
+        elif macd == "BEARISH": bear_evidence += 0.35; factors.append({"reason": "MACD bearish", "direction": "SELL", "weight": 0.35})
+        if ema_f > ema_m > ema_s: bull_evidence += 0.20; factors.append({"reason": "EMA stack bullish", "direction": "BUY", "weight": 0.20})
+        elif ema_f < ema_m < ema_s: bear_evidence += 0.20; factors.append({"reason": "EMA stack bearish", "direction": "SELL", "weight": 0.20})
+    elif method == "SMC":
+        # SMC: structure emphasis on Order Blocks + FVGs (institutional footprint)
+        bull_ob = len([o for o in obs if "BULL" in o["type"]]); bear_ob = len([o for o in obs if "BEAR" in o["type"]])
+        bull_fvg = len([f for f in fvgs if "BULL" in f["type"]]); bear_fvg = len([f for f in fvgs if "BEAR" in f["type"]])
+        bull_evidence += bull_ob * 0.30; bear_evidence += bear_ob * 0.30
+        bull_evidence += bull_fvg * 0.20; bear_evidence += bear_fvg * 0.20
+        if bull_ob > bear_ob: factors.append({"reason": f"OB imbalance ({bull_ob}B/{bear_ob}Be)", "direction": "BUY", "weight": 0.30})
+        if bear_ob > bull_ob: factors.append({"reason": f"OB imbalance ({bull_ob}B/{bear_ob}Be)", "direction": "SELL", "weight": 0.30})
+        if bull_fvg > bear_fvg: factors.append({"reason": f"FVG imbalance ({bull_fvg}B/{bear_fvg}Be)", "direction": "BUY", "weight": 0.20})
+        if bear_fvg > bull_fvg: factors.append({"reason": f"FVG imbalance ({bull_fvg}B/{bear_fvg}Be)", "direction": "SELL", "weight": 0.20})
+        # Light MACD tiebreaker
+        if macd == "BULLISH": bull_evidence += 0.10
+        elif macd == "BEARISH": bear_evidence += 0.10
+    elif method == "ICT":
+        # ICT: liquidity & displacement - emphasis on FVG + MACD burst
+        bull_fvg = len([f for f in fvgs if "BULL" in f["type"]]); bear_fvg = len([f for f in fvgs if "BEAR" in f["type"]])
+        bull_evidence += bull_fvg * 0.35; bear_evidence += bear_fvg * 0.35
+        if macd == "BULLISH": bull_evidence += 0.30; factors.append({"reason": "ICT displacement BULL", "direction": "BUY", "weight": 0.30})
+        elif macd == "BEARISH": bear_evidence += 0.30; factors.append({"reason": "ICT displacement BEAR", "direction": "SELL", "weight": 0.30})
+        if rsi < 50: bull_evidence += 0.15
+        else: bear_evidence += 0.15
+    elif method in ("PRICE_ACTION", "PRICE-ACTION"):
+        # Price Action: pure candle structure - rely on EMA stack + RSI
+        if ema_f > ema_m: bull_evidence += 0.40; factors.append({"reason": "PA uptrend", "direction": "BUY", "weight": 0.40})
+        else: bear_evidence += 0.40; factors.append({"reason": "PA downtrend", "direction": "SELL", "weight": 0.40})
+        if 40 < rsi < 60: pass  # neutral
+        elif rsi < 50: bull_evidence += 0.20
+        else: bear_evidence += 0.20
+        if macd == "BULLISH": bull_evidence += 0.20
+        elif macd == "BEARISH": bear_evidence += 0.20
+    else:  # Sniper fallback or unknown
+        if rsi < 30: bull_evidence += 0.45
+        elif rsi > 70: bear_evidence += 0.45
+        if macd == "BULLISH": bull_evidence += 0.35
+        elif macd == "BEARISH": bear_evidence += 0.35
+    total = bull_evidence + bear_evidence
+    if total == 0:
+        direction, signal, score = "NEUTRAL", "WAIT", 50
+    elif bull_evidence > bear_evidence:
+        direction, signal, score = "BULLISH", "BUY", int(bull_evidence / max(total, 0.1) * 100)
+    elif bear_evidence > bull_evidence:
+        direction, signal, score = "BEARISH", "SELL", int(bear_evidence / max(total, 0.1) * 100)
+    else:
+        direction, signal, score = "NEUTRAL", "WAIT", 50
     current_price = float(df["close"].iloc[-1]) if len(df) > 0 else 2350.0
-    sl = current_price - 1.5 * indicators["atr"] if signal == "BUY" else current_price + 1.5 * indicators["atr"]
-    tp = current_price + 2.0 * indicators["atr"] if signal == "BUY" else current_price - 2.0 * indicators["atr"]
+    # Method-specific SL/TP multipliers
+    sl_mult, tp_mult = 1.5, 2.0
+    if method == "SNIPER": sl_mult, tp_mult = 1.0, 2.5
+    elif method == "SMC": sl_mult, tp_mult = 1.5, 3.0
+    elif method == "ICT": sl_mult, tp_mult = 1.2, 2.4
+    elif method in ("PRICE_ACTION", "PRICE-ACTION"): sl_mult, tp_mult = 1.8, 2.0
+    sl = current_price - sl_mult * indicators["atr"] if signal == "BUY" else current_price + sl_mult * indicators["atr"]
+    tp = current_price + tp_mult * indicators["atr"] if signal == "BUY" else current_price - tp_mult * indicators["atr"]
     return {
         "symbol": symbol, "timeframe": tf, "bid": current_price, "ask": current_price + 0.5,
-        "candles": [{"t": str(row["timestamp"]) if hasattr(row["timestamp"], "isoformat") else str(row["timestamp"]),
+        "candles": [{"t": (row["timestamp"].isoformat() if hasattr(row["timestamp"], "isoformat") else str(row["timestamp"])),
             "o": round(float(row["open"]), 5), "h": round(float(row["high"]), 5), "l": round(float(row["low"]), 5),
             "c": round(float(row["close"]), 5), "v": round(float(row["volume"]), 2)} for _, row in df.iterrows()],
         "indicators": {"data_status": "LIVE_VERIFIED", "rsi": round(indicators["rsi"], 2), "atr": round(indicators["atr"], 2),
@@ -258,10 +315,7 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
             "advanced_counts": {"FVG_BULL": len([f for f in fvgs if "BULL" in f["type"]]), "FVG_BEAR": len([f for f in fvgs if "BEAR" in f["type"]]),
                 "OB_BULL": len([o for o in obs if "BULL" in o["type"]]), "OB_BEAR": len([o for o in obs if "BEAR" in o["type"]]), "BOS_BULL": 0, "BOS_BEAR": 0},
             "confluence": {"score": score, "direction": direction, "signal": signal,
-                "factors": [{"reason": "RSI", "direction": "BUY" if indicators["rsi"] < 50 else "SELL", "weight": 0.3},
-                    {"reason": "MACD", "direction": indicators["macd"], "weight": 0.3},
-                    {"reason": "FVG", "direction": "BUY" if buy_signals > sell_signals else "SELL", "weight": 0.2},
-                    {"reason": "Order Blocks", "direction": "BUY" if len([o for o in obs if "BULL" in o["type"]]) > len([o for o in obs if "BEAR" in o["type"]]) else "SELL", "weight": 0.2}],
+                "factors": factors if factors else [{"reason": "Method=" + method, "direction": "BUY" if signal == "BUY" else "SELL", "weight": 1.0}],
                 "rrr": 2.0, "entry": round(current_price, 2), "sl": round(sl, 2), "tp": round(tp, 2), "method": "ultra_confluence"}},
     }
 
@@ -342,9 +396,13 @@ async def set_ai_loop(req: AiLoopRequest):
 
 @app.post("/api/control-center/trading-method")
 async def set_trading_method(req: TradingMethodRequest):
-    valid_methods = ["SNIPER", "SMC", "ICT", "PRICE_ACTION", "ULTRA_CONFLUENCE", "INDICATOR"]; method = req.method.upper()
-    if method not in valid_methods: raise HTTPException(status_code=400, detail=f"Invalid method. Must be one of: {valid_methods}")
-    _config["trading_method"] = method; _add_log("INFO", "TRADING_METHOD", f"Trading method changed to {method}")
+    valid_methods = ["SNIPER", "SMC", "ICT", "PRICE_ACTION", "ULTRA_CONFLUENCE", "INDICATOR"]
+    raw = req.method or req.trading_method or ""
+    method = raw.upper().replace(" ", "_")
+    if method not in valid_methods:
+        raise HTTPException(status_code=400, detail=f"Invalid method. Must be one of: {valid_methods}")
+    _config["trading_method"] = method
+    _add_log("INFO", "TRADING_METHOD", f"Trading method changed to {method}")
     return {"status": "SUCCESS", "trading_method": method}
 
 @app.post("/api/control-center/login-mt5")
@@ -390,6 +448,18 @@ async def close_order(req: OrderCloseRequest):
             return {"status": "SUCCESS", "message": f"Position {req.ticket} closed"}
     raise HTTPException(status_code=404, detail="Position not found")
 
+@app.post("/api/orders/close-profitable")
+async def close_profitable():
+    closed = 0
+    for p in list(_positions):
+        cp = float(p.get("current_price") or p.get("entry_price") or 0)
+        ep = float(p.get("entry_price", 0))
+        q = float(p.get("quantity", 0.01))
+        pnl = (cp - ep) * q * 100 if p.get("direction") == "BUY" else (ep - cp) * q * 100
+        if pnl > 0:
+            _positions.remove(p); closed += 1
+    return {"status": "OK", "closed": closed}
+
 @app.post("/api/order/close_all")
 async def close_all_orders():
     count = len(_positions)
@@ -406,12 +476,29 @@ async def close_all_orders():
 @app.post("/api/copilot/chat")
 async def copilot_chat(req: CopilotChatRequest):
     message = req.message.lower()
-    if any(w in message for w in ["buy", "long", "mua"]): response = "Based on current market analysis: RSI is neutral at 50, MACD shows slight bullish momentum. Consider waiting for confirmation above EMA21 before entering LONG."
-    elif any(w in message for w in ["sell", "short", "ban"]): response = "Based on current market analysis: MACD bearish crossover detected. Consider waiting for price to break below EMA50 before entering SHORT."
-    elif any(w in message for w in ["trend", "huong", "xu huong"]): response = "Current trend analysis: Price is trading above EMA50 (2350.00) indicating short-term bullish bias. Watch for FVG at 2345-2348 zone for potential buy setups."
-    elif any(w in message for w in ["signal", "tin hieu"]): response = "Signal Summary: No clear setup currently. Wait for: 1) Price retest at EMA21, 2) RSI oversold bounce, 3) FVG formation confirmed."
-    elif any(w in message for w in ["risk", "rủi ro", "stop loss"]): response = "Risk Management: Current ATR = 15 pips. Recommended SL distance: 1.5x ATR = 22.5 pips. Position size for 1% risk on $10,000 = 0.44 lots."
-    else: response = f"I understand you're asking about: '{req.message}'. For detailed analysis, please specify: market direction, signals, risk management, or trend analysis."
+    method = _config.get("trading_method", "SNIPER")
+    df = generate_candles(50, req.timeframe or "M15", req.symbol or "XAUUSD")
+    indicators = calculate_indicators(df)
+    last = float(df["close"].iloc[-1]) if len(df) > 0 else 0.0
+    rsi = indicators["rsi"]; macd = indicators["macd"]; atr = indicators["atr"]
+    bias = "BULLISH" if rsi > 50 else "BEARISH" if rsi < 50 else "NEUTRAL"
+    if any(w in message for w in ["buy", "long", "mua"]):
+        sl = round(last - 1.5 * atr, 2); tp = round(last + 2.0 * atr, 2)
+        response = f"[{method}] BUY setup on {req.symbol} ({req.timeframe}): RSI={rsi:.1f} MACD={macd}. Entry ~{last:.2f}, SL={sl}, TP={tp}. Confirm EMA21 break before entry."
+    elif any(w in message for w in ["sell", "short", "ban"]):
+        sl = round(last + 1.5 * atr, 2); tp = round(last - 2.0 * atr, 2)
+        response = f"[{method}] SELL setup on {req.symbol} ({req.timeframe}): RSI={rsi:.1f} MACD={macd}. Entry ~{last:.2f}, SL={sl}, TP={tp}. Wait for break below EMA50."
+    elif any(w in message for w in ["trend", "huong", "xu huong"]):
+        response = f"[{method}] Trend on {req.symbol} {req.timeframe}: price={last:.2f}, bias={bias}, RSI={rsi:.1f}, MACD={macd}. EMA20={indicators['ema_fast']:.2f}, EMA50={indicators['ema_medium']:.2f}."
+    elif any(w in message for w in ["signal", "tin hieu"]):
+        response = f"[{method}] Active signal: {bias}. ATR={atr:.2f}. Suggested SL=1.5*ATR ({1.5*atr:.2f}), TP=2*ATR ({2*atr:.2f}). Method drives entry logic on EA."
+    elif any(w in message for w in ["risk", "rui ro", "stop loss"]):
+        lots = (10000 * _config["risk_per_trade_fraction"]) / max(atr * 10, 1)
+        response = f"[{method}] Risk: 1% on $10k = {lots:.2f} lots. ATR={atr:.2f}, SL distance = 1.5*ATR = {1.5*atr:.2f}, TP = 2*ATR = {2*atr:.2f}."
+    elif any(w in message for w in ["method", "phuong phap"]):
+        response = f"Current method = {method}. EA will apply method-specific entry logic. Switch via Control Center > Trading Method."
+    else:
+        response = f"[{method}] You asked '{req.message}'. Current {req.symbol} {req.timeframe}: price={last:.2f}, RSI={rsi:.1f}, bias={bias}. Ask about: buy, sell, trend, signal, risk, method."
     _add_log("INFO", "COPILOT_QUERY", f"User query: {req.message[:50]}")
     return {"role": "ai", "text": response, "time": datetime.now(timezone.utc).isoformat()}
 
@@ -436,7 +523,75 @@ async def get_economic_calendar(days: int = Query(7, ge=1, le=30)):
 
 # ─── MT5 BRIDGE ENDPOINTS ─────────────────────────────────────────────────────
 @app.post("/api/v1/bridge/commands/claim")
-async def bridge_claim(): return {"command_id": str(uuid.uuid4()), "status": "CLAIMED"}
+async def bridge_claim():
+    """EA claims the next queued command (FIFO)."""
+    if _config.get("kill_switch"):
+        return {"command_id": None, "status": "KILLED"}
+    if not _commands:
+        return {"command_id": None, "status": "EMPTY"}
+    cmd = _commands.pop(0)
+    cmd["status"] = "CLAIMED"
+    return cmd
+
+@app.get("/api/patterns")
+async def list_patterns(symbol: str = Query("XAUUSD"), tf: str = Query("M15")):
+    """Return detected patterns (FVG, OB, BOS) for the alert panel."""
+    df = generate_candles(200, tf, symbol)
+    fvgs = detect_fvg(df)
+    obs = detect_order_blocks(df)
+    patterns = []
+    for f in fvgs[-8:]:
+        direction = "BULLISH" if "BULL" in f["type"] else "BEARISH"
+        patterns.append({
+            "id": hash(f.get("type", "") + str(f.get("top", 0))) & 0x7FFFFFFF,
+            "type": "FVG", "direction": direction, "symbol": symbol,
+            "price": (f.get("top", 0) + f.get("bottom", 0)) / 2,
+            "size": abs(f.get("top", 0) - f.get("bottom", 0)),
+            "time": datetime.now(timezone.utc).strftime("%H:%M"),
+            "pattern": "Fair Value Gap",
+        })
+    for o in obs[-8:]:
+        direction = "BULLISH" if "BULL" in o["type"] else "BEARISH"
+        patterns.append({
+            "id": hash(o.get("type", "") + str(o.get("top", 0))) & 0x7FFFFFFF,
+            "type": "OB", "direction": direction, "symbol": symbol,
+            "price": (o.get("top", 0) + o.get("bottom", 0)) / 2,
+            "size": abs(o.get("top", 0) - o.get("bottom", 0)),
+            "time": datetime.now(timezone.utc).strftime("%H:%M"),
+            "pattern": "Order Block",
+        })
+    return patterns
+
+@app.post("/api/v1/bridge/positions")
+async def bridge_positions(request: Request):
+    """Receive current open positions from MT5 EA so dashboard reflects real positions."""
+    try:
+        body = await request.json()
+        incoming = body.get("positions", [])
+        for p in incoming:
+            _positions.append({
+                "ticket": p.get("ticket"),
+                "symbol": p.get("symbol", "XAUUSD"),
+                "direction": p.get("type", "BUY"),
+                "quantity": p.get("volume", 0.01),
+                "entry_price": p.get("entry", 0.0),
+                "stop_loss": p.get("sl", 0.0),
+                "take_profit": p.get("tp", 0.0),
+                "current_price": p.get("current_price", 0.0),
+                "opened_at": p.get("opened_at", datetime.now(timezone.utc).isoformat()),
+            })
+        # Keep only most recent 200 positions to avoid unbounded growth
+        while len(_positions) > 200:
+            _positions.pop(0)
+        return {"status": "OK", "count": len(_positions)}
+    except Exception as e:
+        return {"status": "ERROR", "message": str(e)}
+
+@app.delete("/api/v1/bridge/positions")
+async def bridge_positions_clear():
+    """Clear positions (called by EA after sync)."""
+    _positions.clear()
+    return {"status": "OK"}
 
 @app.post("/api/v1/bridge/candles")
 async def bridge_candles(request: Request):
@@ -445,6 +600,22 @@ async def bridge_candles(request: Request):
 
 @app.post("/api/v1/bridge/markup")
 async def bridge_markup(): return {"objects": [], "confluence": {"score": 50}}
+
+@app.get("/api/v1/bridge/config")
+async def bridge_config():
+    """EA fetches current trading method & risk params from here."""
+    return {
+        "trading_method": _config.get("trading_method", "SNIPER"),
+        "execution_mode": _config.get("execution_mode", "DEMO"),
+        "demo_armed": _config.get("demo_armed", True),
+        "live_armed": _config.get("live_armed", False),
+        "kill_switch": _config.get("kill_switch", False),
+        "ai_auto_loop": _config.get("ai_auto_loop", True),
+        "risk_per_trade_fraction": _config.get("risk_per_trade_fraction", 0.01),
+        "max_open_positions": _config.get("max_open_positions", 5),
+        "symbol": _config.get("symbol", "XAUUSD"),
+        "timeframe": _config.get("timeframe", "M15"),
+    }
 
 @app.post("/api/v1/bridge/calendar")
 async def bridge_calendar(): return {"events": []}
@@ -498,6 +669,64 @@ async def http_exception_handler(request: Request, exc: HTTPException): return J
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     _add_log("ERROR", "UNHANDLED_EXCEPTION", str(exc)); return JSONResponse(status_code=500, content={"error": "Internal server error"})
+
+# ─── AI AUTO LOOP ──────────────────────────────────────────────────────────────
+@app.on_event("startup")
+async def _start_ai_loop():
+    """Background task: every 10s, if ai_auto_loop is on, generate a signal and queue a command for EA."""
+    async def _runner():
+        while True:
+            try:
+                if _config.get("ai_auto_loop") and not _config.get("kill_switch"):
+                    df = generate_candles(100, _config.get("timeframe", "M15"), _config.get("symbol", "XAUUSD"))
+                    indicators = calculate_indicators(df)
+                    fvgs = detect_fvg(df); obs = detect_order_blocks(df)
+                    rsi = indicators["rsi"]; macd = indicators["macd"]
+                    method = _config.get("trading_method", "SNIPER")
+                    # Compact scoring for the loop (same weights as endpoint)
+                    bull = bear = 0.0
+                    if method == "SNIPER":
+                        if rsi < 30: bull += 0.45
+                        elif rsi < 45: bull += 0.20
+                        if rsi > 70: bear += 0.45
+                        elif rsi > 55: bear += 0.20
+                        if macd == "BULLISH": bull += 0.35
+                        elif macd == "BEARISH": bear += 0.35
+                    elif method == "SMC":
+                        bull += len([o for o in obs if "BULL" in o["type"]]) * 0.30
+                        bear += len([o for o in obs if "BEAR" in o["type"]]) * 0.30
+                    elif method == "ICT":
+                        bull += len([f for f in fvgs if "BULL" in f["type"]]) * 0.35
+                        bear += len([f for f in fvgs if "BEAR" in f["type"]]) * 0.35
+                        if macd == "BULLISH": bull += 0.30
+                        elif macd == "BEARISH": bear += 0.30
+                    else:
+                        if rsi < 30: bull += 0.45
+                        elif rsi > 70: bear += 0.45
+                        if macd == "BULLISH": bull += 0.35
+                        elif macd == "BEARISH": bear += 0.35
+                    last = float(df["close"].iloc[-1]) if len(df) > 0 else 0.0
+                    atr = indicators["atr"]
+                    action = "BUY" if bull > bear else "SELL" if bear > bull else None
+                    score = (bull / max(bull + bear, 0.1)) if (bull + bear) > 0 else 0
+                    if action and score >= 0.55 and len(_positions) < _config.get("max_open_positions", 5):
+                        sl_mult = 1.5 if method != "SNIPER" else 1.0
+                        tp_mult = 2.0 if method != "SNIPER" else 2.5
+                        sl = last - sl_mult * atr if action == "BUY" else last + sl_mult * atr
+                        tp = last + tp_mult * atr if action == "BUY" else last - tp_mult * atr
+                        # Avoid duplicate same-direction command within last 60s
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        recent = [c for c in _commands if c.get("action") == action and (datetime.now(timezone.utc) - datetime.fromisoformat(c["ts"].replace("Z",""))).total_seconds() < 60]
+                        if not recent:
+                            cid = str(uuid.uuid4())
+                            _commands.append({"command_id": cid, "ts": now_iso, "action": action, "volume": 0.01,
+                                "stop_loss": round(sl, 2), "take_profit": round(tp, 2), "reason": f"AI auto-loop method={method} score={int(score*100)}",
+                                "symbol": _config.get("symbol", "XAUUSD"), "status": "QUEUED"})
+                            _add_log("INFO", "AI_LOOP_SIGNAL", f"{method} {action} score={int(score*100)} cid={cid}")
+            except Exception as e:
+                _add_log("ERROR", "AI_LOOP_ERR", str(e))
+            await asyncio.sleep(10)
+    asyncio.create_task(_runner())
 
 # ─── MAIN ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
