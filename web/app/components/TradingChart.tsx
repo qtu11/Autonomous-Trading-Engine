@@ -1,19 +1,19 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { 
-  createChart, 
-  CandlestickSeries, 
-  IChartApi, 
-  ISeriesApi, 
-  CandlestickData, 
+import {
+  createChart,
+  CandlestickSeries,
+  IChartApi,
+  ISeriesApi,
+  CandlestickData,
   Time,
   IPriceLine,
-  CrosshairMode
+  CrosshairMode,
 } from 'lightweight-charts';
 import type { Candle, MarkupResponse } from '@/lib/api';
 
-// ── Premium Color System ────────────────────────────────────────────────────────
+// Color System
 const C = {
   bg: '#020305',
   bgDark: '#010102',
@@ -53,21 +53,21 @@ interface TradingChartProps {
   timeframe?: string;
   markup?: MarkupResponse | null;
   candles?: Candle[];
-  positions?: Position[];
+  positions?: any[];
   onTimeframeChange?: (tf: string) => void;
 }
 
-interface Position {
-  id: string;
-  type: 'BUY' | 'SELL';
-  openPrice: number;
-  sl: number;
-  tp: number;
-  lots?: number;
-  profit?: number;
-}
-
 const TIMEFRAMES = ['M1', 'M5', 'M15', 'H1', 'H4', 'D1'];
+
+// FIX LỖI 1: Proper candle count per timeframe
+const TIMEFRAME_CANDLES: Record<string, number> = {
+  H4: 300,
+  H1: 1200,
+  M30: 2400,
+  M15: 4800,
+  M5: 14400,
+  M1: 72000,
+};
 
 export default function TradingChart({
   symbol = 'XAUUSD',
@@ -83,16 +83,18 @@ export default function TradingChart({
   const bidLineRef = useRef<IPriceLine | null>(null);
   const askLineRef = useRef<IPriceLine | null>(null);
   const positionLinesRef = useRef<Map<string, IPriceLine[]>>(new Map());
+  const markupObjectsRef = useRef<IPriceLine[]>([]);
+
   const [localTf, setLocalTf] = useState(timeframe);
   const [candles, setCandles] = useState<Candle[]>(propCandles || []);
   const [loading, setLoading] = useState(!propCandles);
   const [markupData, setMarkupData] = useState<MarkupResponse | null>(markup || null);
   const [bidPrice, setBidPrice] = useState<number | null>(null);
   const [askPrice, setAskPrice] = useState<number | null>(null);
-  const [crosshairInfo, setCrosshairInfo] = useState<{time: string; price: number} | null>(null);
+  const [crosshairInfo, setCrosshairInfo] = useState<{ time: string; price: number } | null>(null);
 
+  // Convert candle to timestamp
   const toTime = useCallback((candle: Candle): Time => {
-    // Prefer full ISO timestamp (c.ts) over short string (c.t)
     const raw = (candle as any).ts || candle.t;
     if (typeof raw === 'number') return raw as Time;
     const str = String(raw || '');
@@ -107,7 +109,16 @@ export default function TradingChart({
     return Math.floor(Date.now() / 1000) as Time;
   }, []);
 
-  // ── Initialize Chart ─────────────────────────────────────────────────────────
+  // Clear all markup price lines
+  const clearMarkup = useCallback(() => {
+    if (!candleSeriesRef.current) return;
+    markupObjectsRef.current.forEach(line => {
+      try { candleSeriesRef.current!.removePriceLine(line); } catch { }
+    });
+    markupObjectsRef.current = [];
+  }, []);
+
+  // Initialize Chart
   useEffect(() => {
     if (!containerRef.current) return;
 
@@ -124,17 +135,17 @@ export default function TradingChart({
       },
       crosshair: {
         mode: CrosshairMode.Normal,
-        vertLine: { 
-          color: 'rgba(212,175,131,0.5)', 
-          labelBackgroundColor: C.gold, 
-          width: 1, 
+        vertLine: {
+          color: 'rgba(212,175,131,0.5)',
+          labelBackgroundColor: C.gold,
+          width: 1,
           style: 2,
           labelVisible: true,
         },
-        horzLine: { 
-          color: 'rgba(212,175,131,0.5)', 
-          labelBackgroundColor: C.gold, 
-          width: 1, 
+        horzLine: {
+          color: 'rgba(212,175,131,0.5)',
+          labelBackgroundColor: C.gold,
+          width: 1,
           style: 2,
           labelVisible: true,
         },
@@ -148,26 +159,26 @@ export default function TradingChart({
         borderColor: 'rgba(255,255,255,0.08)',
         timeVisible: true,
         secondsVisible: false,
-        rightOffset: 2,
-        barSpacing: 4,
+        rightOffset: 5,
+        barSpacing: 6,
         minBarSpacing: 2,
         fixLeftEdge: false,
         fixRightEdge: false,
         rightBarStaysOnScroll: true,
       },
-      handleScroll: { 
-        mouseWheel: true, 
-        pressedMouseMove: true, 
-        horzTouchDrag: true, 
+      handleScroll: {
+        mouseWheel: true,
+        pressedMouseMove: true,
+        horzTouchDrag: true,
         vertTouchDrag: true,
       },
-      handleScale: { 
-        axisPressedMouseMove: true, 
-        mouseWheel: true, 
+      handleScale: {
+        axisPressedMouseMove: true,
+        mouseWheel: true,
         pinch: true,
       },
       autoSize: true,
-    });
+    } as any);
 
     const candleSeries = chart.addSeries(CandlestickSeries, {
       upColor: C.bullish,
@@ -182,13 +193,12 @@ export default function TradingChart({
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
 
-    // Crosshair move handler
+    // Crosshair handler
     chart.subscribeCrosshairMove((param) => {
       if (!param.time || !param.point) {
         setCrosshairInfo(null);
         return;
       }
-      
       const price = param.seriesData.get(candleSeries);
       if (price && typeof price === 'object' && 'value' in price) {
         const d = new Date(Number(param.time) * 1000);
@@ -199,16 +209,15 @@ export default function TradingChart({
       }
     });
 
-    // Resize handler
+    // Resize
     const handleResize = () => {
       if (containerRef.current && chart) {
-        chart.applyOptions({ 
-          width: containerRef.current.clientWidth, 
-          height: containerRef.current.clientHeight 
+        chart.applyOptions({
+          width: containerRef.current.clientWidth,
+          height: containerRef.current.clientHeight
         });
       }
     };
-    
     window.addEventListener('resize', handleResize);
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(containerRef.current);
@@ -220,15 +229,19 @@ export default function TradingChart({
     };
   }, []);
 
-  // ── Update Candle Data ──────────────────────────────────────────────────────
+  // Update candles - FIX LỖI 1: Show all candles, proper zoom
   useEffect(() => {
     if (!candleSeriesRef.current || !candles.length) return;
-    
-    const timeMap = new Map<number, CandlestickData<Time>>();
+
+    // Clear existing markup when candles change
+    clearMarkup();
+
+    // Build candle data
+    const chartData: CandlestickData<Time>[] = [];
     candles.forEach(c => {
       const t = toTime(c) as number;
       if (!isNaN(t) && t > 0) {
-        timeMap.set(t, {
+        chartData.push({
           time: t as Time,
           open: Number(c.o),
           high: Number(c.h),
@@ -238,32 +251,39 @@ export default function TradingChart({
       }
     });
 
-    const chartData = Array.from(timeMap.values()).sort((a, b) => (a.time as number) - (b.time as number));
-
     if (!chartData.length) return;
 
+    // Sort by time ascending
+    chartData.sort((a, b) => (a.time as number) - (b.time as number));
+
     candleSeriesRef.current.setData(chartData);
+
+    // FIX: Scroll to show latest candles properly
     try {
       const lastIdx = chartData.length - 1;
-      const fromIdx = Math.max(0, lastIdx - 149);
+      const visibleCount = Math.min(200, chartData.length); // Show ~200 candles visible
+      const fromIdx = Math.max(0, lastIdx - visibleCount + 1);
       const fromTs = chartData[fromIdx].time as number;
       const toTs = chartData[lastIdx].time as number;
-      chartRef.current?.timeScale().setVisibleRange({ from: fromTs as any, to: toTs as any });
+      chartRef.current?.timeScale().setVisibleRange({
+        from: fromTs as any,
+        to: toTs as any
+      });
     } catch {
       chartRef.current?.timeScale().fitContent();
     }
-  }, [candles, toTime]);
+  }, [candles, toTime, clearMarkup]);
 
-  // ── Update Bid/Ask Lines ─────────────────────────────────────────────────────
+  // Update Bid/Ask
   useEffect(() => {
     if (!candleSeriesRef.current) return;
 
     if (bidLineRef.current) {
-      try { candleSeriesRef.current.removePriceLine(bidLineRef.current); } catch {}
+      try { candleSeriesRef.current.removePriceLine(bidLineRef.current); } catch { }
       bidLineRef.current = null;
     }
     if (askLineRef.current) {
-      try { candleSeriesRef.current.removePriceLine(askLineRef.current); } catch {}
+      try { candleSeriesRef.current.removePriceLine(askLineRef.current); } catch { }
       askLineRef.current = null;
     }
 
@@ -277,7 +297,7 @@ export default function TradingChart({
           axisLabelVisible: true,
           title: 'BID',
         });
-      } catch {}
+      } catch { }
     }
 
     if (askPrice !== null) {
@@ -290,126 +310,181 @@ export default function TradingChart({
           axisLabelVisible: true,
           title: 'ASK',
         });
-      } catch {}
+      } catch { }
     }
   }, [bidPrice, askPrice]);
 
-  // ── Update Position Lines ─────────────────────────────────────────────────────
+  // Update positions
   useEffect(() => {
     if (!candleSeriesRef.current) return;
     const series = candleSeriesRef.current;
 
     positionLinesRef.current.forEach((lines) => {
       lines.forEach(line => {
-        try { series.removePriceLine(line); } catch {}
+        try { series.removePriceLine(line); } catch { }
       });
     });
     positionLinesRef.current.clear();
 
-    positions.forEach((pos) => {
+    positions.forEach((pos: any) => {
       const lines: IPriceLine[] = [];
-      const isBuy = pos.type === 'BUY';
-      
+      const isBuy = pos.type === 'BUY' || pos.type === 'buy';
+
       try {
         lines.push(series.createPriceLine({
-          price: pos.openPrice,
+          price: pos.openPrice || pos.entry,
           color: isBuy ? C.bullish : C.bearish,
           lineWidth: 2,
           lineStyle: 0,
           axisLabelVisible: true,
-          title: `${pos.type} @ ${pos.openPrice.toFixed(2)}`,
+          title: `${pos.type} @ ${(pos.openPrice || pos.entry)?.toFixed(2)}`,
         }));
-      } catch {}
+      } catch { }
 
-      try {
-        lines.push(series.createPriceLine({
-          price: pos.sl,
-          color: C.red,
-          lineWidth: 2,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: `SL @ ${pos.sl.toFixed(2)}`,
-        }));
-      } catch {}
+      if (pos.sl) {
+        try {
+          lines.push(series.createPriceLine({
+            price: pos.sl,
+            color: C.red,
+            lineWidth: 2,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: `SL @ ${pos.sl.toFixed(2)}`,
+          }));
+        } catch { }
+      }
 
-      try {
-        lines.push(series.createPriceLine({
-          price: pos.tp,
-          color: C.green,
-          lineWidth: 2,
-          lineStyle: 2,
-          axisLabelVisible: true,
-          title: `TP @ ${pos.tp.toFixed(2)}`,
-        }));
-      } catch {}
+      if (pos.tp) {
+        try {
+          lines.push(series.createPriceLine({
+            price: pos.tp,
+            color: C.green,
+            lineWidth: 2,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: `TP @ ${pos.tp.toFixed(2)}`,
+          }));
+        } catch { }
+      }
 
-      positionLinesRef.current.set(pos.id, lines);
+      positionLinesRef.current.set(pos.id || pos.ticket, lines);
     });
   }, [positions]);
 
-  // ── Render Markup ────────────────────────────────────────────────────────────
+  // FIX LỖI 2: Proper markup rendering for all method types
   const renderMarkup = useCallback(() => {
     if (!chartRef.current || !candleSeriesRef.current || !markupData?.objects?.length) return;
-    
+    clearMarkup();
+
     const series = candleSeriesRef.current;
-    const priceLineTypes = [
-      'EMA', 'EMA_RIBBON', 'VWAP', 'ADX', 'MACD_LINE', 
-      'SNIPER_SIGNAL', 'SNIPER_SL', 'SNIPER_TP1', 'SNIPER_TP2', 'SNIPER_TP3', 
-      'SNIPER_TP4', 'SNIPER_TP5', 'OB', 'FVG', 'BSL', 'LIQUIDITY_POOL', 
-      'LIQUIDITY', 'SWING', 'BOS', 'CHoCH', 'MSS', 'SUPPLY_DEMAND', 
-      'KILLZONE', 'PIVOT', 'PDH', 'PDL', 'SUPPORT', 'RESISTANCE', 'SR', 'TREND'
-    ];
 
-    markupData.objects.forEach((m) => {
-      if (!m.price || !priceLineTypes.includes(m.type)) return;
+    // Zone types that need top+bottom lines
+    const zoneTypes = new Set([
+      'OB', 'BREAKER', 'MITIGATION', 'REJECTION', 'FVG', 'iFVG', 'OTE', 'ASIAN', 'PD',
+      'SUPPLY_DEMAND', 'SUPPORT', 'RESISTANCE', 'SR', 'TRENDLINE', 'UN', 'CHANNEL',
+      'RANGE', 'VOLUME_IMBALANCE', 'VOID', 'BPR', 'DEALING_RANGE', 'INDUCEMENT',
+      'CHART_PATTERN', 'JUDAS_SWING', 'UNICORN', 'PO3', 'AMD', 'SESSION_HL',
+      'PDH_PDL', 'WEEKLY_MONTHLY_HL', 'SMT_DIVERGENCE', 'SILVER_BULLET', 'TURTLE_SOUP',
+      'PIVOT', 'PDH', 'PDL', 'KILLZONE', 'EQUILIBRIUM', 'LIQUIDITY_POOL',
+    ]);
 
+    // Single-price types
+    const singlePriceTypes = new Set([
+      'EMA', 'EMA_RIBBON', 'VWAP', 'ADX', 'MACD_LINE', 'RSI_LEVEL',
+      'SNIPER_SIGNAL', 'SNIPER_SL', 'SNIPER_TP1', 'SNIPER_TP2', 'SNIPER_TP3',
+      'SNIPER_TP4', 'SNIPER_TP5', 'SNIPER_SCORE', 'SNIPER_DASH',
+      'BSL', 'SSL', 'EQH', 'EQL', 'LIQUIDITY', 'SWING', 'BOS', 'CHoCH', 'MSS',
+      'TREND', 'PULLBACK', 'RETEST', 'BREAKOUT', 'FAKE_BREAKOUT', 'PATTERN',
+    ]);
+
+    // Color mapping
+    const getColor = (m: any) => {
       const isBullish = m.direction === 'BULLISH';
-      let color = C.gold;
-      let lineWidth: 1 | 2 | 3 | 4 = 1;
-      let lineStyle: 0 | 1 | 2 | 3 | 4 = 0;
-      let title = m.label || m.type.substring(0, 8);
-
       switch (m.type) {
-        case 'EMA': color = m.label === 'EMA9' ? C.EMA9 : C.EMA21; lineWidth = 2; title = m.label || 'EMA'; break;
-        case 'VWAP': color = C.VWAP; lineWidth = 2; title = 'VWAP'; break;
-        case 'SNIPER_SIGNAL': color = C.SNIPER_SIGNAL; lineWidth = 3; title = `> ${m.label}`; break;
-        case 'SNIPER_SL': color = C.SNIPER_SL; lineWidth = 2; lineStyle = 2; title = m.label || 'SL'; break;
+        case 'EMA': return m.label === 'EMA9' ? C.EMA9 : C.EMA21;
+        case 'VWAP': return C.VWAP;
+        case 'SNIPER_SIGNAL': return C.SNIPER_SIGNAL;
+        case 'SNIPER_SL': return C.SNIPER_SL;
         case 'SNIPER_TP1': case 'SNIPER_TP2': case 'SNIPER_TP3': case 'SNIPER_TP4': case 'SNIPER_TP5':
-          color = C.SNIPER_TP; lineWidth = m.type === 'SNIPER_TP5' ? 3 : 1; lineStyle = m.type === 'SNIPER_TP5' ? 0 : 2;
-          title = m.label || m.type.replace('SNIPER_', 'TP'); break;
-        case 'OB': color = isBullish ? C.bullish : C.bearish; break;
-        case 'FVG': color = isBullish ? C.blue : '#ec4899'; break;
-        case 'BSL': case 'LIQUIDITY_POOL': case 'LIQUIDITY': color = C.LIQUIDITY; lineStyle = 2; title = m.label || 'BSL'; break;
-        case 'SWING': color = C.SWING; break;
-        case 'BOS': case 'CHoCH': case 'MSS': color = C.BOS; lineWidth = 2; title = m.label || m.type; break;
-        case 'SUPPLY_DEMAND': color = isBullish ? C.bullish : C.bearish; lineWidth = 2; title = m.label || (isBullish ? 'DEMAND' : 'SUPPLY'); break;
-        case 'KILLZONE': color = '#a855f7'; lineStyle = 3; title = m.label || 'KZ'; break;
-        case 'PIVOT': case 'PDH': case 'PDL': color = C.PIVOT; lineStyle = 2; title = m.label || m.type; break;
-        case 'SUPPORT': case 'RESISTANCE': case 'SR': color = 'rgba(251,191,36,0.7)'; lineStyle = 2; title = m.label || m.type; break;
-        case 'TREND': color = isBullish ? C.bullish : C.bearish; lineWidth = 2; title = isBullish ? 'UP' : 'DOWN'; break;
-        default: color = isBullish ? C.bullish : C.bearish;
+          return C.SNIPER_TP;
+        case 'BOS': case 'CHoCH': case 'MSS': return C.BOS;
+        case 'SWING': return C.SWING;
+        case 'LIQUIDITY': case 'LIQUIDITY_POOL': case 'BSL': case 'SSL': case 'EQH': case 'EQL':
+          return C.LIQUIDITY;
+        case 'KILLZONE': return '#a855f7';
+        case 'PIVOT': case 'PDH': case 'PDL': return C.PIVOT;
+        case 'SUPPLY_DEMAND': return isBullish ? C.bullish : C.bearish;
+        case 'OB': case 'BREAKER': case 'MITIGATION': case 'REJECTION':
+          return isBullish ? C.green : C.red;
+        case 'FVG': case 'iFVG': return isBullish ? C.blue : C.purple;
+        case 'TREND': return isBullish ? C.bullish : C.bearish;
+        case 'ASIAN': case 'OTE': case 'PD': return C.amber;
+        default: return isBullish ? C.bullish : C.bearish;
       }
+    };
 
+    // Render all markup objects
+    markupData.objects.forEach((m: any) => {
       try {
-        series.createPriceLine({
-          price: m.price,
-          color: color,
-          lineWidth: lineWidth,
-          lineStyle: lineStyle,
-          axisLabelVisible: true,
-          title: title,
-        });
-      } catch {}
+        // Zone types: draw top + bottom lines
+        if (zoneTypes.has(m.type) && typeof m.top === 'number' && typeof m.bottom === 'number' && m.top !== m.bottom) {
+          const color = getColor(m);
+          const lo = Math.min(m.top, m.bottom);
+          const hi = Math.max(m.top, m.bottom);
+
+          const topLine = series.createPriceLine({
+            price: hi,
+            color: color,
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: `${m.label || m.type} ▲`,
+          });
+
+          const bottomLine = series.createPriceLine({
+            price: lo,
+            color: color,
+            lineWidth: 1,
+            lineStyle: 2,
+            axisLabelVisible: true,
+            title: `${m.label || m.type} ▼`,
+          });
+
+          markupObjectsRef.current.push(topLine, bottomLine);
+          return;
+        }
+
+        // Single price types
+        if (singlePriceTypes.has(m.type) && typeof m.price === 'number') {
+          const color = getColor(m);
+          let lineWidth = 1;
+          let lineStyle = 0;
+
+          if (m.type === 'SNIPER_SIGNAL') { lineWidth = 3; lineStyle = 0; }
+          if (m.type.includes('SL') || m.type.includes('TP')) { lineStyle = 2; }
+
+          const line = series.createPriceLine({
+            price: m.price,
+            color,
+            lineWidth: lineWidth as 1 | 2 | 3,
+            lineStyle: lineStyle as 0 | 1 | 2 | 3 | 4,
+            axisLabelVisible: true,
+            title: m.label || m.type,
+          });
+          markupObjectsRef.current.push(line);
+        }
+      } catch { }
     });
-  }, [markupData]);
+  }, [markupData, clearMarkup]);
 
   useEffect(() => { renderMarkup(); }, [renderMarkup]);
 
-  // ── Fetch Data ──────────────────────────────────────────────────────────────
+  // Fetch data with proper candle count - FIX LỖI 1
   const fetchData = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/market?symbol=${symbol}&tf=${localTf}`);
+      const count = TIMEFRAME_CANDLES[localTf] || 4800;
+      const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(localTf)}&count=${count}`);
       const data = await res.json();
       if (data.candles) setCandles(data.candles);
       if (data.markup) setMarkupData(data.markup);
@@ -425,20 +500,18 @@ export default function TradingChart({
   useEffect(() => {
     if (!propCandles) {
       fetchData();
-      const interval = setInterval(fetchData, 5000);
+      const interval = setInterval(fetchData, 1000);
       return () => clearInterval(interval);
     }
   }, [symbol, localTf, propCandles, fetchData]);
 
-  // ── Zoom Functions ──────────────────────────────────────────────────────────
+  // Zoom functions
   const handleZoomIn = useCallback(() => {
     const chart = chartRef.current;
     const timeScale = chart?.timeScale();
     if (!timeScale) return;
-    
     const range = timeScale.getVisibleLogicalRange();
     if (!range) return;
-    
     const logicalRange = (range.to as number) - (range.from as number);
     timeScale.setVisibleLogicalRange({
       from: (range.from as number) + logicalRange * 0.15,
@@ -450,10 +523,8 @@ export default function TradingChart({
     const chart = chartRef.current;
     const timeScale = chart?.timeScale();
     if (!timeScale) return;
-    
     const range = timeScale.getVisibleLogicalRange();
     if (!range) return;
-    
     const logicalRange = (range.to as number) - (range.from as number);
     timeScale.setVisibleLogicalRange({
       from: Math.max(0, (range.from as number) - logicalRange * 0.3),
@@ -462,26 +533,50 @@ export default function TradingChart({
   }, []);
 
   const handleZoomFit = useCallback(() => {
-    // Fit all candles across viewport - shows full 2000-candle history
     chartRef.current?.timeScale().fitContent();
   }, []);
 
-  const handleFitContent = useCallback(() => {
-    chartRef.current?.timeScale().fitContent();
-  }, []);
+  const handleShowAll = useCallback(() => {
+    if (!chartRef.current || !candles.length) return;
+    const chartData: CandlestickData<Time>[] = [];
+    candles.forEach(c => {
+      const t = toTime(c) as number;
+      if (!isNaN(t) && t > 0) {
+        chartData.push({
+          time: t as Time,
+          open: Number(c.o),
+          high: Number(c.h),
+          low: Number(c.l),
+          close: Number(c.c),
+        });
+      }
+    });
+    if (chartData.length > 0) {
+      const fromTs = chartData[0].time as number;
+      const toTs = chartData[chartData.length - 1].time as number;
+      chartRef.current?.timeScale().setVisibleRange({ from: fromTs as any, to: toTs as any });
+    }
+  }, [candles, toTime]);
 
   const handleTfChange = useCallback((tf: string) => {
     setLocalTf(tf);
     onTimeframeChange?.(tf);
   }, [onTimeframeChange]);
 
-  // ── Derived State ────────────────────────────────────────────────────────────
-  const legendItems = markupData?.advanced_counts || {};
+  // Update markup from props
+  useEffect(() => {
+    if (markup) setMarkupData(markup);
+  }, [markup]);
+
+  // Update candles from props
+  useEffect(() => {
+    if (propCandles) setCandles(propCandles);
+  }, [propCandles]);
+
+  // Derived state
   const sniperScore = markupData?.objects?.find((o: any) => o.type === 'SNIPER_SCORE');
   const confluence = (markupData as any)?.confluence;
-  const sniperSignal = markupData?.objects?.find((o: any) => o.type === 'SNIPER_SIGNAL');
 
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
       {/* Toolbar */}
@@ -494,48 +589,45 @@ export default function TradingChart({
         border: '1px solid rgba(255,255,255,0.06)',
         backdropFilter: 'blur(12px)',
         boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+        flexWrap: 'wrap',
       }}>
-        <span style={{ color: C.gold, fontWeight: 800 }}>{symbol}</span>
         <span style={{ color: '#64748b' }}>{localTf}</span>
         <span style={{ color: 'rgba(255,255,255,0.1)' }}>|</span>
         <span style={{ color: '#94a3b8' }}>{markupData?.method || ''}</span>
-        
-        {bidPrice !== null && (
-          <span style={{ color: C.cyan, marginLeft: 8 }}>Bid: {bidPrice.toFixed(2)}</span>
-        )}
-        {askPrice !== null && (
-          <span style={{ color: C.amber, marginLeft: 4 }}>Ask: {askPrice.toFixed(2)}</span>
-        )}
-        
+        <span style={{ color: 'rgba(255,255,255,0.1)' }}>|</span>
+        <span style={{ color: C.gold }}>{candles.length} candles</span>
+
+        {bidPrice !== null && <span style={{ color: C.cyan, marginLeft: 4 }}>Bid: {bidPrice.toFixed(2)}</span>}
+        {askPrice !== null && <span style={{ color: C.amber, marginLeft: 4 }}>Ask: {askPrice.toFixed(2)}</span>}
+
         {confluence && (
           <div style={{
-            marginLeft: 10, padding: '3px 8px', borderRadius: 4,
-            background: confluence.signal === 'BUY' ? 'rgba(34,197,94,0.2)' : 
-                        confluence.signal === 'SELL' ? 'rgba(239,68,68,0.2)' : 'rgba(100,116,139,0.2)',
-            border: `1px solid ${confluence.signal === 'BUY' ? C.green : 
-                                    confluence.signal === 'SELL' ? C.red : '#64748b'}`,
+            marginLeft: 8, padding: '3px 8px', borderRadius: 4,
+            background: confluence.signal === 'BUY' ? 'rgba(34,197,94,0.2)' :
+              confluence.signal === 'SELL' ? 'rgba(239,68,68,0.2)' : 'rgba(100,116,139,0.2)',
+            border: `1px solid ${confluence.signal === 'BUY' ? C.green :
+              confluence.signal === 'SELL' ? C.red : '#64748b'}`,
           }}>
-            <span style={{ 
-              color: confluence.signal === 'BUY' ? C.bullishBright : 
-                     confluence.signal === 'SELL' ? C.bearishBright : '#94a3b8', 
-              fontWeight: 800 
+            <span style={{
+              color: confluence.signal === 'BUY' ? C.bullishBright :
+                confluence.signal === 'SELL' ? C.bearishBright : '#94a3b8',
+              fontWeight: 800
             }}>
-              {confluence.signal} | score {confluence.score}
+              {confluence.signal} | score {typeof confluence.score === 'number' ? Math.round(confluence.score * 100) : confluence.score}
             </span>
           </div>
         )}
       </div>
 
-      {/* Sniper Dashboard */}
+      {/* Sniper Score Dashboard */}
       {sniperScore && (
         <div style={{
-          position: 'absolute', top: 10, right: 100, zIndex: 10,
+          position: 'absolute', top: 10, right: 110, zIndex: 10,
           background: 'linear-gradient(135deg, rgba(5,7,12,0.95) 0%, rgba(2,3,5,0.98) 100%)',
           padding: '8px 12px', borderRadius: 6, fontSize: 9,
           fontFamily: '"JetBrains Mono", monospace', minWidth: 150,
           border: '1px solid rgba(168,85,247,0.3)',
           backdropFilter: 'blur(12px)',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
         }}>
           <div style={{ color: C.gold, fontWeight: 800, marginBottom: 6 }}>SNIPER</div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -548,9 +640,9 @@ export default function TradingChart({
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
             <span style={{ color: '#94a3b8' }}>BIAS</span>
-            <span style={{ 
+            <span style={{
               color: (sniperScore as any).bias?.includes('BULL') ? C.bullishBright : C.bearishBright,
-              fontWeight: 800 
+              fontWeight: 800
             }}>{(sniperScore as any).bias}</span>
           </div>
         </div>
@@ -595,24 +687,36 @@ export default function TradingChart({
       }}>
         <button onClick={handleZoomIn} style={zoomBtn} title="Zoom in">+</button>
         <button onClick={handleZoomOut} style={zoomBtn} title="Zoom out">-</button>
-        <button onClick={handleFitContent} style={zoomBtn} title="Fit 150 last">150</button>
-        <button onClick={handleZoomFit} style={zoomBtn} title="Fit ALL candles">ALL</button>
+        <button onClick={() => {
+          const visibleCount = Math.min(200, candles.length);
+          const lastIdx = candles.length - 1;
+          const chartData: CandlestickData<Time>[] = [];
+          candles.forEach(c => {
+            const t = toTime(c) as number;
+            if (!isNaN(t) && t > 0) chartData.push({ time: t as Time, open: Number(c.o), high: Number(c.h), low: Number(c.l), close: Number(c.c) });
+          });
+          if (chartData.length > visibleCount) {
+            const fromIdx = chartData.length - visibleCount;
+            chartRef.current?.timeScale().setVisibleRange({ from: chartData[fromIdx].time as any, to: chartData[chartData.length - 1].time as any });
+          }
+        }} style={zoomBtn} title="200 last">200</button>
+        <button onClick={handleShowAll} style={zoomBtn} title="Show ALL candles">ALL</button>
       </div>
 
-      {/* Loading Overlay */}
+      {/* Loading */}
       {loading && (
-        <div style={{ 
-          position: 'absolute', inset: 0, 
-          display: 'flex', alignItems: 'center', justifyContent: 'center', 
-          background: 'rgba(2,3,5,0.85)', zIndex: 20 
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(2,3,5,0.85)', zIndex: 20
         }}>
-          <div style={{ 
-            color: C.gold, fontFamily: '"JetBrains Mono", monospace', fontSize: 11, 
-            display: 'flex', alignItems: 'center', gap: 10 
+          <div style={{
+            color: C.gold, fontFamily: '"JetBrains Mono", monospace', fontSize: 11,
+            display: 'flex', alignItems: 'center', gap: 10
           }}>
-            <div style={{ 
-              width: 8, height: 8, borderRadius: '50%', background: C.gold, 
-              boxShadow: `0 0 10px ${C.gold}`, animation: 'livePulse 1.5s infinite' 
+            <div style={{
+              width: 8, height: 8, borderRadius: '50%', background: C.gold,
+              boxShadow: `0 0 10px ${C.gold}`, animation: 'livePulse 1.5s infinite'
             }} />
             LOADING {candles.length} CANDLES...
           </div>

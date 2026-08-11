@@ -17,10 +17,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     });
 
-    // Default to 2000 candles if not specified
-    if (!params.has('count')) {
-      params.append('count', '2000');
-    }
+    // Let backend pick default by TF (do NOT force count=2000)
+    // Only forward count if explicitly requested
 
     // Build URL
     let path = '/api/market';

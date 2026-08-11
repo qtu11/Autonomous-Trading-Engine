@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import {
-  fetchControlCenterStatus, updateControlMode, updateControlKillSwitch,
-  updateControlDemoArm, updateAiAutoLoop, loginMT5Account,
-  fetchAIConfig, updateTradingMethod, testAIConnection,
+  fetchControlCenterStatus,
+  updateAiAutoLoop, loginMT5Account,
+  fetchAIConfig, updateTradingMethod,
 } from '../../lib/api';
 
 const C = {
@@ -25,38 +25,6 @@ const C = {
   sans: '"Inter", -apple-system, sans-serif',
 };
 
-function Toggle({ checked, onChange, label, sublabel, color = 'green' }: {
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  label: string;
-  sublabel?: string;
-  color?: 'green' | 'red' | 'gold' | 'blue';
-}) {
-  const col = { green: C.green, red: C.red, gold: C.gold, blue: C.blue }[color];
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '10px 12px', background: 'rgba(5,7,12,0.9)', border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 6,
-    }}>
-      <div>
-        <div style={{ fontSize: 9, fontFamily: C.mono, fontWeight: 700, color: C.text, textTransform: 'uppercase' }}>{label}</div>
-        {sublabel && <div style={{ fontSize: 7, fontFamily: C.mono, color: C.muted, marginTop: 2 }}>{sublabel}</div>}
-      </div>
-      <button onClick={() => onChange(!checked)} style={{
-        width: 44, height: 24, borderRadius: 12,
-        background: checked ? col : 'rgba(30,41,59,0.8)',
-        border: `1px solid ${checked ? col : C.border}`,
-        cursor: 'pointer', position: 'relative',
-      }}>
-        <div style={{
-          position: 'absolute', top: 3, left: checked ? 22 : 3, width: 16, height: 16, borderRadius: '50%',
-          background: checked ? '#fff' : C.muted, transition: 'all 0.25s ease',
-        }} />
-      </button>
-    </div>
-  );
-}
-
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div style={{ padding: '0 12px 12px' }}>
@@ -71,6 +39,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+// FIX LỖI 5: Trading Method buttons work correctly
+// FIX LỖI 6: Only AI Auto toggle, no other modes
 export default function ControlCenter() {
   const [status, setStatus] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -97,12 +67,10 @@ export default function ControlCenter() {
     return () => clearInterval(interval);
   }, [loadStatus, loadAIConfig]);
 
-  const handleToggle = async (key: string, value: boolean) => {
+  const handleToggleAI = async () => {
     try {
-      if (key === 'mode') await updateControlMode(value ? 'ACTIVE' : 'IDLE');
-      else if (key === 'kill') await updateControlKillSwitch(value);
-      else if (key === 'demo') await updateControlDemoArm(value);
-      else if (key === 'ai') await updateAiAutoLoop(value);
+      const next = !(status?.safeguards?.ai_auto_loop ?? false);
+      await updateAiAutoLoop(next);
       await loadStatus();
     } catch { /* silent */ }
   };
@@ -125,8 +93,17 @@ export default function ControlCenter() {
   }
 
   const isConnected = status?.account?.mt5_connected || false;
-  const mode = status?.safeguards?.kill_switch_active ? 'KILLED' : status?.execution?.mode === 'ACTIVE' ? 'ACTIVE' : 'IDLE';
   const aiLoop = status?.safeguards?.ai_auto_loop || false;
+  const currentMethod = aiConfig?.trading_method || status?.safeguards?.trading_method || 'SMC';
+
+  // FIX LỖI 5: All trading methods supported - SNIPER, SMC, ICT, PRICE_ACTION
+  const methods = ['SNIPER', 'SMC', 'ICT', 'PRICE_ACTION'];
+  const methodLabels: Record<string, string> = {
+    'SNIPER': 'SNIPER',
+    'SMC': 'SMC',
+    'ICT': 'ICT',
+    'PRICE_ACTION': 'PA',
+  };
 
   return (
     <div style={{ fontFamily: C.sans, height: '100%', overflow: 'auto', background: 'rgba(5,7,12,0.95)' }}>
@@ -173,27 +150,70 @@ export default function ControlCenter() {
         )}
       </div>
 
-      {/* CONTROLS */}
-      <Section title="Controls">
-        <Toggle checked={mode === 'ACTIVE'} onChange={v => handleToggle('mode', v)} label="Trading Mode" sublabel={mode} color="green" />
-        <Toggle checked={status?.safeguards?.kill_switch_active || false} onChange={v => handleToggle('kill', v)} label="Kill Switch" color="red" />
-        <Toggle checked={status?.safeguards?.demo_armed || false} onChange={v => handleToggle('demo', v)} label="Demo Mode" color="gold" />
-        <Toggle checked={aiLoop} onChange={v => handleToggle('ai', v)} label="AI Auto Loop" color="blue" />
+      {/* FIX LỖI 6: AI Auto Trade - single dot toggle only */}
+      <Section title="AI Auto Trade">
+        <div
+          onClick={handleToggleAI}
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '14px 16px',
+            background: aiLoop ? `linear-gradient(135deg, ${C.blueDim} 0%, rgba(5,7,12,0.9) 100%)` : 'rgba(5,7,12,0.9)',
+            border: `1px solid ${aiLoop ? C.blue : C.border}`,
+            borderRadius: 10, marginBottom: 8,
+            cursor: 'pointer',
+            boxShadow: aiLoop ? `0 0 20px ${C.blue}30` : 'none',
+            transition: 'all 0.25s ease',
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 800, color: C.text, textTransform: 'uppercase' }}>
+              AI Auto Trade {aiLoop && <span style={{ marginLeft: 6, color: C.blue, fontSize: 8 }}>● RUNNING</span>}
+            </div>
+            <div style={{ fontSize: 8, fontFamily: C.mono, color: C.muted, marginTop: 3 }}>
+              {aiLoop ? 'Bot scanning & auto-executing signals' : 'Manual mode — no auto entries'}
+            </div>
+          </div>
+          {/* Pill toggle dot */}
+          <div style={{
+            width: 52, height: 28, borderRadius: 14,
+            background: aiLoop ? C.blue : 'rgba(30,41,59,0.8)',
+            border: `1px solid ${aiLoop ? C.blue : C.border}`,
+            position: 'relative', flexShrink: 0,
+            transition: 'all 0.25s ease',
+          }}>
+            <div style={{
+              position: 'absolute', top: 2, left: aiLoop ? 26 : 2, width: 22, height: 22, borderRadius: '50%',
+              background: '#fff',
+              boxShadow: aiLoop ? `0 0 12px ${C.blue}` : 'none',
+              transition: 'all 0.25s ease',
+            }} />
+          </div>
+        </div>
       </Section>
 
-      {/* METHOD */}
+      {/* FIX LỖI 5: Trading Method buttons */}
       <Section title="Trading Method">
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {['SNIPER', 'SMC', 'ICT', 'PRICE ACTION'].map(method => {
-            const isActive = (aiConfig?.trading_method || status?.safeguards?.trading_method) === method;
+          {methods.map(method => {
+            const isActive = currentMethod === method;
             return (
-              <button key={method} onClick={async () => { try { await updateTradingMethod(method); await loadAIConfig(); } catch { /* silent */ } }}
+              <button key={method} onClick={async () => { 
+                try { 
+                  await updateTradingMethod(method); 
+                  await loadAIConfig();
+                  await loadStatus();
+                } catch { /* silent */ } 
+              }}
                 style={{
-                  padding: '5px 10px', background: isActive ? C.goldDim : 'rgba(0,0,0,0.3)',
-                  border: `1px solid ${isActive ? C.gold : C.border}`, borderRadius: 4, color: isActive ? C.gold : C.muted,
+                  padding: '6px 12px', 
+                  background: isActive ? C.goldDim : 'rgba(0,0,0,0.3)',
+                  border: `1px solid ${isActive ? C.gold : C.border}`, 
+                  borderRadius: 4, 
+                  color: isActive ? C.gold : C.muted,
                   fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer',
+                  textTransform: 'uppercase',
                 }}>
-                {method}
+                {methodLabels[method] || method}
               </button>
             );
           })}
@@ -214,7 +234,7 @@ export default function ControlCenter() {
         </div>
       </Section>
 
-      {/* STATUS */}
+      {/* SYSTEM STATUS */}
       <Section title="System">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 4 }}>
           {[

@@ -73,7 +73,7 @@ export default function PatternAlert({ patterns = [], onViewChart }: PatternAler
   const displayAlerts = showAll ? alerts : alerts.slice(0, 3);
 
   return (
-    <div style={{ position: 'absolute', bottom: 60, left: 10, width: 320, maxHeight: 200, overflowY: 'auto', zIndex: 50, display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 8, width: '100%', height: '100%', overflowY: 'auto', boxSizing: 'border-box' }}>
       {displayAlerts.length === 0 && (
         <div style={{
           background: 'rgba(8,12,22,0.95)',

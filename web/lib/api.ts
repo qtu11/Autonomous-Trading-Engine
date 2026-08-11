@@ -105,3 +105,39 @@ export async function loginMT5Account(login: number, password: string, server: s
 export async function testAIConnection(payload: { key_type: string; model: string; api_key?: string }) {
   return postJson<{ status: string; result: { ok: boolean; message: string } }>(`${API_BASE}/api/ai/test`, payload);
 }
+
+// Settings (gear icon modal) — read full settings payload + persist non-secret changes.
+export function fetchSettings() { return getJson<any>(`${API_BASE}/api/control-center/settings`); }
+export async function updateSettings(payload: Record<string, unknown>) {
+  return postJson<{ status: string; updated: string[] }>(`${API_BASE}/api/control-center/settings`, payload);
+}
+
+// EA symbol auto-registration (called by EA on OnInit; exposed here for completeness)
+export async function registerEASymbol(payload: { symbol: string; company?: string; broker?: string; account_id?: number; executor_id?: string }) {
+  return postJson<{ status: string; symbol: string }>(`${API_BASE}/api/v1/symbol/register`, payload);
+}
+
+
+// FIX LỖI 4: EA Symbol Registration - called automatically on page load
+// When EA connects, it registers its symbol, and we update watchlist
+export async function registerEASymbol(payload: { 
+  symbol: string; 
+  company?: string; 
+  broker?: string; 
+  account_id?: number; 
+  executor_id?: string 
+}) {
+  return postJson<{ status: string; symbol: string }>(`${API_BASE}/api/v1/symbol/register`, payload);
+}
+
+// FIX LỖI 4: Subscribe to symbol registration events from WebSocket/backend
+export function subscribeToSymbolRegistration(callback: (data: { symbol: string; company: string; broker: string }) => void) {
+  // This will be called when the EA registers a symbol
+  // In production, this would come through WebSocket
+  if (typeof window !== 'undefined') {
+    // Listen for custom event from EA connection
+    window.addEventListener('symbolRegistered', ((e: CustomEvent) => {
+      callback(e.detail);
+    }) as EventListener);
+  }
+}

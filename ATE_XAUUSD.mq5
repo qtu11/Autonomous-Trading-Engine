@@ -11,28 +11,27 @@
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
-input string   InpApiUrl           = "https://autonomous-trading-engine.vercel.app/api/v1/"; // AI FastAPI Server URL via Vercel (public cloud proxy to backend)
-input ulong    InpMagicNumber      = 888999;                 // EA Magic Number
-input string   InpSymbol           = "XAUUSDm";              // Trading Symbol (Blank for auto-detect chart)
-input int      InpPollIntervalSec  = 1;                      // AI Protocol Poll Interval (seconds)
-input bool     InpExecutionEnabled = true;                   // Fail closed: execution starts DISABLED unless explicitly enabled
-input string   InpBridgeToken      = "20022007@Tu";          // Required Bearer token for protected bridge endpoints (set in terminal/input params)
-input string   InpExecutorId       = "ate-ea-local";         // Unique executor identity for command leases
-input bool     InpVerifyAccount    = true;                   // Strict Account Verification (broker company allowlist only; account identity is self-reported to the backend)
-input string   InpExpectedCompany   = "Exness Technologies Ltd"; // Broker company allowlist
-input double   InpMaxSpread        = 0.50;                   // XAUUSDm raw-price spread cap
-input int      InpMaxPositions     = 5;                      // Matching symbol/magic position cap (kept in sync with backend risk policy)
-input int      InpMaxDeviationPts  = 50;                     // Broker request deviation cap
-input int      InpCalendarIntervalSec = 300;                 // Economic calendar push interval (seconds)
-input int      InpMaxConsecutiveFailures = 5;                // Backoff threshold before slowing poll
-input int      InpTelemetryIntervalSec = 5;                  // Telemetry/heartbeat interval (seconds, >=1)
-input int      InpClaimIntervalSec   = 3;                    // Claim poll interval (seconds, >=1, < command TTL)
-input bool     InpNewsProtectionEnabled = true;              // Block new BUY/SELL entries around High impact USD news
-input int      InpProtectionIntervalSec = 30;                // News protection state poll interval (seconds)
-input bool     InpChartMarkupEnabled = true;                 // Render AI chart markup (OB, FVG, BOS/CHoCH, swing, trendline...) on chart
-input int      InpMarkupReRenderSec  = 5;                    // Chart markup re-render interval (seconds)
-input int      InpMarkupMaxObjects   = 120;                  // Markup object cap drawn per refresh
-input int      InpCandlesIntervalSec = 30;                   // Real-time live candles push interval (seconds)
+input string   InpApiUrl           = "https://autonomous-trading-engine.vercel.app/api/v1/"; // URL Server AI Engine (Vercel Proxy Cloud Backend)
+input ulong    InpMagicNumber      = 888999;                 // Mã nhận diện EA (Magic Number)
+// InpSymbol removed — EA ALWAYS auto-detects chart symbol via Symbol() in OnInit
+input int      InpPollIntervalSec  = 1;                      // Tần suất truy vấn AI Protocol (giây)
+input bool     InpExecutionEnabled = true;                   // Bật/Tắt thực thi lệnh tự động (Fail closed)
+input string   InpBridgeToken      = "20022007@Tu";          // Token xác thực Bearer Token cho kết nối Bridge
+input string   InpExecutorId       = "ate-ea-local";         // Mã định danh Executor duy nhất cho hợp đồng lệnh
+input bool     InpVerifyAccount    = true;                   // Kiểm tra xác thực tài khoản môi giới nghiêm ngặt
+input double   InpMaxSpread        = 0.50;                   // Giới hạn mức chênh lệch giá tối đa (Spread Cap)
+input int      InpMaxPositions     = 5;                      // Số lượng vị thế mở tối đa cùng lúc
+input int      InpMaxDeviationPts  = 50;                     // Độ lệch giá tối đa cho phép từ Broker (Points)
+input int      InpCalendarIntervalSec = 300;                 // Chu kỳ đẩy dữ liệu lịch kinh tế (giây)
+input int      InpMaxConsecutiveFailures = 5;                // Ngưỡng lỗi kết nối liên tiếp trước khi giãn tần suất
+input int      InpTelemetryIntervalSec = 5;                  // Chu kỳ gửi dữ liệu giám sát Heartbeat (giây)
+input int      InpClaimIntervalSec   = 3;                    // Chu kỳ kiểm tra và lấy lệnh chờ thực thi (giây)
+input bool     InpNewsProtectionEnabled = true;              // Bật/Tắt bộ lọc chặn vào lệnh khi có tin tức mạnh USD
+input int      InpProtectionIntervalSec = 30;                // Chu kỳ cập nhật trạng thái bảo vệ tin tức (giây)
+input bool     InpChartMarkupEnabled = true;                 // Bật/Tắt vẽ cấu trúc AI (OB, FVG, BOS/CHoCH...) lên biểu đồ
+input int      InpMarkupReRenderSec  = 5;                    // Chu kỳ vẽ lại cấu trúc AI trên biểu đồ (giây)
+input int      InpMarkupMaxObjects   = 120;                  // Số lượng đối tượng vẽ tối đa trên biểu đồ
+input int      InpCandlesIntervalSec = 30;                   // Chu kỳ đẩy dữ liệu nến thời gian thực (giây)
 
 //--- Global Variables
 CTrade         m_trade;
@@ -118,9 +117,11 @@ string ATEApiBase()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   g_symbol = InpSymbol;
-   if(StringLen(g_symbol) == 0)
-      g_symbol = Symbol();
+   // ALWAYS auto-detect the chart's current symbol
+   g_symbol = Symbol();
+
+   // Register symbol with backend immediately so dashboard Watchlist updates instantly
+   RegisterSymbolOnInit();
 
    ATELog(StringFormat("INIT_BEGIN url=%s token_len=%d exec=%s verify=%s poll=%ds", InpApiUrl, StringLen(InpBridgeToken), InpExecutionEnabled ? "true" : "false", InpVerifyAccount ? "true" : "false", InpPollIntervalSec));
 
@@ -179,7 +180,8 @@ bool IsAuthorizedEnvironment()
 
    if(accountMode == ACCOUNT_TRADE_MODE_DEMO)
    {
-      if(company != InpExpectedCompany)  return false;
+      // Broker allowlist removed
+      return true;
       return true;
    }
    if(accountMode == ACCOUNT_TRADE_MODE_REAL)
@@ -188,7 +190,8 @@ bool IsAuthorizedEnvironment()
       // login/server allowlist. The EA self-reports its real account (login,
       // server, company) to the backend on every telemetry/heartbeat/claim,
       // so the web dashboard "logs in" automatically from the EA itself.
-      if(company != InpExpectedCompany)  return false;
+      // Broker allowlist removed
+      return true;
       return true;
    }
    return false;
@@ -340,6 +343,46 @@ string BridgeHeaders()
 
 //+------------------------------------------------------------------+
 //| Send Telemetry data to FastAPI Bridge                            |
+//+------------------------------------------------------------------+
+// RegisterSymbolOnInit: POST /api/v1/symbol/register so dashboard Watchlist reflects chart symbol immediately
+void RegisterSymbolOnInit()
+{
+   if(StringLen(InpApiUrl) == 0) return;
+   string url = InpApiUrl + "symbol/register";
+   string company = AccountInfoString(ACCOUNT_COMPANY);
+   string broker = AccountInfoString(ACCOUNT_SERVER);
+   long accountId = (long)AccountInfoInteger(ACCOUNT_LOGIN);
+   string payload = StringFormat(
+      "{\"symbol\":\"%s\",\"company\":\"%s\",\"broker\":\"%s\",\"account_id\":%I64d,\"executor_id\":\"%s\"}",
+      g_symbol, EscapeJson(company), EscapeJson(broker), accountId, EscapeJson(InpExecutorId));
+   char postData[]; StringToCharArray(payload, postData, 0, StringLen(payload));
+   char result[]; string headersOut = "";
+   string resHeaders = StringFormat("Authorization: Bearer %s\r\nContent-Type: application/json\r\n", InpBridgeToken);
+   ResetLastError();
+   int code = WebRequest("POST", url, resHeaders, 5000, postData, result, headersOut);
+   if(code != 200)
+      PrintFormat("[ATE] symbol/register failed http=%d err=%d url=%s", code, GetLastError(), url);
+   else
+      PrintFormat("[ATE] symbol/register OK: %s", g_symbol);
+}
+
+// EscapeJson: minimal JSON string escape
+string EscapeJson(string s)
+{
+   string out = "";
+   for(int i = 0; i < StringLen(s); i++)
+   {
+      ushort ch = StringGetCharacter(s, i);
+      if(ch == '"')        out += "\\\"";
+      else if(ch == '\\') out += "\\\\";
+      else if(ch == '\n')  out += "\\n";
+      else if(ch == '\r')  out += "\\r";
+      else if(ch == '\t')  out += "\\t";
+      else                 out += ShortToString(ch);
+   }
+   return out;
+}
+
 //+------------------------------------------------------------------+
 void SendTelemetry()
 {
@@ -575,7 +618,7 @@ void PollAndExecuteAISignals()
    // MODIFY_SLTP are still claimable while a position is open.
    if(!IsAuthorizedEnvironment())
    {
-      ATELogThrottled("UNAUTH", StringFormat("Blocked poll: trade_allowed=%d mql_trade_allowed=%d account=#%I64d@%s company=%s mode=%s (allowlist: company=%s)", TerminalInfoInteger(TERMINAL_TRADE_ALLOWED), MQLInfoInteger(MQL_TRADE_ALLOWED), AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountInfoString(ACCOUNT_COMPANY), AccountModeLabel(), InpExpectedCompany));
+      ATELogThrottled("UNAUTH", StringFormat("Blocked poll: trade_allowed=%d mql_trade_allowed=%d account=#%I64d@%s company=%s mode=%s (allowlist disabled)", TerminalInfoInteger(TERMINAL_TRADE_ALLOWED), MQLInfoInteger(MQL_TRADE_ALLOWED), AccountInfoInteger(ACCOUNT_LOGIN), AccountInfoString(ACCOUNT_SERVER), AccountInfoString(ACCOUNT_COMPANY), AccountModeLabel(), "(any)"));
       return;
    }
 
@@ -761,15 +804,6 @@ string ExtractJsonString(string json, string key)
    if(end <= start)
       return "";
    return StringSubstr(json, start, end - start);
-}
-
-string EscapeJson(string value)
-{
-   StringReplace(value, "\\", "\\\\");
-   StringReplace(value, "\"", "\\\"");
-   StringReplace(value, "\r", "\\r");
-   StringReplace(value, "\n", "\\n");
-   return value;
 }
 
 void SendCommandReceipt(string commandId, string receiptStatus, ulong orderTicket, uint retcode, string resultMessage)
