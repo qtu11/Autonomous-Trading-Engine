@@ -92,8 +92,8 @@ alertOnPartialTP  = input.bool(true, "Alert on Partial TP", group=groupAlert)
 
 // ─── BACKTEST LIMITS ───
 groupBT = "7. BACKTEST"
-startDate          = input.time(timestamp("1 Jan 2024"), "Start Date", group=groupBT)
-endDate            = input.time(timestamp("31 Dec 2099"), "End Date", group=groupBT)
+startDate          = input.time(timestamp(2024, 1, 1, 0, 0), "Start Date", group=groupBT)
+endDate            = input.time(timestamp(2099, 12, 31, 23, 59), "End Date", group=groupBT)
 useDateFilter      = input.bool(true, "Use Date Range Filter", group=groupBT)
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -257,8 +257,8 @@ smcSell += adxVal > 25       ? 1 : 0
 smcSell += inOTEZone         ? 1 : 0
 
 // ─── COMBINED SCORE ───
-int totalBuyScore  = int(snBull) + smcBuy
-int totalSellScore = int(snBear) + smcSell
+int totalBuyScore  = math.round(snBull) + smcBuy
+int totalSellScore = math.round(snBear) + smcSell
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SECTION 5: ENTRY CONDITIONS
@@ -375,6 +375,7 @@ if enableAutoTrade and withinDate and canEnter and dailyLossOk
         tradeActive  := true
         tradeDirection := 1
         barsSinceEntry := 0
+        tradeCount   += 1
         
         // Calculate position size based on risk
         float riskPct = riskPerTrade / 100
@@ -575,6 +576,16 @@ var float peakEquity = strategy.equity
 var int consecLosses = 0
 var float tradeProfit = 0.0
 
+// Track peak equity for drawdown calculation
+if strategy.equity > peakEquity
+    peakEquity := strategy.equity
+
+// Track partial close prices and trade count
+if tradeActive and tp1Reached and partialClose1 == 0.0
+    partialClose1 := close
+if tradeActive and tp2Reached and partialClose2 == 0.0
+    partialClose2 := close
+
 if strategy.closedtrades > 0
     tradeProfit := strategy.closedtrades.profit(strategy.closedtrades - 1)
     
@@ -599,10 +610,8 @@ if strategy.closedtrades > 0
 // SECTION 11: ALERT CONDITIONS
 // ══════════════════════════════════════════════════════════════════════════════
 
-alertcondition(fullBuyCond and enableAutoTrade, "BUY SIGNAL", 
-  "BUY {{ticker}} @ {{close}}\nScore: {{plot_0}}\nFVG: {{plot_1}} | OB: {{plot_2}} | LS: {{plot_3}}")
-alertcondition(fullSellCond and enableAutoTrade, "SELL SIGNAL", 
-  "SELL {{ticker}} @ {{close}}\nScore: {{plot_0}}\nFVG: {{plot_1}} | OB: {{plot_2}} | LS: {{plot_3}}")
+alertcondition(fullBuyCond and enableAutoTrade, "BUY SIGNAL", "SMC Sniper BUY Signal Triggered")
+alertcondition(fullSellCond and enableAutoTrade, "SELL SIGNAL", "SMC Sniper SELL Signal Triggered")
 
 // ══════════════════════════════════════════════════════════════════════════════
 // END OF AUTO TRADING ENGINE

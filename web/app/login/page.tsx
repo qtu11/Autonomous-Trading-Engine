@@ -3,10 +3,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
-// Sử dụng Next.js API routes - proxy đến backend
 const API_BASE = '';
 
-// Mock Live Market Ticker Data for Institutional Stock/Gold Desk Visuals
 const TICKER_ITEMS = [
   { symbol: 'XAU/USD', price: '2,845.50', change: '+1.24%', isUp: true },
   { symbol: 'SPX 500', price: '5,980.20', change: '+0.45%', isUp: true },
@@ -14,9 +12,24 @@ const TICKER_ITEMS = [
   { symbol: 'BTC/USD', price: '98,400.00', change: '-0.35%', isUp: false },
   { symbol: 'EUR/USD', price: '1.0845', change: '+0.12%', isUp: true },
   { symbol: '10Y YIELD', price: '4.28%', change: '-0.04%', isUp: false },
-  { symbol: 'DXY INDEX', price: '104.15', change: '-0.18%', isUp: false },
-  { symbol: 'BRENT CRUDE', price: '76.40', change: '+0.95%', isUp: true },
 ];
+
+const C = {
+  bg: '#020305',
+  bgDark: '#010102',
+  gold: '#D4B483',
+  goldBright: '#F0D5A0',
+  goldDim: 'rgba(212,175,55,0.15)',
+  green: '#22d3a0',
+  red: '#f43f5e',
+  blue: '#38bdf8',
+  text: '#f8fafc',
+  dim: '#cbd5e1',
+  muted: '#64748b',
+  faint: '#475569',
+  mono: '"JetBrains Mono", monospace',
+  sans: '"Inter", -apple-system, BlinkMacSystemFont, sans-serif',
+};
 
 export default function LoginPage() {
   const router = useRouter();
@@ -26,45 +39,33 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [focusedField, setFocusedField] = useState<string | null>(null);
 
-  // 3D Tilt Effect State
   const cardRef = useRef<HTMLDivElement>(null);
-  const [transformStyle, setTransformStyle] = useState('perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)');
-  const [glareStyle, setGlareStyle] = useState({ opacity: 0, x: 50, y: 50 });
+  const [tilt, setTilt] = useState({ rotateX: 0, rotateY: 0 });
+  const [glare, setGlare] = useState({ x: 50, y: 50, opacity: 0 });
+
+  useEffect(() => {
+    const token = localStorage.getItem('quantai_auth_token');
+    if (token) router.push('/');
+  }, [router]);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!cardRef.current) return;
     const rect = cardRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-
-    // Rotate max +- 8 degrees
-    const rotateX = ((y - centerY) / centerY) * -8;
-    const rotateY = ((x - centerX) / centerX) * 8;
-
-    setTransformStyle(`perspective(1000px) rotateX(${rotateX.toFixed(2)}deg) rotateY(${rotateY.toFixed(2)}deg) scale3d(1.02, 1.02, 1.02)`);
-    setGlareStyle({
-      opacity: 0.15,
-      x: (x / rect.width) * 100,
-      y: (y / rect.height) * 100,
-    });
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const rx = ((y - cy) / cy) * -8;
+    const ry = ((x - cx) / cx) * 8;
+    setTilt({ rotateX: rx, rotateY: ry });
+    setGlare({ x: (x / rect.width) * 100, y: (y / rect.height) * 100, opacity: 0.12 });
   };
 
   const handleMouseLeave = () => {
-    setTransformStyle('perspective(1000px) rotateX(0deg) rotateY(0deg) scale3d(1, 1, 1)');
-    setGlareStyle({ opacity: 0, x: 50, y: 50 });
+    setTilt({ rotateX: 0, rotateY: 0 });
+    setGlare({ x: 50, y: 50, opacity: 0 });
   };
-
-  useEffect(() => {
-    // If already authenticated, redirect to desk
-    const savedToken = localStorage.getItem('quantai_auth_token');
-    if (savedToken) {
-      router.push('/');
-    }
-  }, [router]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -72,15 +73,14 @@ export default function LoginPage() {
     setSuccessMsg('');
 
     if (!login.trim() || !password.trim()) {
-      setErrorMsg('Vui lòng nhập Tên đăng nhập và Mật khẩu!');
+      setErrorMsg('Vui long nhap day du thong tin dang nhap');
       return;
     }
 
     setLoading(true);
 
     try {
-      const endpoint = `${API_BASE}/api/auth/login`;
-      const res = await fetch(endpoint, {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ login: login.trim(), password: password.trim() }),
@@ -89,21 +89,16 @@ export default function LoginPage() {
       const data = await res.json();
 
       if (res.ok && data.status === 'SUCCESS') {
-        setSuccessMsg('Xác thực quyền thành công! Đang vào sàn giao dịch...');
-        localStorage.setItem('quantai_auth_token', data.token || 'operator_authenticated');
+        setSuccessMsg('Xac thuc thanh cong. Dang truy cap...');
+        localStorage.setItem('quantai_auth_token', data.token || 'authenticated');
         localStorage.setItem('quantai_user_info', JSON.stringify(data.user || {}));
-        localStorage.setItem('firebase:authUser:qtusdev', JSON.stringify({ uid: 'qtusdev_admin', email: login.trim(), token: data.token }));
         document.cookie = `quantai_auth=${data.token}; path=/; max-age=315360000; SameSite=Lax`;
-
-        setTimeout(() => {
-          router.push('/');
-        }, 800);
+        setTimeout(() => router.push('/'), 800);
       } else {
-        const msg = data.detail?.message || data.detail?.code || 'Không thể xác thực thông tin tài khoản Quản trị!';
-        setErrorMsg(msg);
+        setErrorMsg(data.detail?.message || data.detail?.code || 'Xac thuc that bai');
       }
-    } catch (err) {
-      setErrorMsg('Không thể kết nối API Backend. Vui lòng kiểm tra dịch vụ backend (port 8005)!');
+    } catch {
+      setErrorMsg('Khong the ket noi backend. Vui long kiem tra dich vu.');
     } finally {
       setLoading(false);
     }
@@ -112,73 +107,72 @@ export default function LoginPage() {
   return (
     <div style={{
       minHeight: '100vh',
-      backgroundColor: '#030508',
-      backgroundImage: `
-        radial-gradient(circle at 50% 0%, rgba(212, 175, 55, 0.14) 0%, transparent 65%),
-        radial-gradient(circle at 15% 40%, rgba(16, 185, 129, 0.05) 0%, transparent 45%),
-        radial-gradient(circle at 85% 75%, rgba(59, 130, 246, 0.06) 0%, transparent 50%),
-        linear-gradient(to bottom, #020305 0%, #06090e 100%)
+      background: `
+        radial-gradient(ellipse at 50% 0%, rgba(212,175,55,0.08) 0%, transparent 50%),
+        radial-gradient(ellipse at 15% 60%, rgba(16,185,129,0.04) 0%, transparent 40%),
+        radial-gradient(ellipse at 85% 40%, rgba(59,130,246,0.03) 0%, transparent 45%),
+        linear-gradient(180deg, #020305 0%, #010102 100%)
       `,
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
-      fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-      padding: '0 20px',
+      fontFamily: C.sans,
+      padding: '60px 20px 20px',
       position: 'relative',
       overflow: 'hidden',
     }}>
-      {/* ── TOP FINANCIAL LIVE MARKET TICKER MARQUEE ── */}
+      {/* ── FINANCIAL TICKER BAR ── */}
       <div style={{
         position: 'fixed',
         top: 0,
         left: 0,
         right: 0,
-        height: '36px',
-        background: 'rgba(5, 8, 14, 0.85)',
-        borderBottom: '1px solid rgba(212, 175, 55, 0.15)',
-        backdropFilter: 'blur(12px)',
+        height: 40,
+        background: 'linear-gradient(180deg, rgba(5,8,14,0.98) 0%, rgba(3,5,8,0.95) 100%)',
+        borderBottom: '1px solid rgba(212,175,55,0.2)',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
         zIndex: 100,
         display: 'flex',
         alignItems: 'center',
         overflow: 'hidden',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
       }}>
         <div style={{
           background: 'linear-gradient(135deg, #d4af37, #996515)',
-          color: '#000000',
-          padding: '0 12px',
+          color: '#000',
+          padding: '0 16px',
           height: '100%',
           display: 'flex',
           alignItems: 'center',
           fontWeight: 900,
-          fontSize: '10px',
-          letterSpacing: '1px',
-          fontFamily: "'JetBrains Mono', monospace",
-          zIndex: 10,
-          boxShadow: '4px 0 12px rgba(0,0,0,0.4)',
+          fontSize: 9,
+          letterSpacing: '1.5px',
+          fontFamily: C.mono,
+          flexShrink: 0,
+          boxShadow: '4px 0 16px rgba(0,0,0,0.5)',
         }}>
-          MARKETS LIVE
+          MARKETS
         </div>
-
-        <div className="animate-marquee" style={{ gap: '32px', paddingLeft: '20px' }}>
+        <div className="animate-marquee" style={{ display: 'flex', gap: 40, paddingLeft: 24 }}>
           {[...TICKER_ITEMS, ...TICKER_ITEMS].map((item, idx) => (
             <div key={idx} style={{
-              display: 'inline-flex',
+              display: 'flex',
               alignItems: 'center',
-              gap: '8px',
-              fontSize: '11px',
-              fontFamily: "'JetBrains Mono', monospace",
+              gap: 10,
+              fontSize: 11,
+              fontFamily: C.mono,
             }}>
               <span style={{ color: '#94a3b8', fontWeight: 600 }}>{item.symbol}</span>
-              <span style={{ color: '#ffffff', fontWeight: 700 }}>{item.price}</span>
+              <span style={{ color: '#fff', fontWeight: 700 }}>{item.price}</span>
               <span style={{
-                color: item.isUp ? '#10b981' : '#ef4444',
+                color: item.isUp ? C.green : C.red,
                 fontWeight: 700,
-                fontSize: '10px',
-                background: item.isUp ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                padding: '2px 6px',
-                borderRadius: '4px',
+                fontSize: 10,
+                background: item.isUp ? 'rgba(34,211,160,0.1)' : 'rgba(244,63,94,0.1)',
+                padding: '2px 8px',
+                borderRadius: 4,
               }}>
                 {item.change}
               </span>
@@ -187,329 +181,337 @@ export default function LoginPage() {
         </div>
       </div>
 
-      {/* ── BACKGROUND CANDLESTICK SVG GRAPHICS ── */}
+      {/* ── BACKGROUND DECORATIVE ELEMENTS ── */}
       <div style={{
         position: 'absolute',
         inset: 0,
-        opacity: 0.12,
         pointerEvents: 'none',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: '0 5%',
+        overflow: 'hidden',
       }}>
-        {/* Left Side Financial Candlestick Visualizer */}
-        <svg width="320" height="400" viewBox="0 0 320 400" fill="none">
-          <line x1="40" y1="50" x2="40" y2="350" stroke="#10b981" strokeWidth="1" strokeDasharray="3 3" />
-          <line x1="120" y1="50" x2="120" y2="350" stroke="#ef4444" strokeWidth="1" strokeDasharray="3 3" />
-          <line x1="200" y1="50" x2="200" y2="350" stroke="#10b981" strokeWidth="1" strokeDasharray="3 3" />
-          <line x1="280" y1="50" x2="280" y2="350" stroke="#d4af37" strokeWidth="1" strokeDasharray="3 3" />
-
-          {/* Green Bullish Candlestick */}
-          <line x1="60" y1="80" x2="60" y2="280" stroke="#10b981" strokeWidth="2" />
-          <rect x="48" y="120" width="24" height="110" fill="#10b981" rx="2" />
-
-          {/* Red Bearish Candlestick */}
-          <line x1="140" y1="60" x2="140" y2="320" stroke="#ef4444" strokeWidth="2" />
-          <rect x="128" y="100" width="24" height="150" fill="#ef4444" rx="2" />
-
-          {/* Gold Breakout Candlestick */}
-          <line x1="220" y1="40" x2="220" y2="360" stroke="#d4af37" strokeWidth="2" />
-          <rect x="208" y="70" width="24" height="210" fill="url(#goldGrad)" rx="2" />
-
+        {/* Left Candlestick Graphic */}
+        <svg
+          style={{ position: 'absolute', left: '5%', top: '50%', transform: 'translateY(-50%)', opacity: 0.08 }}
+          width="280" height="380" viewBox="0 0 280 380"
+        >
           <defs>
-            <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#d4af37" />
-              <stop offset="100%" stopColor="#996515" />
+            <linearGradient id="goldLine" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stopColor="#D4B483" stopOpacity="0.6" />
+              <stop offset="100%" stopColor="#D4B483" stopOpacity="0.1" />
+            </linearGradient>
+            <linearGradient id="greenGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#22d3a0" stopOpacity="0.3" />
+              <stop offset="100%" stopColor="#22d3a0" stopOpacity="0" />
             </linearGradient>
           </defs>
+          <line x1="30" y1="40" x2="30" y2="340" stroke="#10b981" strokeWidth="1" strokeDasharray="4 4" />
+          <line x1="100" y1="40" x2="100" y2="340" stroke="#ef4444" strokeWidth="1" strokeDasharray="4 4" />
+          <line x1="170" y1="40" x2="170" y2="340" stroke="#d4af37" strokeWidth="1" strokeDasharray="4 4" />
+          <line x1="240" y1="40" x2="240" y2="340" stroke="#38bdf8" strokeWidth="1" strokeDasharray="4 4" />
+          <line x1="50" y1="60" x2="50" y2="260" stroke="#10b981" strokeWidth="2" />
+          <rect x="38" y="100" width="24" height="120" fill="url(#greenGrad)" rx="2" />
+          <line x1="120" y1="50" x2="120" y2="300" stroke="#ef4444" strokeWidth="2" />
+          <rect x="108" y="90" width="24" height="160" fill="#ef4444" opacity="0.3" rx="2" />
+          <line x1="190" y1="30" x2="190" y2="350" stroke="url(#goldLine)" strokeWidth="2" />
+          <rect x="178" y="60" width="24" height="220" fill="#d4af37" opacity="0.2" rx="2" />
         </svg>
 
-        {/* Right Side Order Depth Graph Visualizer */}
-        <svg width="320" height="400" viewBox="0 0 320 400" fill="none">
-          <path d="M0 350 Q 80 300, 140 220 T 320 50" fill="none" stroke="#10b981" strokeWidth="3" />
-          <path d="M0 350 Q 80 300, 140 220 T 320 50 L 320 400 L 0 400 Z" fill="url(#greenAreaGrad)" opacity="0.15" />
-
-          <path d="M0 50 Q 120 180, 180 260 T 320 380" fill="none" stroke="#ef4444" strokeWidth="2" strokeDasharray="4 4" />
-
+        {/* Right Area Chart */}
+        <svg
+          style={{ position: 'absolute', right: '5%', top: '50%', transform: 'translateY(-50%)', opacity: 0.08 }}
+          width="280" height="380" viewBox="0 0 280 380"
+        >
           <defs>
-            <linearGradient id="greenAreaGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#10b981" />
-              <stop offset="100%" stopColor="transparent" />
+            <linearGradient id="areaGreen" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#22d3a0" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="#22d3a0" stopOpacity="0" />
             </linearGradient>
           </defs>
+          <path d="M0 350 Q60 280, 120 200 T280 40" fill="none" stroke="#22d3a0" strokeWidth="2" />
+          <path d="M0 350 Q60 280, 120 200 T280 40 L280 380 L0 380 Z" fill="url(#areaGreen)" />
+          <path d="M0 50 Q80 150, 160 220 T280 360" fill="none" stroke="#f43f5e" strokeWidth="1.5" strokeDasharray="5 5" opacity="0.6" />
         </svg>
+
+        {/* Grid Pattern Overlay */}
+        <div style={{
+          position: 'absolute',
+          inset: 0,
+          backgroundImage: `
+            linear-gradient(rgba(255,255,255,0.015) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(255,255,255,0.015) 1px, transparent 1px)
+          `,
+          backgroundSize: '60px 60px',
+          opacity: 0.5,
+        }} />
       </div>
 
-      {/* ── 3D INTERACTIVE TILT CONTAINER CARD ── */}
+      {/* ── MAIN LOGIN CARD ── */}
       <div
         ref={cardRef}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}
-        className="glow-border-3d"
+        className="gradient-border"
         style={{
           width: '100%',
-          maxWidth: '480px',
-          background: 'rgba(8, 12, 22, 0.75)',
-          backdropFilter: 'blur(35px)',
-          WebkitBackdropFilter: 'blur(35px)',
-          borderRadius: '24px',
-          boxShadow: '0 30px 100px rgba(0, 0, 0, 0.9), 0 0 60px rgba(212, 175, 55, 0.12), inset 0 1px 1px rgba(255, 255, 255, 0.1)',
-          padding: '44px 40px',
+          maxWidth: 440,
+          background: 'linear-gradient(145deg, rgba(8,12,22,0.92) 0%, rgba(3,5,8,0.98) 100%)',
+          backdropFilter: 'blur(40px)',
+          WebkitBackdropFilter: 'blur(40px)',
+          borderRadius: 20,
+          boxShadow: `
+            0 40px 120px rgba(0,0,0,0.9),
+            0 0 80px rgba(212,175,55,0.08),
+            inset 0 1px 1px rgba(255,255,255,0.08)
+          `,
+          padding: '40px 36px',
           position: 'relative',
           zIndex: 10,
-          transform: transformStyle,
-          transition: 'transform 0.15s ease-out, box-shadow 0.3s ease',
-          transformStyle: 'preserve-3d',
-          marginTop: '36px',
+          transform: `perspective(1200px) rotateX(${tilt.rotateX}deg) rotateY(${tilt.rotateY}deg) scale3d(1,1,1)`,
+          transition: 'transform 0.12s ease-out',
         }}
       >
-        {/* Dynamic Light Reflection Glare */}
+        {/* Dynamic Glare */}
         <div style={{
           position: 'absolute',
           inset: 0,
-          borderRadius: '24px',
-          background: `radial-gradient(circle at ${glareStyle.x}% ${glareStyle.y}%, rgba(255, 255, 255, ${glareStyle.opacity}), transparent 60%)`,
+          borderRadius: 20,
+          background: `radial-gradient(circle at ${glare.x}% ${glare.y}%, rgba(255,255,255,${glare.opacity}), transparent 55%)`,
           pointerEvents: 'none',
           transition: 'opacity 0.2s ease',
         }} />
 
-        {/* Top Gold Metallic Badge */}
+        {/* Header */}
         <div style={{
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'center',
-          marginBottom: '28px',
-          borderBottom: '1px solid rgba(255,255,255,0.06)',
-          paddingBottom: '16px',
+          marginBottom: 28,
+          paddingBottom: 20,
+          borderBottom: '1px solid rgba(255,255,255,0.05)',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{
-              width: '8px',
-              height: '8px',
+              width: 10,
+              height: 10,
               borderRadius: '50%',
-              backgroundColor: '#10b981',
-              boxShadow: '0 0 10px #10b981',
+              background: C.green,
+              boxShadow: `0 0 12px ${C.green}`,
             }} />
             <span style={{
-              fontSize: '10px',
-              fontFamily: "'JetBrains Mono', monospace",
-              color: '#d4af37',
+              fontSize: 9,
+              fontFamily: C.mono,
+              color: C.gold,
               fontWeight: 800,
-              letterSpacing: '1px',
+              letterSpacing: '1.5px',
             }}>
               ATE FINANCIAL DESK
             </span>
           </div>
-
           <div style={{
-            fontSize: '9px',
-            fontFamily: "'JetBrains Mono', monospace",
-            color: '#64748b',
-            background: 'rgba(255, 255, 255, 0.04)',
-            padding: '3px 8px',
-            borderRadius: '6px',
-            border: '1px solid rgba(255, 255, 255, 0.06)',
+            fontSize: 8,
+            fontFamily: C.mono,
+            color: C.muted,
+            background: 'rgba(255,255,255,0.03)',
+            padding: '4px 10px',
+            borderRadius: 6,
+            border: '1px solid rgba(255,255,255,0.05)',
           }}>
-            VERCEL SECURE
+            SECURE SESSION
           </div>
         </div>
 
-        {/* Brand Header */}
-        <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+        {/* Brand Logo */}
+        <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: '68px',
-            height: '68px',
-            borderRadius: '20px',
-            background: 'linear-gradient(145deg, rgba(212, 175, 55, 0.2) 0%, rgba(10, 15, 28, 0.8) 100%)',
-            border: '1px solid rgba(212, 175, 55, 0.4)',
-            marginBottom: '16px',
-            boxShadow: '0 12px 30px rgba(0, 0, 0, 0.6), 0 0 25px rgba(212, 175, 55, 0.25)',
-            transform: 'translateZ(30px)',
+            width: 72,
+            height: 72,
+            borderRadius: 18,
+            background: 'linear-gradient(145deg, rgba(212,175,55,0.25) 0%, rgba(5,7,12,0.9) 100%)',
+            border: '1px solid rgba(212,175,55,0.45)',
+            marginBottom: 18,
+            boxShadow: `
+              0 16px 40px rgba(0,0,0,0.7),
+              0 0 40px rgba(212,175,55,0.2),
+              inset 0 1px 1px rgba(255,255,255,0.1)
+            `,
           }}>
-            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d4af37" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ filter: 'drop-shadow(0 0 6px rgba(212, 175, 55, 0.6))' }}>
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke={C.gold} strokeWidth="1.5">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
             </svg>
           </div>
 
           <h1 style={{
-            color: '#ffffff',
-            fontSize: '18px',
+            color: '#fff',
+            fontSize: 16,
             fontWeight: 900,
             letterSpacing: '3px',
-            margin: '0 0 6px 0',
+            margin: '0 0 8px 0',
             textTransform: 'uppercase',
-            fontFamily: "'JetBrains Mono', monospace",
-            transform: 'translateZ(25px)',
+            fontFamily: C.mono,
           }}>
-            AUTONOMOUS <span style={{ color: '#d4af37' }}>TRADING</span> ENGINE
+            AUTONOMOUS <span style={{ color: C.gold }}>TRADING</span> ENGINE
           </h1>
           <p style={{
-            color: '#64748b',
-            fontSize: '10px',
+            color: C.muted,
+            fontSize: 9,
             margin: 0,
-            letterSpacing: '1.5px',
+            letterSpacing: '2px',
             fontWeight: 700,
             textTransform: 'uppercase',
-            transform: 'translateZ(20px)',
           }}>
-            Institutional Stock & Gold Terminal &mdash; By QTusdev
+            Institutional Terminal — QTusdev
           </p>
         </div>
 
-        {/* Financial Metrics Live Telemetry Grid */}
+        {/* System Metrics */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr 1fr',
-          gap: '8px',
-          background: 'rgba(5, 7, 12, 0.7)',
-          border: '1px solid rgba(212, 175, 55, 0.1)',
-          borderRadius: '14px',
-          padding: '12px',
-          marginBottom: '28px',
-          fontSize: '9px',
-          fontFamily: "'JetBrains Mono', monospace",
-          transform: 'translateZ(15px)',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: 8,
+          background: 'rgba(0,0,0,0.4)',
+          border: '1px solid rgba(212,175,55,0.1)',
+          borderRadius: 12,
+          padding: 14,
+          marginBottom: 28,
+          fontSize: 9,
+          fontFamily: C.mono,
         }}>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ color: '#64748b', fontSize: '8px', marginBottom: '2px' }}>GATEWAY</div>
-            <div style={{ color: '#3b82f6', fontWeight: 'bold' }}>MULTI_AI 2026</div>
+            <div style={{ color: C.muted, fontSize: 7, marginBottom: 3 }}>GATEWAY</div>
+            <div style={{ color: C.blue, fontWeight: 800 }}>MULTI_AI</div>
           </div>
-          <div style={{ textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.06)', borderRight: '1px solid rgba(255,255,255,0.06)' }}>
-            <div style={{ color: '#64748b', fontSize: '8px', marginBottom: '2px' }}>RISKGATE</div>
-            <div style={{ color: '#d4af37', fontWeight: 'bold' }}>ARMED 1%</div>
+          <div style={{ textAlign: 'center', borderLeft: '1px solid rgba(255,255,255,0.05)', borderRight: '1px solid rgba(255,255,255,0.05)' }}>
+            <div style={{ color: C.muted, fontSize: 7, marginBottom: 3 }}>RISK</div>
+            <div style={{ color: C.gold, fontWeight: 800 }}>1.0% MAX</div>
           </div>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ color: '#64748b', fontSize: '8px', marginBottom: '2px' }}>MT5 ENGINE</div>
-            <div style={{ color: '#10b981', fontWeight: 'bold' }}>ONLINE</div>
+            <div style={{ color: C.muted, fontSize: 7, marginBottom: 3 }}>ENGINE</div>
+            <div style={{ color: C.green, fontWeight: 800 }}>MT5</div>
           </div>
         </div>
 
-        {/* Status Alerts */}
+        {/* Alerts */}
         {errorMsg && (
           <div style={{
-            background: 'rgba(239, 68, 68, 0.1)',
-            border: '1px solid rgba(239, 68, 68, 0.4)',
-            borderRadius: '12px',
+            background: 'rgba(244,63,94,0.08)',
+            border: '1px solid rgba(244,63,94,0.35)',
+            borderRadius: 10,
             padding: '12px 16px',
             color: '#f87171',
-            fontSize: '12px',
+            fontSize: 11,
             fontWeight: 600,
-            marginBottom: '20px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            transform: 'translateZ(20px)',
+            marginBottom: 20,
+            fontFamily: C.mono,
           }}>
-            <span>⚠️</span>
-            <span>{errorMsg}</span>
+            {errorMsg}
           </div>
         )}
 
         {successMsg && (
           <div style={{
-            background: 'rgba(16, 185, 129, 0.1)',
-            border: '1px solid rgba(16, 185, 129, 0.4)',
-            borderRadius: '12px',
+            background: 'rgba(34,211,160,0.08)',
+            border: '1px solid rgba(34,211,160,0.35)',
+            borderRadius: 10,
             padding: '12px 16px',
-            color: '#34d399',
-            fontSize: '12px',
+            color: '#6ee7b7',
+            fontSize: 11,
             fontWeight: 600,
-            marginBottom: '20px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            transform: 'translateZ(20px)',
+            marginBottom: 20,
+            fontFamily: C.mono,
           }}>
-            <span>✅</span>
-            <span>{successMsg}</span>
+            {successMsg}
           </div>
         )}
 
-        {/* Input Form */}
-        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '22px', transform: 'translateZ(20px)' }}>
-          {/* Operator Login */}
+        {/* Form */}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <div>
             <label style={{
               display: 'block',
-              color: '#94a3b8',
-              fontSize: '11px',
+              color: C.dim,
+              fontSize: 10,
               fontWeight: 800,
               letterSpacing: '1px',
-              marginBottom: '8px',
+              marginBottom: 10,
               textTransform: 'uppercase',
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: C.mono,
             }}>
-              Tên Đăng Nhập / Email Quản Trị
+              Operator ID / Email
             </label>
-            <div style={{ position: 'relative' }}>
-              <input
-                type="text"
-                value={login}
-                onChange={(e) => setLogin(e.target.value)}
-                onFocus={() => setFocusedField('login')}
-                onBlur={() => setFocusedField(null)}
-                placeholder="Nhập tài khoản của bạn..."
-                required
-                style={{
-                  width: '100%',
-                  padding: '14px 16px',
-                  background: 'rgba(5, 8, 14, 0.85)',
-                  border: '1px solid',
-                  borderColor: focusedField === 'login' ? '#d4af37' : 'rgba(255, 255, 255, 0.1)',
-                  borderRadius: '12px',
-                  color: '#ffffff',
-                  fontSize: '14px',
-                  outline: 'none',
-                  transition: 'all 0.25s ease',
-                  boxSizing: 'border-box',
-                  boxShadow: focusedField === 'login' ? '0 0 20px rgba(212, 175, 55, 0.25)' : 'none',
-                  fontFamily: "'JetBrains Mono', monospace",
-                }}
-              />
-            </div>
+            <input
+              type="text"
+              value={login}
+              onChange={(e) => setLogin(e.target.value)}
+              placeholder="Nhap thong tin dang nhap..."
+              required
+              style={{
+                width: '100%',
+                padding: '14px 16px',
+                background: 'rgba(0,0,0,0.5)',
+                border: '1px solid rgba(255,255,255,0.08)',
+                borderRadius: 10,
+                color: '#fff',
+                fontSize: 13,
+                fontFamily: C.mono,
+                outline: 'none',
+                transition: 'all 0.25s ease',
+                boxSizing: 'border-box',
+              }}
+              onFocus={(e) => {
+                e.target.style.borderColor = C.gold;
+                e.target.style.boxShadow = `0 0 24px ${C.goldDim}`;
+              }}
+              onBlur={(e) => {
+                e.target.style.borderColor = 'rgba(255,255,255,0.08)';
+                e.target.style.boxShadow = 'none';
+              }}
+            />
           </div>
 
-          {/* Operator Password */}
           <div>
             <label style={{
               display: 'block',
-              color: '#94a3b8',
-              fontSize: '11px',
+              color: C.dim,
+              fontSize: 10,
               fontWeight: 800,
               letterSpacing: '1px',
-              marginBottom: '8px',
+              marginBottom: 10,
               textTransform: 'uppercase',
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: C.mono,
             }}>
-              Mật Khẩu Quản Trị
+              Access Code
             </label>
             <div style={{ position: 'relative' }}>
               <input
                 type={showPassword ? 'text' : 'password'}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                onFocus={() => setFocusedField('password')}
-                onBlur={() => setFocusedField(null)}
-                placeholder="Nhập mật khẩu của bạn..."
+                placeholder="Nhap mat khau..."
                 required
                 style={{
                   width: '100%',
-                  padding: '14px 46px 14px 16px',
-                  background: 'rgba(5, 8, 14, 0.85)',
-                  border: '1px solid',
-                  borderColor: focusedField === 'password' ? '#d4af37' : 'rgba(255, 255, 255, 0.1)',
-                  borderRadius: '12px',
-                  color: '#ffffff',
-                  fontSize: '14px',
+                  padding: '14px 48px 14px 16px',
+                  background: 'rgba(0,0,0,0.5)',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  borderRadius: 10,
+                  color: '#fff',
+                  fontSize: 13,
+                  fontFamily: C.mono,
                   outline: 'none',
                   transition: 'all 0.25s ease',
                   boxSizing: 'border-box',
-                  boxShadow: focusedField === 'password' ? '0 0 20px rgba(212, 175, 55, 0.25)' : 'none',
-                  fontFamily: "'JetBrains Mono', monospace",
+                }}
+                onFocus={(e) => {
+                  e.target.style.borderColor = C.gold;
+                  e.target.style.boxShadow = `0 0 24px ${C.goldDim}`;
+                }}
+                onBlur={(e) => {
+                  e.target.style.borderColor = 'rgba(255,255,255,0.08)';
+                  e.target.style.boxShadow = 'none';
                 }}
               />
               <button
@@ -517,28 +519,27 @@ export default function LoginPage() {
                 onClick={() => setShowPassword(!showPassword)}
                 style={{
                   position: 'absolute',
-                  right: '16px',
+                  right: 14,
                   top: '50%',
                   transform: 'translateY(-50%)',
                   background: 'none',
                   border: 'none',
-                  color: showPassword ? '#d4af37' : '#64748b',
+                  color: showPassword ? C.gold : C.muted,
                   cursor: 'pointer',
                   padding: 0,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  outline: 'none',
                   transition: 'color 0.2s ease',
                 }}
               >
                 {showPassword ? (
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
                     <line x1="1" y1="1" x2="23" y2="23" />
                   </svg>
                 ) : (
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                     <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
                     <circle cx="12" cy="12" r="3" />
                   </svg>
@@ -547,7 +548,7 @@ export default function LoginPage() {
             </div>
           </div>
 
-          {/* Metallic 3D Action Button */}
+          {/* Submit Button */}
           <button
             type="submit"
             disabled={loading}
@@ -555,60 +556,73 @@ export default function LoginPage() {
               width: '100%',
               padding: '16px',
               background: loading
-                ? 'rgba(212, 175, 55, 0.3)'
-                : 'linear-gradient(135deg, #f39c12 0%, #d4af37 50%, #996515 100%)',
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              borderRadius: '12px',
-              color: '#000000',
-              fontSize: '13px',
+                ? 'rgba(212,175,55,0.2)'
+                : 'linear-gradient(135deg, #d4af37 0%, #996515 50%, #d4af37 100%)',
+              backgroundSize: loading ? '100%' : '200% 100%',
+              border: '1px solid rgba(255,255,255,0.15)',
+              borderRadius: 10,
+              color: '#000',
+              fontSize: 12,
               fontWeight: 900,
               letterSpacing: '2px',
               cursor: loading ? 'wait' : 'pointer',
-              boxShadow: loading ? 'none' : '0 8px 30px rgba(212, 175, 55, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.4)',
+              boxShadow: loading
+                ? 'none'
+                : '0 8px 32px rgba(212,175,55,0.3), inset 0 1px 1px rgba(255,255,255,0.3)',
               transition: 'all 0.25s ease',
               textTransform: 'uppercase',
-              fontFamily: "'JetBrains Mono', monospace",
-              marginTop: '6px',
+              fontFamily: C.mono,
+              marginTop: 4,
+            }}
+            onMouseEnter={(e) => {
+              if (!loading) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundPosition = '100% 0';
+                (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 10px 40px rgba(212,175,55,0.45), inset 0 1px 2px rgba(255,255,255,0.4)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!loading) {
+                (e.currentTarget as HTMLButtonElement).style.backgroundPosition = '0 0';
+                (e.currentTarget as HTMLButtonElement).style.boxShadow = '0 8px 32px rgba(212,175,55,0.3), inset 0 1px 1px rgba(255,255,255,0.3)';
+              }
             }}
           >
-            {loading ? 'AUTHENTICATING ENCRYPTED SESSION...' : 'ACCESS TRADING DESK'}
+            {loading ? 'AUTHENTICATING...' : 'ACCESS TERMINAL'}
           </button>
         </form>
 
-        {/* Footer info */}
+        {/* Footer */}
         <div style={{
-          marginTop: '32px',
+          marginTop: 28,
           textAlign: 'center',
-          borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-          paddingTop: '18px',
-          transform: 'translateZ(15px)',
+          paddingTop: 18,
+          borderTop: '1px solid rgba(255,255,255,0.05)',
         }}>
           <p style={{
-            color: '#475569',
-            fontSize: '9px',
+            color: C.faint,
+            fontSize: 8,
             margin: '0 0 6px 0',
-            fontFamily: "'JetBrains Mono', monospace",
+            fontFamily: C.mono,
+            letterSpacing: '0.5px',
           }}>
-            SECURITY CLEARANCE: LEVEL_30_OBSIDIAN
+            CLEARANCE LEVEL: OBSIDIAN-30
           </p>
           <a
             href="https://github.com/qtu11/Autonomous-Trading-Engine"
             target="_blank"
             rel="noreferrer"
             style={{
-              color: '#d4af37',
-              fontSize: '11px',
+              color: C.gold,
+              fontSize: 10,
               textDecoration: 'none',
               fontWeight: 700,
-              fontFamily: "'JetBrains Mono', monospace",
+              fontFamily: C.mono,
             }}
           >
-            github.com/qtu11/Autonomous-Trading-Engine
+            github.com/qtu11
           </a>
         </div>
       </div>
     </div>
   );
 }
-
-

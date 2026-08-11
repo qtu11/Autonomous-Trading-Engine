@@ -148,13 +148,19 @@ var color C_LKZ_FILL  = color.new(#FFD600, 85)
 var color C_NYKZ_FILL = color.new(#FF1744, 85)
 var color C_AKZ_FILL  = color.new(#00E5FF, 85)
 
-// ─── GLOBAL STATE ───
+// ─── GLOBAL STATE (updated each bar) ───
 var int   g_barIdx     = bar_index
 var float g_close      = close
 var float g_open       = open
 var float g_high       = high
 var float g_low       = low
 var float g_volume    = volume
+g_barIdx  := bar_index
+g_close   := close
+g_open    := open
+g_high    := high
+g_low     := low
+g_volume  := volume
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SECTION 3: CANDLESTICK BASICS
@@ -355,7 +361,7 @@ if bar_index > swingLookback and high == swingHigh
             if showEQH_EQL
                 // Label at EQH
                 label.new(array.get(swingHighIdx, 0), array.get(swingHighs, 0),
-                  "BSL", color=C_LIQ_BEAR, textcolor=C_WHITE,
+                  "BSL", color=C_EQH_COLOR, textcolor=C_WHITE,
                   style=label.style_label_down, size=size.tiny)
 
 if bar_index > swingLookback and low == swingLow
@@ -368,7 +374,7 @@ if bar_index > swingLookback and low == swingLow
         if math.abs(array.get(swingLows, 0) - array.get(swingLows, i)) < atr(14) * 0.5
             if showEQH_EQL
                 label.new(array.get(swingLowIdx, 0), array.get(swingLows, 0),
-                  "SSL", color=C_LIQ_BULL, textcolor=C_WHITE,
+                  "SSL", color=C_EQL_COLOR, textcolor=C_WHITE,
                   style=label.style_label_up, size=size.tiny)
 
 // ─── LIQUIDITY SWEEP ───
@@ -551,6 +557,7 @@ int minuteOfDay = (hour * 60 + minute)
 bool inLondonKZ = showKillzones and minuteOfDay >= sess_london_start and minuteOfDay <= sess_london_end
 bool inNYKZ     = showKillzones and minuteOfDay >= sess_ny_start and minuteOfDay <= sess_ny_end
 bool inAsiaKZ    = showKillzones and minuteOfDay >= sess_asia_start and minuteOfDay <= sess_asia_end
+bgcolor(inAsiaKZ ? C_AKZ_FILL : na)
 
 // ─── KILLZONE RANGE LINES ───
 var line londonHigh = na
@@ -569,9 +576,9 @@ if inLondonKZ
     londonRangeLow  := math.min(low, nz(londonRangeLow, high))
     
     if showKillzoneLines
-        line.new(bar_index, londonRangeHigh, bar_index + 1, londonRangeHigh,
+        londonHigh := line.new(bar_index, londonRangeHigh, bar_index + 1, londonRangeHigh,
           color=color.new(C_LKZ_FILL, 40), style=line.style_dashed, width=1)
-        line.new(bar_index, londonRangeLow, bar_index + 1, londonRangeLow,
+        londonLow := line.new(bar_index, londonRangeLow, bar_index + 1, londonRangeLow,
           color=color.new(C_LKZ_FILL, 40), style=line.style_dashed, width=1)
 
 // Track NY KZ range
@@ -580,9 +587,9 @@ if inNYKZ
     nyRangeLow  := math.min(low, nz(nyRangeLow, high))
     
     if showKillzoneLines
-        line.new(bar_index, nyRangeHigh, bar_index + 1, nyRangeHigh,
+        nyHigh := line.new(bar_index, nyRangeHigh, bar_index + 1, nyRangeHigh,
           color=color.new(C_NYKZ_FILL, 40), style=line.style_dashed, width=1)
-        line.new(bar_index, nyRangeLow, bar_index + 1, nyRangeLow,
+        nyLow := line.new(bar_index, nyRangeLow, bar_index + 1, nyRangeLow,
           color=color.new(C_NYKZ_FILL, 40), style=line.style_dashed, width=1)
 
 // ─── KILLZONE LABELS ───
@@ -602,9 +609,9 @@ if barstate.islast and showKillzones
 // SECTION 11: ICT - OTE (OPTIMAL TRADE ENTRY) & FIBONACCI
 // ══════════════════════════════════════════════════════════════════════════════
 
-var line ote618 = na
-var line ote786 = na
-var line ote382 = na
+var float ote618 = na
+var float ote786 = na
+var float ote382 = na
 
 if showOTE and bar_index > swingLookback
     float swingRange = swingHigh - swingLow
@@ -858,7 +865,7 @@ bool fullBuy    = sniperBuy and smcBuy and paBuy and (useConfluence ? htfBullBia
 
 if fullBuy and tradeState == 0
     tradeState    := 1
-    signalStrength := smcBuyScore + int(sniperBullScore)
+    signalStrength := smcBuyScore + math.round(sniperBullScore)
     signalLabel   := smcBuyScore >= scoreMinStrong ? "SNIPER BUY" : "BUY"
     entryPrice    := close
     float risk    := atr14 * atrMultiplier
@@ -878,7 +885,7 @@ bool fullSell    = sniperSell and smcSell and paSell and (useConfluence ? htfBea
 
 if fullSell and tradeState == 0
     tradeState    := -1
-    signalStrength := smcSellScore + int(sniperBearScore)
+    signalStrength := smcSellScore + math.round(sniperBearScore)
     signalLabel   := smcSellScore >= scoreMinStrong ? "SNIPER SELL" : "SELL"
     entryPrice    := close
     float risk    := atr14 * atrMultiplier
@@ -1289,17 +1296,11 @@ if barstate.islast and showDashboard
 // SECTION 22: ALERTS
 // ══════════════════════════════════════════════════════════════════════════════
 
-if enableAlerts
-    alertcondition(fullBuy and alertBuySetup, "SNIPER BUY SETUP", 
-      "SMC-Sniper BUY Signal | Score: {{plot_0}} | Price: {{close}}")
-    alertcondition(fullSell and alertSellSetup, "SNIPER SELL SETUP", 
-      "SMC-Sniper SELL Signal | Score: {{plot_0}} | Price: {{close}}")
-    alertcondition(slHit and alertSLHit, "STOP LOSS HIT", 
-      "Trade SL Hit | Direction: {{plot_0}}")
-    alertcondition((tp1Hit or tp2Hit or tp3Hit) and alertTPHit, "TAKE PROFIT HIT", 
-      "TP Hit | TP{{plot_0}}")
-    alertcondition(tp5Hit and alertTPC, "FINAL TARGET HIT", 
-      "Final TP Hit - Trade Closed")
+alertcondition(fullBuy and enableAlerts and alertBuySetup, "SNIPER BUY SETUP", "SMC-Sniper BUY Signal Triggered")
+alertcondition(fullSell and enableAlerts and alertSellSetup, "SNIPER SELL SETUP", "SMC-Sniper SELL Signal Triggered")
+alertcondition(slHit and enableAlerts and alertSLHit, "STOP LOSS HIT", "Trade Stop Loss Hit")
+alertcondition((tp1Hit or tp2Hit or tp3Hit) and enableAlerts and alertTPHit, "TAKE PROFIT HIT", "Take Profit Level Hit")
+alertcondition(tp5Hit and enableAlerts and alertTPC, "FINAL TARGET HIT", "Final TP Hit - Trade Closed")
 
 // ══════════════════════════════════════════════════════════════════════════════
 // END OF SMC-SNIPER SYSTEM

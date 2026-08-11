@@ -1,6 +1,7 @@
 """
 Sniper Core Module
 Implements: EMA Ribbon, VWAP, ADX, RSI, MACD, Score System
+FIXED: Division by zero, NaN handling, ATR calculation
 """
 import pandas as pd
 import numpy as np
@@ -62,7 +63,8 @@ class EMARibbon:
         
         # Ribbon strength (distance between EMAs)
         df['ribbon_distance'] = abs(df['ema_9'] - df['ema_21'])
-        df['ribbon_distance_pct'] = (df['ribbon_distance'] / df['close']) * 100
+        df['ribbon_distance_pct'] = df['ribbon_distance'] / df['close'].replace(0, np.nan)
+        df['ribbon_distance_pct'] = df['ribbon_distance_pct'].fillna(0)
         
         return df
     
@@ -71,16 +73,20 @@ class EMARibbon:
         df_calc = self.calculate(df)
         last = df_calc.iloc[-1]
         
+        ema_9 = float(last['ema_9']) if pd.notna(last['ema_9']) else 0
+        ema_21 = float(last['ema_21']) if pd.notna(last['ema_21']) else 0
+        ribbon_dist_pct = float(last['ribbon_distance_pct']) if pd.notna(last['ribbon_distance_pct']) else 0
+        
         return {
-            'ema_9': float(last['ema_9']),
-            'ema_21': float(last['ema_21']),
-            'ribbon_bull': bool(last['ribbon_bull']),
-            'ribbon_bear': bool(last['ribbon_bear']),
-            'ema_bull_cross': bool(last['ema_bull_cross']),
-            'ema_bear_cross': bool(last['ema_bear_cross']),
-            'ribbon_distance': float(last['ribbon_distance']),
-            'ribbon_distance_pct': float(last['ribbon_distance_pct']),
-            'ribbon_strength': 'strong' if last['ribbon_distance_pct'] > 1.0 else 'moderate' if last['ribbon_distance_pct'] > 0.5 else 'weak'
+            'ema_9': ema_9,
+            'ema_21': ema_21,
+            'ribbon_bull': bool(last.get('ribbon_bull', False)),
+            'ribbon_bear': bool(last.get('ribbon_bear', False)),
+            'ema_bull_cross': bool(last.get('ema_bull_cross', False)),
+            'ema_bear_cross': bool(last.get('ema_bear_cross', False)),
+            'ribbon_distance': float(last.get('ribbon_distance', 0)) if pd.notna(last.get('ribbon_distance')) else 0,
+            'ribbon_distance_pct': ribbon_dist_pct,
+            'ribbon_strength': 'strong' if ribbon_dist_pct > 0.01 else 'moderate' if ribbon_dist_pct > 0.005 else 'weak'
         }
 
 
@@ -103,12 +109,14 @@ class VWAPIndicator:
         df['cum_tp_vol'] = (df['typical'] * df['volume']).cumsum()
         df['cum_vol'] = df['volume'].cumsum()
         
-        # VWAP
-        df['vwap'] = df['cum_tp_vol'] / df['cum_vol']
+        # VWAP - safe division
+        df['vwap'] = df['cum_tp_vol'] / df['cum_vol'].replace(0, np.nan)
+        df['vwap'] = df['vwap'].fillna(df['close'])
         
         # VWAP deviation
         df['vwap_deviation'] = df['close'] - df['vwap']
-        df['vwap_deviation_pct'] = (df['vwap_deviation'] / df['vwap']) * 100
+        df['vwap_deviation_pct'] = df['vwap_deviation'] / df['vwap'].replace(0, np.nan) * 100
+        df['vwap_deviation_pct'] = df['vwap_deviation_pct'].fillna(0)
         
         # Distance from VWAP
         df['above_vwap'] = df['close'] > df['vwap']
@@ -121,14 +129,18 @@ class VWAPIndicator:
         df_calc = self.calculate(df)
         last = df_calc.iloc[-1]
         
+        vwap = float(last['vwap']) if pd.notna(last['vwap']) else float(last['close'])
+        close = float(last['close'])
+        deviation_pct = float(last['vwap_deviation_pct']) if pd.notna(last['vwap_deviation_pct']) else 0
+        
         return {
-            'vwap': float(last['vwap']),
-            'price': float(last['close']),
-            'above_vwap': bool(last['above_vwap']),
-            'below_vwap': bool(last['below_vwap']),
-            'vwap_deviation': float(last['vwap_deviation']),
-            'vwap_deviation_pct': float(last['vwap_deviation_pct']),
-            'strength': abs(last['vwap_deviation_pct'])
+            'vwap': vwap,
+            'price': close,
+            'above_vwap': close > vwap,
+            'below_vwap': close < vwap,
+            'vwap_deviation': float(last['vwap_deviation']) if pd.notna(last['vwap_deviation']) else 0,
+            'vwap_deviation_pct': deviation_pct,
+            'strength': abs(deviation_pct)
         }
 
 
@@ -168,14 +180,27 @@ class ADXIndicator:
             0
         )
         
-        # Smoothed values
-        df['atr'] = df['tr'].rolling(period).mean()
-        df['plus_di'] = 100 * (df['plus_dm'].rolling(period).mean() / df['atr'])
-        df['minus_di'] = 100 * (df['minus_dm'].rolling(period).mean() / df['atr'])
+        # Smoothed values - use exponential moving average for smoother results
+        df['atr'] = df['tr'].ewm(span=period, adjust=False).mean()
+        df['atr'] = df['atr'].fillna(df['tr'])
+        
+        # DI calculations - safe division
+        plus_dm_ema = df['plus_dm'].ewm(span=period, adjust=False).mean()
+        minus_dm_ema = df['minus_dm'].ewm(span=period, adjust=False).mean()
+        
+        df['plus_di'] = 100 * plus_dm_ema / df['atr'].replace(0, np.nan)
+        df['minus_di'] = 100 * minus_dm_ema / df['atr'].replace(0, np.nan)
+        
+        # Fill NaN with 0
+        df['plus_di'] = df['plus_di'].fillna(0)
+        df['minus_di'] = df['minus_di'].fillna(0)
         
         # DX and ADX
-        df['dx'] = 100 * abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di'])
-        df['adx'] = df['dx'].rolling(period).mean()
+        di_sum = df['plus_di'] + df['minus_di']
+        df['dx'] = 100 * abs(df['plus_di'] - df['minus_di']) / di_sum.replace(0, np.nan)
+        df['dx'] = df['dx'].fillna(0)
+        df['adx'] = df['dx'].ewm(span=period, adjust=False).mean()
+        df['adx'] = df['adx'].fillna(0)
         
         # Trend strength interpretation
         df['trend_strong'] = df['adx'] > self.config.adx_strong_threshold
@@ -188,14 +213,19 @@ class ADXIndicator:
         df_calc = self.calculate(df)
         last = df_calc.iloc[-1]
         
+        adx = float(last['adx']) if pd.notna(last['adx']) else 0
+        plus_di = float(last['plus_di']) if pd.notna(last['plus_di']) else 0
+        minus_di = float(last['minus_di']) if pd.notna(last['minus_di']) else 0
+        atr = float(last['atr']) if pd.notna(last['atr']) else 0
+        
         return {
-            'adx': float(last['adx']),
-            'plus_di': float(last['plus_di']),
-            'minus_di': float(last['minus_di']),
-            'atr': float(last['atr']),
-            'trend_strong': bool(last['trend_strong']),
-            'trend_weak': bool(last['trend_weak']),
-            'strength_level': 'no_trend' if last['adx'] < 20 else 'weak' if last['adx'] < 25 else 'strong' if last['adx'] < 50 else 'very_strong' if last['adx'] < 75 else 'extreme'
+            'adx': adx,
+            'plus_di': plus_di,
+            'minus_di': minus_di,
+            'atr': atr,
+            'trend_strong': bool(last.get('trend_strong', False)),
+            'trend_weak': bool(last.get('trend_weak', True)),
+            'strength_level': 'no_trend' if adx < 20 else 'weak' if adx < 25 else 'strong' if adx < 50 else 'very_strong' if adx < 75 else 'extreme'
         }
 
 
@@ -214,10 +244,15 @@ class RSIIndicator:
         
         # RSI 14
         delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=self.config.rsi_period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=self.config.rsi_period).mean()
-        rs = gain / loss
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        
+        avg_gain = gain.ewm(span=self.config.rsi_period, adjust=False).mean()
+        avg_loss = loss.ewm(span=self.config.rsi_period, adjust=False).mean()
+        
+        rs = avg_gain / avg_loss.replace(0, np.nan)
         df['rsi_14'] = 100 - (100 / (1 + rs))
+        df['rsi_14'] = df['rsi_14'].fillna(50)
         
         # RSI zones
         df['rsi_overbought'] = df['rsi_14'] >= 70
@@ -235,14 +270,16 @@ class RSIIndicator:
         df_calc = self.calculate(df)
         last = df_calc.iloc[-1]
         
+        rsi = float(last['rsi_14']) if pd.notna(last['rsi_14']) else 50
+        
         return {
-            'rsi_14': float(last['rsi_14']),
-            'overbought': bool(last['rsi_overbought']),
-            'oversold': bool(last['rsi_oversold']),
-            'neutral': bool(last['rsi_neutral']),
-            'bullish': bool(last['rsi_bullish']),
-            'bearish': bool(last['rsi_bearish']),
-            'zone': 'overbought' if last['rsi_overbought'] else 'oversold' if last['rsi_oversold'] else 'neutral'
+            'rsi_14': rsi,
+            'overbought': rsi >= 70,
+            'oversold': rsi <= 30,
+            'neutral': 30 < rsi < 70,
+            'bullish': rsi > 50,
+            'bearish': rsi < 50,
+            'zone': 'overbought' if rsi >= 70 else 'oversold' if rsi <= 30 else 'neutral'
         }
 
 
@@ -285,16 +322,20 @@ class MACDIndicator:
         df_calc = self.calculate(df)
         last = df_calc.iloc[-1]
         
+        macd_main = float(last['macd_main']) if pd.notna(last['macd_main']) else 0
+        macd_signal = float(last['macd_signal']) if pd.notna(last['macd_signal']) else 0
+        macd_hist = float(last['macd_histogram']) if pd.notna(last['macd_histogram']) else 0
+        
         return {
-            'macd_main': float(last['macd_main']),
-            'macd_signal': float(last['macd_signal']),
-            'macd_histogram': float(last['macd_histogram']),
-            'bullish': bool(last['macd_bullish']),
-            'bearish': bool(last['macd_bearish']),
-            'bull_cross': bool(last['macd_bull_cross']),
-            'bear_cross': bool(last['macd_bear_cross']),
-            'histogram_positive': last['macd_histogram'] > 0,
-            'momentum': 'strong_bull' if last['macd_bullish'] and last['macd_histogram'] > 0 else 'strong_bear' if last['macd_bearish'] and last['macd_histogram'] < 0 else 'weak'
+            'macd_main': macd_main,
+            'macd_signal': macd_signal,
+            'macd_histogram': macd_hist,
+            'bullish': macd_main > macd_signal,
+            'bearish': macd_main < macd_signal,
+            'bull_cross': bool(last.get('macd_bull_cross', False)),
+            'bear_cross': bool(last.get('macd_bear_cross', False)),
+            'histogram_positive': macd_hist > 0,
+            'momentum': 'strong_bull' if (macd_main > macd_signal and macd_hist > 0) else 'strong_bear' if (macd_main < macd_signal and macd_hist < 0) else 'weak'
         }
 
 
@@ -313,13 +354,15 @@ class VolumeAnalyzer:
         
         # SMA
         df['vol_sma'] = df['volume'].rolling(self.config.vol_sma_period).mean()
+        df['vol_sma'] = df['vol_sma'].fillna(df['volume'].mean())
         
         # Volume comparison
         df['vol_above_avg'] = df['volume'] > df['vol_sma']
         df['vol_below_avg'] = df['volume'] <= df['vol_sma']
         
-        # Volume ratio
-        df['vol_ratio'] = df['volume'] / df['vol_sma']
+        # Volume ratio - safe division
+        df['vol_ratio'] = df['volume'] / df['vol_sma'].replace(0, np.nan)
+        df['vol_ratio'] = df['vol_ratio'].fillna(1)
         
         # High volume spikes
         df['vol_spike'] = df['volume'] > df['vol_sma'] * 1.5
@@ -332,15 +375,19 @@ class VolumeAnalyzer:
         df_calc = self.calculate(df)
         last = df_calc.iloc[-1]
         
+        volume = float(last['volume']) if pd.notna(last['volume']) else 0
+        vol_avg = float(last['vol_sma']) if pd.notna(last['vol_sma']) else 0
+        vol_ratio = float(last['vol_ratio']) if pd.notna(last['vol_ratio']) else 1
+        
         return {
-            'volume': float(last['volume']),
-            'vol_avg': float(last['vol_sma']),
-            'vol_ratio': float(last['vol_ratio']),
-            'above_average': bool(last['vol_above_avg']),
-            'below_average': bool(last['vol_below_avg']),
-            'spike': bool(last['vol_spike']),
-            'drop': bool(last['vol_drop']),
-            'level': 'high' if last['vol_spike'] else 'low' if last['vol_drop'] else 'normal'
+            'volume': volume,
+            'vol_avg': vol_avg,
+            'vol_ratio': vol_ratio,
+            'above_average': bool(last.get('vol_above_avg', False)),
+            'below_average': bool(last.get('vol_below_avg', True)),
+            'spike': bool(last.get('vol_spike', False)),
+            'drop': bool(last.get('vol_drop', False)),
+            'level': 'high' if last.get('vol_spike', False) else 'low' if last.get('vol_drop', False) else 'normal'
         }
 
 
@@ -367,9 +414,10 @@ class SniperScorer:
             bear_score += 1
         
         # Factor 2: RSI(14)
-        if indicators.get('rsi_14', 50) > 50:
+        rsi = indicators.get('rsi_14', 50)
+        if rsi > 50:
             bull_score += 1
-        if indicators.get('rsi_14', 50) < 50:
+        if rsi < 50:
             bear_score += 1
         
         # Factor 3: MACD
@@ -397,9 +445,10 @@ class SniperScorer:
             bear_score += 1
         
         # Factor 7: RSI 5m (if available)
-        if indicators.get('rsi_5m', 50) > 50:
+        rsi_5m = indicators.get('rsi_5m', 50)
+        if rsi_5m > 50:
             bull_score += 1
-        if indicators.get('rsi_5m', 50) < 50:
+        if rsi_5m < 50:
             bear_score += 1
         
         # Convert to percentage
@@ -452,6 +501,10 @@ class SniperAnalyzer:
         macd_info = self.macd.get_macd_info(df)
         vol_info = self.volume.get_volume_info(df)
         
+        # Get last row safely
+        last_close = float(df['close'].iloc[-1]) if len(df) > 0 else 0
+        last_open = float(df['open'].iloc[-1]) if len(df) > 0 else 0
+        
         # Build indicators dict for scoring
         indicators = {
             'price_above_vwap': vwap_info['above_vwap'],
@@ -462,11 +515,11 @@ class SniperAnalyzer:
             'ribbon_bull': ema_info['ribbon_bull'],
             'ribbon_bear': ema_info['ribbon_bear'],
             'adx_strong': adx_info['trend_strong'],
-            'price_above_ema9': df_ema['close'].iloc[-1] > ema_info['ema_9'],
-            'price_below_ema9': df_ema['close'].iloc[-1] < ema_info['ema_9'],
+            'price_above_ema9': last_close > ema_info['ema_9'] if ema_info['ema_9'] > 0 else False,
+            'price_below_ema9': last_close < ema_info['ema_9'] if ema_info['ema_9'] > 0 else False,
             'vol_above_avg': vol_info['above_average'],
-            'is_bullish': df['close'].iloc[-1] > df['open'].iloc[-1],
-            'is_bearish': df['close'].iloc[-1] < df['open'].iloc[-1],
+            'is_bullish': last_close > last_open,
+            'is_bearish': last_close < last_open,
             'rsi_5m': rsi_5m
         }
         

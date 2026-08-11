@@ -2,17 +2,55 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "framework": "nextjs",
+  "rewrites": [
+    {
+      "source": "/backend/(.*)",
+      "destination": "https://autonomous-trading-engine.vercel.app/backend/$1"
+    },
+    {
+      "source": "/api/v1/(.*)",
+      "destination": "https://autonomous-trading-engine.vercel.app/backend/api/v1/$1"
+    }
+  ],
   "env": {
-    "ATE_BACKEND_URL": "http://113.173.192.226:8848",
+    "ATE_BACKEND_URL": "https://autonomous-trading-engine.vercel.app/backend",
     "ATE_FRONTEND_URL": "https://autonomous-trading-engine.vercel.app",
     "ATE_MT5_API": "https://autonomous-trading-engine.vercel.app/api/v1",
     "NEXT_PUBLIC_ATE_API_ORIGIN": "https://autonomous-trading-engine.vercel.app",
-    "NEXT_PUBLIC_FIREBASE_API_KEY": "AIzaSyDRmJ294aBZhVEcTliP86D19qM3tJbhgDI",
+    "NEXT_PUBLIC_FIREBASE_API_KEY": "",
     "NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN": "qtusdev.firebaseapp.com",
     "NEXT_PUBLIC_FIREBASE_PROJECT_ID": "qtusdev",
     "NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET": "qtusdev.firebasestorage.app",
-    "NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "98060679867",
-    "NEXT_PUBLIC_FIREBASE_APP_ID": "1:98060679867:web:563015a0a052b2f432879e",
-    "NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID": "G-F4F16X1TW4"
+    "NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID": "",
+    "NEXT_PUBLIC_FIREBASE_APP_ID": "",
+    "NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID": "",
+    "ADMIN_LOGIN": "qtusdev@quanttrading.ai",
+    "ADMIN_PASSWORD": "",
+    "ATE_ALLOWED_ORIGINS": "http://localhost:3000,http://127.0.0.1:3000,https://autonomous-trading-engine.vercel.app",
+    "ATE_DASHBOARD_HOST": "0.0.0.0",
+    "ATE_DASHBOARD_PORT": "8005",
+    "GEMINI_API_KEY": "",
+    "GEMINI_BASE_URL": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "MT5_AUTOSTART": "true",
+    "MT5_PATH": "C:\\Program Files\\MetaTrader 5-1\\",
+    "MT5_TERMINAL_TIMEOUT_SECONDS": "30",
+    "OPENAI_API_KEY": "",
+    "OPENAI_BASE_URL": "https://api.openai.com/v1",
+    "ATE_AI_MODEL": "deepseek-v4-flash-free",
+    "ATE_BRIDGE_TOKEN": "",
+    "ATE_DEMO_ARMED": "true",
+    "ATE_DEMO_COMMAND_TTL_SECONDS": "10",
+    "ATE_ENABLE_TRADING": "true",
+    "ATE_EXECUTION_MAGIC": "888999",
+    "ATE_EXECUTION_MODE": "LIVE",
+    "ATE_EXECUTION_SYMBOL": "XAUUSDm",
+    "ATE_KILL_SWITCH": "false",
+    "ATE_LIVE_ARMED": "true",
+    "ATE_OPERATOR_TOKEN": "",
+    "TELEGRAM_BOT_TOKEN": "",
+    "TELEGRAM_CHAT_ID": "",
+    "TELEGRAM_ENABLED": "true",
+    "VERCEL": "1",
+    "VERCEL_ENV": "production"
   }
 }

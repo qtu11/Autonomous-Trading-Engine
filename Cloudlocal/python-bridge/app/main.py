@@ -423,7 +423,7 @@ async def execute_order(order: OrderRequest, authorization: Optional[str] = Head
                 "magic": order.magic,
                 "comment": order.comment,
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
+                "type_filling": mt5.ORDER_FILLING_RETURN,
             }
         elif order.action == "SELL":
             request = {
@@ -437,7 +437,7 @@ async def execute_order(order: OrderRequest, authorization: Optional[str] = Head
                 "magic": order.magic,
                 "comment": order.comment,
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
+                "type_filling": mt5.ORDER_FILLING_RETURN,
             }
         elif order.action == "CLOSE" and order.ticket:
             positions = mt5.positions_get(ticket=order.ticket)
@@ -454,7 +454,7 @@ async def execute_order(order: OrderRequest, authorization: Optional[str] = Head
                 "magic": order.magic,
                 "comment": "Close by bridge",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
+                "type_filling": mt5.ORDER_FILLING_RETURN,
             }
         elif order.action == "CLOSE_ALL":
             closed = 0
@@ -472,7 +472,7 @@ async def execute_order(order: OrderRequest, authorization: Optional[str] = Head
                             "magic": order.magic,
                             "comment": "Close all by bridge",
                             "type_time": mt5.ORDER_TIME_GTC,
-                            "type_filling": mt5.ORDER_FILLING_IOC,
+                            "type_filling": mt5.ORDER_FILLING_RETURN,
                         }
                         result = mt5.order_send(close_req)
                         if result.retcode == mt5.TRADE_RETCODE_DONE:

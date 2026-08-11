@@ -10,7 +10,7 @@
     height: 100%;
     width: 100%;
     overflow: hidden;
-    background-color: #07090e;
+    background-color: #030508;
     color: #f1f5f9;
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -18,181 +18,389 @@
   }
 }
 
-/* Custom Bloomberg Terminal Scrollbars */
+/* ══════════════════════════════════════════════════════════════════════════════
+   INSTITUTIONAL DESIGN SYSTEM - ADVANCED VISUAL EFFECTS
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Premium Scrollbar Design ── */
 ::-webkit-scrollbar {
-  width: 2px;
-  height: 2px;
+  width: 3px;
+  height: 3px;
 }
 
 ::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.2);
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.6), rgba(212, 175, 55, 0.2));
   border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(212, 180, 131, 0.4);
+  background: linear-gradient(180deg, #D4B483, rgba(212, 175, 55, 0.5));
 }
 
-/* Keyframe Animations */
+/* ── Core Animation Library ── */
 @keyframes livePulse {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-
-  50% {
-    transform: scale(1.3);
-    opacity: 0.4;
-  }
-
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.4); opacity: 0.3; }
 }
 
 @keyframes priceFlashGreen {
-  0% {
-    background-color: rgba(34, 211, 160, 0.3);
-  }
-
-  100% {
-    background-color: transparent;
-  }
+  0% { background-color: rgba(34, 211, 160, 0.4); }
+  100% { background-color: transparent; }
 }
 
 @keyframes priceFlashRed {
-  0% {
-    background-color: rgba(244, 63, 94, 0.3);
-  }
-
-  100% {
-    background-color: transparent;
-  }
+  0% { background-color: rgba(244, 63, 94, 0.4); }
+  100% { background-color: transparent; }
 }
 
 @keyframes borderGlow {
-  0% {
-    border-color: rgba(212, 180, 131, 0.2);
-  }
-
-  50% {
-    border-color: rgba(212, 180, 131, 0.5);
-  }
-
-  100% {
-    border-color: rgba(212, 180, 131, 0.2);
-  }
+  0%, 100% { border-color: rgba(212, 180, 131, 0.15); }
+  50% { border-color: rgba(212, 180, 131, 0.5); }
 }
 
+@keyframes shimmerGold {
+  0% { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes marqueeScroll {
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-50%); }
+}
+
+@keyframes gradientShift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes floatSubtle {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-4px); }
+}
+
+@keyframes meshRotate {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes pulseRing {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+@keyframes dataStream {
+  0% { background-position: 0% 0%; }
+  100% { background-position: 100% 100%; }
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes particleFloat {
+  0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.3; }
+  25% { transform: translate(10px, -15px) scale(1.1); opacity: 0.6; }
+  50% { transform: translate(-5px, -25px) scale(0.9); opacity: 0.4; }
+  75% { transform: translate(-15px, -10px) scale(1.05); opacity: 0.5; }
+}
+
+/* ── Premium Animation Classes ── */
 .animate-live-pulse {
   animation: livePulse 2s infinite ease-in-out;
 }
 
 .animate-border-glow {
-  animation: borderGlow 4s infinite ease-in-out;
-}
-
-/* Table Hover Effect */
-tr.table-row-hover:hover {
-  background-color: rgba(255, 255, 255, 0.03) !important;
-}
-
-@keyframes pulse {
-
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.4;
-  }
-}
-
-@keyframes marqueeScroll {
-  0% {
-    transform: translateX(0%);
-  }
-
-  100% {
-    transform: translateX(-50%);
-  }
-}
-
-@keyframes gradientRotate {
-  0% {
-    background-position: 0% 50%;
-  }
-
-  50% {
-    background-position: 100% 50%;
-  }
-
-  100% {
-    background-position: 0% 50%;
-  }
-}
-
-@keyframes float3D {
-  0% {
-    transform: translateY(0px) rotateX(0deg);
-  }
-
-  50% {
-    transform: translateY(-6px) rotateX(2deg);
-  }
-
-  100% {
-    transform: translateY(0px) rotateX(0deg);
-  }
-}
-
-@keyframes gridPerspective {
-  0% {
-    background-position: 0 0;
-  }
-
-  100% {
-    background-position: 50px 50px;
-  }
+  animation: borderGlow 3s infinite ease-in-out;
 }
 
 .animate-marquee {
   display: flex;
   width: max-content;
-  animation: marqueeScroll 25s linear infinite;
+  animation: marqueeScroll 30s linear infinite;
 }
 
 .animate-marquee:hover {
   animation-play-state: paused;
 }
 
-.glow-border-3d {
-  position: relative;
-  background-clip: padding-box;
+.animate-shimmer {
+  background: linear-gradient(90deg, transparent, rgba(212, 175, 55, 0.15), transparent);
+  background-size: 200% 100%;
+  animation: shimmerGold 3s ease-in-out infinite;
 }
 
-.glow-border-3d::before {
+.animate-float {
+  animation: floatSubtle 4s ease-in-out infinite;
+}
+
+.animate-breathe {
+  animation: breathe 3s ease-in-out infinite;
+}
+
+/* ── Premium Glassmorphism Panels ── */
+.glass-panel {
+  background: linear-gradient(135deg, rgba(10, 14, 24, 0.85) 0%, rgba(5, 7, 12, 0.95) 100%);
+  backdrop-filter: blur(20px);
+  -webkit-backdropFilter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+}
+
+.glass-panel-dark {
+  background: linear-gradient(180deg, rgba(5, 7, 12, 0.9) 0%, rgba(3, 5, 8, 0.98) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdropFilter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 8px;
+}
+
+/* ── Animated Gradient Border System ── */
+.gradient-border {
+  position: relative;
+  background-clip: padding-box;
+  border-radius: inherit;
+}
+
+.gradient-border::before {
   content: '';
   position: absolute;
   inset: -1px;
   border-radius: inherit;
   padding: 1px;
-  background: linear-gradient(135deg, rgba(212, 175, 55, 0.6), rgba(59, 130, 246, 0.2), rgba(16, 185, 129, 0.4), rgba(212, 175, 55, 0.6));
+  background: linear-gradient(
+    135deg,
+    rgba(212, 175, 55, 0.6) 0%,
+    rgba(16, 185, 129, 0.3) 25%,
+    rgba(59, 130, 246, 0.2) 50%,
+    rgba(168, 85, 247, 0.3) 75%,
+    rgba(212, 175, 55, 0.6) 100%
+  );
   background-size: 300% 300%;
-  animation: gradientRotate 6s ease infinite;
+  animation: gradientShift 6s ease infinite;
   -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
 }
 
-/* Hide Next.js DevTools floating "N" button in Dev mode */
+.gradient-border-gold {
+  position: relative;
+  background-clip: padding-box;
+}
+
+.gradient-border-gold::before {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(90deg, transparent, #D4B483, transparent);
+  background-size: 200% 100%;
+  animation: shimmerGold 4s ease-in-out infinite;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ── Live Indicator System ── */
+.live-indicator {
+  position: relative;
+  width: 8px;
+  height: 8px;
+}
+
+.live-indicator::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: #22d3a0;
+  border-radius: 50%;
+  box-shadow: 0 0 8px #22d3a0, 0 0 16px rgba(34, 211, 160, 0.5);
+  animation: livePulse 2s infinite ease-in-out;
+}
+
+.live-indicator::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 1px solid rgba(34, 211, 160, 0.3);
+  border-radius: 50%;
+  animation: pulseRing 2s infinite ease-out;
+}
+
+/* ── Premium Shadow System ── */
+.shadow-elevation-1 {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.shadow-elevation-2 {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+
+.shadow-elevation-3 {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 4px 8px rgba(0, 0, 0, 0.4), 0 0 20px rgba(212, 175, 55, 0.1);
+}
+
+.shadow-glow-gold {
+  box-shadow: 0 0 30px rgba(212, 175, 55, 0.2), 0 0 60px rgba(212, 175, 55, 0.1);
+}
+
+.shadow-glow-green {
+  box-shadow: 0 0 20px rgba(34, 211, 160, 0.3), 0 0 40px rgba(34, 211, 160, 0.15);
+}
+
+.shadow-glow-red {
+  box-shadow: 0 0 20px rgba(244, 63, 94, 0.3), 0 0 40px rgba(244, 63, 94, 0.15);
+}
+
+/* ── Premium Button States ── */
+.btn-gold {
+  background: linear-gradient(135deg, #D4B483 0%, #996515 50%, #D4B483 100%);
+  background-size: 200% 200%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #000;
+  font-weight: 700;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(212, 175, 55, 0.3), inset 0 1px 1px rgba(255, 255, 255, 0.3);
+}
+
+.btn-gold:hover {
+  background-position: 100% 100%;
+  box-shadow: 0 6px 25px rgba(212, 175, 55, 0.5), inset 0 1px 2px rgba(255, 255, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-gold:active {
+  transform: translateY(1px);
+  box-shadow: 0 2px 10px rgba(212, 175, 55, 0.3);
+}
+
+.btn-dark {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.95) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #e2e8f0;
+  transition: all 0.2s ease;
+}
+
+.btn-dark:hover {
+  background: linear-gradient(180deg, rgba(40, 51, 69, 0.95) 0%, rgba(20, 28, 47, 0.98) 100%);
+  border-color: rgba(212, 175, 55, 0.4);
+  box-shadow: 0 0 15px rgba(212, 175, 55, 0.15);
+}
+
+/* ── Table Row Hover Effect ── */
+tr.table-row-hover:hover {
+  background: linear-gradient(90deg, rgba(212, 175, 55, 0.08) 0%, rgba(255, 255, 255, 0.03) 100%) !important;
+  cursor: pointer;
+}
+
+/* ── Data Grid Background ── */
+.data-grid-bg {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* ── Premium Input Fields ── */
+.input-premium {
+  background: linear-gradient(180deg, rgba(5, 7, 12, 0.95) 0%, rgba(3, 5, 8, 0.98) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  color: #f8fafc;
+  transition: all 0.25s ease;
+}
+
+.input-premium:focus {
+  outline: none;
+  border-color: #D4B483;
+  box-shadow: 0 0 20px rgba(212, 175, 55, 0.2), inset 0 0 10px rgba(212, 175, 55, 0.05);
+}
+
+/* ── Ambient Particle Effect Background ── */
+.ambient-particles {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.particle {
+  position: absolute;
+  width: 2px;
+  height: 2px;
+  background: radial-gradient(circle, rgba(212, 175, 55, 0.6), transparent);
+  border-radius: 50%;
+  animation: particleFloat 8s ease-in-out infinite;
+}
+
+/* ── Mesh Gradient Background ── */
+.mesh-gradient-bg {
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(212, 175, 55, 0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(16, 185, 129, 0.06) 0%, transparent 40%),
+    radial-gradient(ellipse at 60% 50%, rgba(59, 130, 246, 0.04) 0%, transparent 50%),
+    linear-gradient(180deg, #030508 0%, #05070c 50%, #030508 100%);
+}
+
+/* ── Institutional Typography ── */
+.text-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+.text-data {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: #e2e8f0;
+}
+
+.text-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+/* ── Price Change Colors ── */
+.price-up {
+  color: #22d3a0;
+  text-shadow: 0 0 10px rgba(34, 211, 160, 0.3);
+}
+
+.price-down {
+  color: #f43f5e;
+  text-shadow: 0 0 10px rgba(244, 63, 94, 0.3);
+}
+
+/* ── Institutional Card Styles ── */
+.card-institutional {
+  background: linear-gradient(145deg, rgba(10, 14, 24, 0.9) 0%, rgba(5, 7, 12, 0.95) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  transition: all 0.3s ease;
+}
+
+.card-institutional:hover {
+  border-color: rgba(212, 175, 55, 0.25);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(212, 175, 55, 0.08);
+}
+
+/* ── Hide Next.js DevTools ── */
 nextjs-portal,
 [data-nextjs-dialog-overlay],
 [data-nextjs-toast],

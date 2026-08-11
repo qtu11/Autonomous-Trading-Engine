@@ -1,2695 +1,673 @@
 'use client';
 
-import { useState, useEffect, useRef, type ReactNode, type CSSProperties } from 'react';
+import { useState, useEffect, useRef, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  fetchStatus,
-  fetchControlCenterStatus,
-  fetchPositions,
-  fetchMarket,
-  fetchHistory,
-  fetchPendingOrders,
-  fetchLogs,
-  fetchBrain,
-  fetchAdjustments,
-  patchAdjustment,
-  sendCopilotChat,
-  executeOrderBuy,
-  executeOrderSell,
-  executeOrderCloseAll,
-  executeResetAll,
-  executeCloseProfit,
-  executeCloseLosing,
-  analyzeNewsEvent,
-  updateAiAutoLoop,
-  fetchChatHistory,
-  updateTradingMethod,
-  type NewsAnalysisResponse,
-  type Candle,
-  type Position,
-  type TradeHistory,
-  type ChatMsg,
-  type TechnicalIndicators,
-  type AccountPerformance,
-  type AISignalData,
-  type NewsItem,
-  type ControlCenterStatus,
-  type PendingOrder,
-  type LogEntry,
-  type TodayPerformance,
-  type BrainState,
-  type BrainDecision,
-  type BrainEvaluation,
-  type StrategyStat,
-  type BrainAdjustment,
+  fetchStatus, fetchControlCenterStatus, fetchPositions, fetchMarket,
+  fetchHistory, fetchPendingOrders, fetchLogs, fetchBrain, fetchAdjustments,
+  sendCopilotChat, executeOrderCloseAll, executeResetAll,
+  executeCloseProfit, executeCloseLosing, updateAiAutoLoop, updateTradingMethod,
+  type Candle, type Position, type TradeHistory,
+  type ChatMsg, type TechnicalIndicators, type ControlCenterStatus, type PendingOrder,
+  type LogEntry, type TodayPerformance, type BrainState, type BrainAdjustment,
   type MarkupResponse,
-  type MarkupItem,
 } from '../lib/api';
 import ControlCenter from './components/ControlCenter';
 import EconomicCalendar from './components/EconomicCalendar';
 
-// ── Bloomberg Terminal Color System ───────────────────────────────────────────
+// ── Premium Institutional Design System ────────────────────────────────────────
 const C = {
-  bgMain: '#05070c',
-  panelBg: 'rgba(10, 14, 24, 0.96)',
-  border: 'rgba(255, 255, 255, 0.08)',
-  borderHighlight: 'rgba(212, 180, 131, 0.3)',
-
+  bgMain: '#020305',
+  panelBg: 'rgba(8, 12, 22, 0.92)',
+  border: 'rgba(255, 255, 255, 0.06)',
+  borderHighlight: 'rgba(212, 180, 131, 0.4)',
   gold: '#D4B483',
   green: '#22d3a0',
   greenBright: '#10b981',
+  greenDim: 'rgba(34, 211, 160, 0.15)',
   red: '#f43f5e',
+  redBright: '#ef4444',
+  redDim: 'rgba(244, 63, 94, 0.15)',
   blue: '#38bdf8',
-  purple: '#a855f7',
   cyan: '#06b6d4',
   amber: '#f59e0b',
-
   text: '#f8fafc',
+  textBright: '#ffffff',
   dim: '#cbd5e1',
   muted: '#64748b',
   faint: '#475569',
-
   mono: '"JetBrains Mono", monospace',
   sans: '"Inter", -apple-system, BlinkMacSystemFont, sans-serif',
 };
 
-const glass: CSSProperties = {
-  background: C.panelBg,
-  backdropFilter: 'blur(16px)',
-  WebkitBackdropFilter: 'blur(16px)',
-  border: `1px solid ${C.border}`,
-  borderRadius: '5px',
-  overflow: 'hidden',
-  boxShadow: '0 4px 20px rgba(0, 0, 0, 0.6)',
-};
+// ── Panel Component ────────────────────────────────────────────────────────────
+interface PanelProps {
+  children: React.ReactNode;
+  title?: string;
+  live?: boolean;
+  headerRight?: React.ReactNode;
+  style?: CSSProperties;
+  className?: string;
+}
 
-// ── Official TradingView Embedded Widget Component ─────────────────────────────
-function RealTradingViewWidget({ symbol = 'FX:XAUUSD' }: { symbol?: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!containerRef.current) return;
-    containerRef.current.innerHTML = '';
-    const script = document.createElement('script');
-    script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-    script.type = 'text/javascript';
-    script.async = true;
-    script.innerHTML = JSON.stringify({
-      autosize: true,
-      symbol: symbol,
-      interval: '15',
-      timezone: 'Asia/Ho_Chi_Minh',
-      theme: 'dark',
-      style: '1',
-      locale: 'vi_VN',
-      enable_publishing: false,
-      hide_top_toolbar: false,
-      hide_legend: false,
-      save_image: false,
-      calendar: false,
-      hide_volume: false,
-      support_host: 'https://www.tradingview.com',
-      backgroundColor: 'rgba(5, 7, 12, 1)',
-      gridColor: 'rgba(255, 255, 255, 0.04)',
-    });
-    containerRef.current.appendChild(script);
-  }, [symbol]);
-
+function Panel({ children, title, live, headerRight, style, className }: PanelProps) {
   return (
-    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-      <div className="tradingview-widget-container" ref={containerRef} style={{ width: '100%', height: '100%' }} />
+    <div
+      className={`gradient-border ${className || ''}`}
+      style={{
+        background: C.panelBg,
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
+        borderRadius: 10,
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        ...style,
+      }}
+    >
+      {title && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '10px 14px',
+          borderBottom: `1px solid ${C.border}`,
+          background: 'linear-gradient(180deg, rgba(255,255,255,0.02) 0%, transparent 100%)',
+          flexShrink: 0,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {live && <div className="live-indicator" style={{ width: 6, height: 6 }} />}
+            <span style={{ fontSize: 9, fontWeight: 700, color: C.gold, letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: C.mono }}>
+              {title}
+            </span>
+          </div>
+          {headerRight}
+        </div>
+      )}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>{children}</div>
     </div>
   );
 }
 
-// ── High Performance MT5 SVG Candlestick Chart ────────────────────────────────
-function CandleChart({
-  candles,
-  livePrice,
-  positions,
-  indicators,
-  markup,
-  selectedTradingMethod,
-}: {
-  candles: Candle[];
-  livePrice: number;
-  positions: Position[];
-  indicators: TechnicalIndicators;
-  markup?: MarkupResponse | null;
-  selectedTradingMethod: string;
-}) {
-  const [visibleCount, setVisibleCount] = useState(75);
-  const [panOffset, setPanOffset] = useState(0);
-  const [yPan, setYPan] = useState(0);
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStartX, setDragStartX] = useState(0);
-  const [dragStartY, setDragStartY] = useState(0);
-  const dragAxis = useRef<'x' | 'y' | null>(null);
-
-  const W = 1000, H = 420;
-  const PL = 8, PR = 80, PT = 20, PB = 40;
-
-  const total = candles.length;
-  const endIdx = Math.max(visibleCount, total - panOffset);
-  const startIdx = Math.max(0, endIdx - visibleCount);
-  const vis = candles.slice(startIdx, endIdx);
-
-  if (vis.length === 0) return <div style={{ display: 'grid', placeItems: 'center', height: '100%', color: C.faint, fontFamily: C.mono, fontSize: 10 }}>Loading MT5 Live Candles...</div>;
-
-  const lastClose = vis[vis.length - 1].c;
-  const validLivePrice = livePrice > 1000 && Math.abs(livePrice - lastClose) < 200 ? livePrice : lastClose;
-
-  const prices = vis.flatMap((c) => [c.h, c.l]);
-  prices.push(validLivePrice);
-  if (positions && positions.length > 0) {
-    positions.forEach((p) => {
-      if (p.entry > 0) prices.push(p.entry);
-      if (p.sl > 0) prices.push(p.sl);
-      if (p.tp > 0) prices.push(p.tp);
-    });
-  }
-
-  const rawMinP = Math.min(...prices);
-  const rawMaxP = Math.max(...prices);
-  const midP = (rawMaxP + rawMinP) / 2;
-  const halfRange = Math.max((rawMaxP - rawMinP) / 2, 0.8);
-  const minP = midP - halfRange - 0.5;
-  const maxP = midP + halfRange + 0.5;
-  const range = maxP - minP || 1;
-
-  const cW = (W - PL - PR) / vis.length;
-  const bW = Math.max(cW * 0.6, 2);
-  const maxV = Math.max(...vis.map((c) => c.v)) || 1;
-  const priceH = 250; // Candlestick panel price height
-  const py = (p: number) => PT + ((maxP - p) / range) * priceH + yPan;
-  const px = (i: number) => PL + (i + 0.5) * cW;
-  const ticks = [0.15, 0.4, 0.65, 0.9].map((r) => minP + range * r);
-
-  // Dynamic calculations for EMA and RSI on full data
-  const computeEMA = (data: Candle[], period: number): number[] => {
-    const ema: number[] = [];
-    if (data.length === 0) return [];
-    const k = 2 / (period + 1);
-    let sum = 0;
-    for (let i = 0; i < Math.min(period, data.length); i++) {
-      sum += data[i].c;
-    }
-    let emaVal = sum / Math.min(period, data.length);
-    for (let i = 0; i < data.length; i++) {
-      if (i < period) {
-        ema.push(data[i].c);
-      } else {
-        emaVal = data[i].c * k + emaVal * (1 - k);
-        ema.push(emaVal);
-      }
-    }
-    return ema;
-  };
-
-  const computeRSI = (data: Candle[], period: number = 14): number[] => {
-    const rsi: number[] = [];
-    if (data.length === 0) return [];
-    let gains = 0;
-    let losses = 0;
-    for (let i = 1; i <= period && i < data.length; i++) {
-      const diff = data[i].c - data[i - 1].c;
-      if (diff > 0) gains += diff;
-      else losses -= diff;
-    }
-    let avgGain = gains / period;
-    let avgLoss = losses / period;
-    for (let i = 0; i < data.length; i++) {
-      if (i < period) {
-        rsi.push(50);
-      } else {
-        const diff = data[i].c - data[i - 1].c;
-        const gain = diff > 0 ? diff : 0;
-        const loss = diff < 0 ? -diff : 0;
-        avgGain = (avgGain * (period - 1) + gain) / period;
-        avgLoss = (avgLoss * (period - 1) + loss) / period;
-        if (avgLoss === 0) {
-          rsi.push(100);
-        } else {
-          const rs = avgGain / avgLoss;
-          rsi.push(100 - 100 / (1 + rs));
-        }
-      }
-    }
-    return rsi;
-  };
-
-  const isSniper = selectedTradingMethod === 'SNIPER';
-
-  const ema9 = computeEMA(candles, 9);
-  const ema21 = computeEMA(candles, 21);
-
-  const computeVWAP = (data: Candle[]): number[] => {
-    const res: number[] = [];
-    let cumPv = 0;
-    let cumVol = 0;
-    for (let i = 0; i < data.length; i++) {
-      const hlc3 = (data[i].h + data[i].l + data[i].c) / 3.0;
-      const vol = data[i].v || 1.0;
-      cumPv += hlc3 * vol;
-      cumVol += vol;
-      res.push(cumPv / (cumVol || 1.0));
-    }
-    return res;
-  };
-  const vwap = computeVWAP(candles);
-
-  const ema20 = computeEMA(candles, 20);
-  const ema50 = computeEMA(candles, 50);
-  const rsi14 = computeRSI(candles, 14);
-
-  const visEma9 = ema9.slice(startIdx, endIdx);
-  const visEma21 = ema21.slice(startIdx, endIdx);
-  const visVwap = vwap.slice(startIdx, endIdx);
-  const visEma20 = ema20.slice(startIdx, endIdx);
-  const visEma50 = ema50.slice(startIdx, endIdx);
-  const visRsi = rsi14.slice(startIdx, endIdx);
-
-  const ema9Points = visEma9.map((v, i) => `${px(i)},${py(v)}`).join(' ');
-  const ema21Points = visEma21.map((v, i) => `${px(i)},${py(v)}`).join(' ');
-  const vwapPoints = visVwap.map((v, i) => `${px(i)},${py(v)}`).join(' ');
-  const ema20Points = visEma20.map((v, i) => `${px(i)},${py(v)}`).join(' ');
-  const ema50Points = visEma50.map((v, i) => `${px(i)},${py(v)}`).join(' ');
-
-  // Sniper Dashboard & Level calculations
-  let sniperDashboardData: any = null;
-  let activeSniperSignal: any = null;
-
-  if (isSniper && candles.length > 1) {
-    const lastIdx = candles.length - 1;
-    const lastC = candles[lastIdx];
-
-    const e9Val = ema9[lastIdx] || 0;
-    const e21Val = ema21[lastIdx] || 0;
-    const vwapVal = vwap[lastIdx] || 0;
-    const rsiVal = rsi14[lastIdx] || 50;
-
-    const ema12 = computeEMA(candles, 12);
-    const ema26 = computeEMA(candles, 26);
-    const mLine = ema12.map((v, idx) => v - ema26[idx]);
-
-    const mSig: number[] = [];
-    const kMacd = 2 / 10;
-    let mSigVal = mLine[0] || 0;
-    for (let i = 0; i < mLine.length; i++) {
-      mSigVal = mLine[i] * kMacd + mSigVal * (1 - kMacd);
-      mSig.push(mSigVal);
-    }
-
-    const currM = mLine[lastIdx] || 0;
-    const currS = mSig[lastIdx] || 0;
-
-    const computeADXClient = (data: Candle[]): number[] => {
-      const adxArr: number[] = [];
-      const tr: number[] = [];
-      const plusDM: number[] = [];
-      const minusDM: number[] = [];
-
-      for (let i = 0; i < data.length; i++) {
-        if (i === 0) {
-          tr.push(data[i].h - data[i].l);
-          plusDM.push(0);
-          minusDM.push(0);
-        } else {
-          const prev = data[i - 1];
-          const trVal = Math.max(
-            data[i].h - data[i].l,
-            Math.abs(data[i].h - prev.c),
-            Math.abs(data[i].l - prev.c)
-          );
-          tr.push(trVal);
-
-          const up = data[i].h - prev.h;
-          const down = prev.l - data[i].l;
-          plusDM.push(up > down && up > 0 ? up : 0);
-          minusDM.push(down > up && down > 0 ? down : 0);
-        }
-      }
-
-      const computeEMAForSeries = (series: number[], period: number): number[] => {
-        const ema: number[] = [];
-        const kVal = 2 / (period + 1);
-        let val = series[0] || 0;
-        for (let i = 0; i < series.length; i++) {
-          val = series[i] * kVal + val * (1 - kVal);
-          ema.push(val);
-        }
-        return ema;
-      };
-
-      const trSmooth = computeEMAForSeries(tr, 14);
-      const plusDMSmooth = computeEMAForSeries(plusDM, 14);
-      const minusDMSmooth = computeEMAForSeries(minusDM, 14);
-
-      const dx: number[] = [];
-      for (let i = 0; i < data.length; i++) {
-        const trS = trSmooth[i] || 1e-9;
-        const pDI = 100 * (plusDMSmooth[i] / trS);
-        const mDI = 100 * (minusDMSmooth[i] / trS);
-        const sum = pDI + mDI;
-        const diff = Math.abs(pDI - mDI);
-        dx.push(100 * (diff / (sum || 1e-9)));
-      }
-
-      return computeEMAForSeries(dx, 14);
-    };
-
-    const adxSeries = computeADXClient(candles);
-    const currADX = adxSeries[lastIdx] || 0;
-
-    const vols = candles.map(c => c.v || 0);
-    let sumVol = 0;
-    const startVol = Math.max(0, lastIdx - 19);
-    for (let i = startVol; i <= lastIdx; i++) {
-      sumVol += vols[i];
-    }
-    const volAvg = sumVol / (lastIdx - startVol + 1);
-    const currVol = lastC.v || 0;
-
-    let bScore = 0;
-    bScore += lastC.c > vwapVal ? 1 : 0;
-    bScore += rsiVal > 50 ? 1 : 0;
-    bScore += currM > currS ? 1 : 0;
-    bScore += e9Val > e21Val ? 1 : 0;
-    bScore += (currADX > 25 && lastC.c > e9Val) ? 1 : 0;
-    bScore += (currVol > volAvg && lastC.c > lastC.o) ? 1 : 0;
-    bScore += (rsi14[Math.max(0, lastIdx - 1)] > 50) ? 1 : 0;
-    const bullPct = (bScore / 7) * 100;
-
-    let rScore = 0;
-    rScore += lastC.c < vwapVal ? 1 : 0;
-    rScore += rsiVal < 50 ? 1 : 0;
-    rScore += currM < currS ? 1 : 0;
-    rScore += e9Val < e21Val ? 1 : 0;
-    rScore += (currADX > 25 && lastC.c < e9Val) ? 1 : 0;
-    rScore += (currVol > volAvg && lastC.c < lastC.o) ? 1 : 0;
-    rScore += (rsi14[Math.max(0, lastIdx - 1)] < 50) ? 1 : 0;
-    const bearPct = (rScore / 7) * 100;
-
-    const biasText = (bullPct - bearPct) >= 40 ? "STRONG BULL" : (bearPct - bullPct) >= 40 ? "STRONG BEAR" : bullPct > bearPct ? "MILD BULL" : "MILD BEAR";
-    const biasCol = biasText.includes("STRONG BULL") ? '#10b981' : biasText.includes("STRONG BEAR") ? '#ef4444' : '#9ca3af';
-
-    const triggerBuy = lastIdx >= 1 && ema9[lastIdx] > ema21[lastIdx] && ema9[lastIdx - 1] <= ema21[lastIdx - 1];
-    const triggerSell = lastIdx >= 1 && ema9[lastIdx] < ema21[lastIdx] && ema9[lastIdx - 1] >= ema21[lastIdx - 1];
-
-    sniperDashboardData = {
-      bullPct,
-      bearPct,
-      biasText,
-      biasCol,
-      vwapStatus: lastC.c > vwapVal ? "ABOVE" : "BELOW",
-      vwapCol: lastC.c > vwapVal ? '#10b981' : '#ef4444',
-      rsiVal,
-      macdTrend: currM > currS ? "BULL" : "BEAR",
-      macdCol: currM > currS ? '#10b981' : '#ef4444',
-      adxVal: currADX,
-      adxCol: currADX > 25 ? '#10b981' : '#9ca3af',
-      emaCross: e9Val > e21Val ? "BULL" : "BEAR",
-      emaCrossCol: e9Val > e21Val ? '#10b981' : '#ef4444',
-      volStatus: currVol > volAvg ? "HIGH" : "LOW",
-      volCol: currVol > volAvg ? '#10b981' : '#9ca3af',
-      statusText: triggerBuy || triggerSell ? "NEW" : "WAIT",
-      statusCol: triggerBuy || triggerSell ? '#10b981' : '#fff',
-    };
-
-    for (let j = endIdx - 1; j >= 1; j--) {
-      const e9_j = ema9[j];
-      const e21_j = ema21[j];
-      const e9_j_prev = ema9[j - 1];
-      const e21_j_prev = ema21[j - 1];
-
-      const isBuy = e9_j > e21_j && e9_j_prev <= e21_j_prev;
-      const isSell = e9_j < e21_j && e9_j_prev >= e21_j_prev;
-
-      if (isBuy || isSell) {
-        let sumAtr = 0;
-        const startAtrIdx = Math.max(0, j - 13);
-        const countAtr = j - startAtrIdx + 1;
-        for (let k = startAtrIdx; k <= j; k++) {
-          sumAtr += candles[k].h - candles[k].l;
-        }
-        const currAtr = sumAtr / countAtr;
-        const risk = currAtr * 1.5;
-
-        const entry = candles[j].c;
-        const sl = isBuy ? entry - risk : entry + risk;
-        const tp1 = isBuy ? entry + risk : entry - risk;
-        const tp2 = isBuy ? entry + risk * 2 : entry - risk * 2;
-        const tp3 = isBuy ? entry + risk * 3 : entry - risk * 3;
-        const tp4 = isBuy ? entry + risk * 4 : entry - risk * 4;
-        const tp5 = isBuy ? entry + risk * 5 : entry - risk * 5;
-
-        activeSniperSignal = {
-          type: isBuy ? 'BUY' : 'SELL',
-          entry,
-          sl,
-          tp1,
-          tp2,
-          tp3,
-          tp4,
-          tp5,
-          signalIdx: j,
-        };
-        break;
-      }
-    }
-  }
-
-  // RSI Layout Definitions
-  const rsiPT = 320;
-  const rsiPH = 60;
-  const rsiY = (v: number) => rsiPT + ((100 - v) / 100) * rsiPH;
-  const rsiPoints = visRsi.map((v, i) => `${px(i)},${rsiY(v)}`).join(' ');
-
-  const handleWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    if (e.deltaY < 0) { setVisibleCount((v) => Math.max(15, v - 10)); }
-    else { setVisibleCount((v) => Math.min(Math.min(2000, total), v + 10)); }
-  };
-  const handleMouseDown = (e: React.MouseEvent) => { setIsDragging(true); dragAxis.current = null; setDragStartX(e.clientX); setDragStartY(e.clientY); };
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!isDragging) return;
-    const dx = e.clientX - dragStartX;
-    const dy = e.clientY - dragStartY;
-    if (dragAxis.current === null && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
-      dragAxis.current = Math.abs(dy) > Math.abs(dx) ? 'y' : 'x';
-    }
-    if (dragAxis.current === 'x') {
-      const shift = Math.round(dx / 8);
-      setPanOffset((p) => Math.max(0, Math.min(total - visibleCount, p + shift)));
-      setDragStartX(e.clientX);
-    } else if (dragAxis.current === 'y') {
-      setYPan((p) => Math.max(-priceH, Math.min(priceH, p + dy)));
-      setDragStartY(e.clientY);
-    }
-  };
-  const handleMouseUp = () => { setIsDragging(false); dragAxis.current = null; };
-  const handleDoubleClick = () => { setPanOffset(0); setYPan(0); };
-
-  const tp2 = indicators.r2 || validLivePrice + 5.5;
-  const tp1 = indicators.r1 || validLivePrice + 2.7;
-  const entryP = validLivePrice;
-  const slP = indicators.s1 || validLivePrice - 5.7;
-
-  // ── AI Markup resolution (detector objects → candle positions) ──
-  const tsToIdx = new Map<string, number>();
-  candles.forEach((c, i) => { if (c.ts) tsToIdx.set(c.ts.slice(0, 16).replace('T', ' '), i); });
-  const markIdx = (t?: string): number | null => {
-    if (!t) return null;
-    const i = tsToIdx.get(t.slice(0, 16).replace('T', ' '));
-    return i === undefined ? null : i;
-  };
-  const zoneTypes = new Set(['OB', 'FVG', 'BREAKER', 'MITIGATION', 'REJECTION', 'iFVG', 'OTE', 'PD', 'ASIAN', 'SR', 'CHANNEL', 'RANGE', 'DEALING_RANGE', 'LIQUIDITY_POOL', 'SUPPLY_DEMAND', 'VOLUME_IMBALANCE', 'VOID', 'BPR', 'UNICORN', 'PDH_PDL', 'WEEKLY_MONTHLY_HL', 'SESSION_HL', 'AMD']);
-  const arrowTypes = new Set(['SWING', 'BOS', 'CHoCH', 'LIQUIDITY', 'KILLZONE', 'PATTERN', 'BREAKOUT', 'PULLBACK', 'RETEST', 'FAKE_BREAKOUT', 'MSS', 'INDUCEMENT', 'TURTLE_SOUP', 'JUDAS_SWING', 'SMT_DIVERGENCE', 'SILVER_BULLET']);
-  const zoneColor = (m: MarkupItem): string => {
-    const d = m.direction;
-    if (m.type === 'SR') return d === 'BULLISH' ? 'rgba(59,130,246,0.28)' : d === 'BEARISH' ? 'rgba(249,115,22,0.28)' : 'rgba(156,163,175,0.25)';
-    if (m.type === 'CHANNEL' || m.type === 'RANGE') return 'rgba(203,213,225,0.22)';
-    if (m.type === 'DEALING_RANGE') return 'rgba(70,130,180,0.25)';
-    if (m.type === 'LIQUIDITY_POOL') return d === 'BULLISH' ? 'rgba(255,215,0,0.25)' : 'rgba(240,230,140,0.22)';
-    if (m.type === 'VOLUME_IMBALANCE' || m.type === 'INDUCEMENT') return 'rgba(168,85,247,0.25)';
-    if (m.type === 'BPR') return 'rgba(255,140,0,0.28)';
-    if (m.type === 'UNICORN') return 'rgba(255,215,0,0.4)';
-    if (m.type === 'PDH_PDL' || m.type === 'WEEKLY_MONTHLY_HL') return d === 'BULLISH' ? 'rgba(210,105,30,0.3)' : 'rgba(160,82,45,0.3)';
-    if (m.type === 'SESSION_HL') return 'rgba(46,160,67,0.25)';
-    if (m.type === 'VOID') return 'rgba(255,0,255,0.22)';
-    return d === 'BULLISH' ? 'rgba(59,130,246,0.28)' : d === 'BEARISH' ? 'rgba(249,115,22,0.28)' : 'rgba(156,163,175,0.25)';
-  };
-  const arrowColor = (m: MarkupItem): string => {
-    if (m.type === 'PATTERN') return '#f1f5f9';
-    if (m.type === 'BREAKOUT') return '#4ade80';
-    if (m.type === 'PULLBACK' || m.type === 'RETEST') return '#22d3ee';
-    if (m.type === 'FAKE_BREAKOUT') return '#ef4444';
-    if (m.type === 'MSS' || m.type === 'CHoCH' || m.type === 'BOS') return '#e879f9';
-    if (m.type === 'TURTLE_SOUP') return '#fb923c';
-    if (m.type === 'JUDAS_SWING') return '#dc2626';
-    if (m.type === 'SMT_DIVERGENCE') return '#60a5fa';
-    if (m.type === 'SILVER_BULLET') return '#f1f5f9';
-    if (m.type === 'AMD') return '#facc15';
-    return m.direction === 'BULLISH' ? '#fde047' : '#e879f9';
-  };
-  const visStartTs = candles[startIdx]?.ts?.slice(0, 16).replace('T', ' ');
-  const visEndTs = candles[endIdx - 1]?.ts?.slice(0, 16).replace('T', ' ');
-  const inView = (t?: string): boolean => {
-    if (!t) return false;
-    const ts = t.slice(0, 16).replace('T', ' ');
-    return (visStartTs ? ts >= visStartTs : true) && (visEndTs ? ts <= visEndTs : true);
-  };
+// ── Mini Chart Component ──────────────────────────────────────────────────────
+function MiniChart({ data, isUp }: { data: number[]; isUp: boolean }) {
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const h = 28, w = 80;
+  const points = data.map((v, i) => {
+    const x = (i / (data.length - 1)) * w;
+    const y = h - ((v - min) / range) * h;
+    return `${x},${y}`;
+  }).join(' ');
 
   return (
-    <div style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <svg width="100%" height="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" onWheel={handleWheel} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onDoubleClick={handleDoubleClick} style={{ display: 'block', width: '100%', height: '100%', cursor: isDragging ? 'grabbing' : 'grab' }}>
-        <defs>
-          <linearGradient id="vG" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.green} stopOpacity={0.35} /><stop offset="100%" stopColor={C.green} stopOpacity={0.03} /></linearGradient>
-          <linearGradient id="vGRed" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={C.red} stopOpacity={0.35} /><stop offset="100%" stopColor={C.red} stopOpacity={0.03} /></linearGradient>
-        </defs>
-
-        {/* Candlestick Panel Grid Lines */}
-        {ticks.map((v, i) => (
-          <g key={i}>
-            <line x1={PL} y1={py(v)} x2={W - PR} y2={py(v)} stroke="rgba(255,255,255,0.04)" strokeWidth={0.7} strokeDasharray="3,3" />
-            <text x={W - PR + 8} y={py(v) + 3.5} fill={C.muted} fontSize={9} fontFamily={C.mono}>{v.toFixed(2)}</text>
-          </g>
-        ))}
-
-        {/* AI Markup: Zone rectangles (structural + advanced detectors) — under candles */}
-        {markup && Array.isArray(markup.objects) && markup.objects.map((m, k) => {
-          if (!zoneTypes.has(m.type) || !m.top || !m.bottom) return null;
-          const i1 = markIdx(m.time_start);
-          // zones without a time_end are still active — extend to the newest candle
-          const i2 = markIdx(m.time_end) ?? (candles.length - 1);
-          if (i1 === null || i2 === null || !inView(m.time_start) && !inView(m.time_end) && !(i1 < endIdx && i2 >= startIdx)) return null;
-          if (i2 < startIdx || i1 >= endIdx) return null;
-          const x1 = px(Math.max(i1, startIdx) - startIdx) - cW / 2;
-          const x2 = px(Math.min(i2, endIdx - 1) - startIdx) + cW / 2;
-          const yT = py(Math.max(m.top, m.bottom));
-          const yB = py(Math.min(m.top, m.bottom));
-          const zW = Math.max(x2 - x1, 1.5);
-          const zH = Math.max(yB - yT, 1.5);
-          const col = zoneColor(m);
-          return <rect key={`mkz${k}`} x={x1} y={yT} width={zW} height={zH} fill={col} stroke={m.type === 'UNICORN' || m.type === 'BPR' ? 'rgba(255,215,0,0.6)' : 'rgba(255,255,255,0.14)'} strokeWidth={0.6} strokeDasharray="2,2" rx={1} />;
-        })}
-
-        {/* Volume Bars (rendered at bottom of candlestick panel, y = 270) */}
-        {vis.map((c, i) => {
-          const vh = (c.v / maxV) * 35;
-          const bull = c.c >= c.o;
-          return (<rect key={`v${i}`} x={px(i) - bW / 2} y={270 - vh} width={bW} height={vh} fill={bull ? 'url(#vG)' : 'url(#vGRed)'} rx={0.5} />);
-        })}
-
-        {/* Candlesticks */}
-        {vis.map((c, i) => {
-          const bull = c.c >= c.o;
-          let col = bull ? C.green : C.red;
-
-          if (isSniper) {
-            const absIdx = startIdx + i;
-            if (absIdx >= 1) {
-              const e9_curr = ema9[absIdx];
-              const e21_curr = ema21[absIdx];
-              const e9_prev = ema9[absIdx - 1];
-              const e21_prev = ema21[absIdx - 1];
-
-              const trigBuy = e9_curr > e21_curr && e9_prev <= e21_prev;
-              const trigSell = e9_curr < e21_curr && e9_prev >= e21_prev;
-
-              if (trigBuy || trigSell) {
-                col = '#000000';
-              } else {
-                let lastSignal = 0;
-                for (let j = absIdx; j >= 0; j--) {
-                  const e9_j = ema9[j];
-                  const e21_j = ema21[j];
-                  const e9_j_prev = j > 0 ? ema9[j - 1] : e9_j;
-                  const e21_j_prev = j > 0 ? ema21[j - 1] : e21_j;
-                  if (e9_j > e21_j && e9_j_prev <= e21_j_prev) {
-                    lastSignal = 1;
-                    break;
-                  }
-                  if (e9_j < e21_j && e9_j_prev >= e21_j_prev) {
-                    lastSignal = -1;
-                    break;
-                  }
-                }
-                const retestBuy = lastSignal === 1 && c.l <= e9_curr && c.l > e21_curr;
-                const retestSell = lastSignal === -1 && c.h >= e9_curr && c.h < e21_curr;
-                if (retestBuy || retestSell) {
-                  col = '#f97316';
-                }
-              }
-            }
-          }
-
-          const bT = py(Math.max(c.o, c.c));
-          const bB = py(Math.min(c.o, c.c));
-          const bH = Math.max(bB - bT, 1.5);
-          return (
-            <g key={`c${i}`}>
-              <line x1={px(i)} y1={py(c.h)} x2={px(i)} y2={py(c.l)} stroke={col} strokeWidth={1.2} />
-              <rect x={px(i) - bW / 2} y={bT} width={bW} height={bH} fill={col} opacity={col === '#000000' ? 1.0 : (bull ? 0.95 : 0.9)} rx={0.5} />
-            </g>
-          );
-        })}
-
-        {/* Real Moving Average lines / Sniper lines & ribbon */}
-        {!isSniper ? (
-          <>
-            {ema20Points && <polyline points={ema20Points} fill="none" stroke={C.blue} strokeWidth={1.2} opacity={0.85} />}
-            {ema50Points && <polyline points={ema50Points} fill="none" stroke={C.gold} strokeWidth={1.2} opacity={0.85} />}
-          </>
-        ) : (
-          <>
-            {/* EMA Ribbon */}
-            {vis.map((c, i) => {
-              const val9 = visEma9[i];
-              const val21 = visEma21[i];
-              if (val9 === undefined || val21 === undefined) return null;
-              const y9 = py(val9);
-              const y21 = py(val21);
-              const col = val9 > val21 ? 'rgba(16,185,129,0.14)' : 'rgba(239,68,68,0.14)';
-              return (
-                <line key={`ribbon${i}`} x1={px(i)} y1={y9} x2={px(i)} y2={y21} stroke={col} strokeWidth={bW} />
-              );
-            })}
-            {/* EMA 9 */}
-            {ema9Points && <polyline points={ema9Points} fill="none" stroke="#10b981" strokeWidth={1.2} opacity={0.9} />}
-            {/* EMA 21 */}
-            {ema21Points && <polyline points={ema21Points} fill="none" stroke="#ef4444" strokeWidth={1.2} opacity={0.9} />}
-            {/* VWAP */}
-            {vwapPoints && <polyline points={vwapPoints} fill="none" stroke="#3b82f6" strokeWidth={1.5} opacity={0.95} />}
-
-            {/* Buy/Sell text shapes */}
-            {vis.map((c, i) => {
-              const absIdx = startIdx + i;
-              if (absIdx < 1) return null;
-              const e9_curr = ema9[absIdx];
-              const e21_curr = ema21[absIdx];
-              const e9_prev = ema9[absIdx - 1];
-              const e21_prev = ema21[absIdx - 1];
-
-              const trigBuy = e9_curr > e21_curr && e9_prev <= e21_prev;
-              const trigSell = e9_curr < e21_curr && e9_prev >= e21_prev;
-
-              if (trigBuy) {
-                return (
-                  <g key={`shapeBuy${i}`}>
-                    <text x={px(i)} y={py(c.l) + 12} fill="#10b981" fontSize={8} fontFamily={C.mono} fontWeight="bold" textAnchor="middle">BUY</text>
-                  </g>
-                );
-              }
-              if (trigSell) {
-                return (
-                  <g key={`shapeSell${i}`}>
-                    <text x={px(i)} y={py(c.h) - 8} fill="#ef4444" fontSize={8} fontFamily={C.mono} fontWeight="bold" textAnchor="middle">SELL</text>
-                  </g>
-                );
-              }
-              return null;
-            })}
-          </>
-        )}
-
-        {/* Live Price Line (Current Ask Price) */}
-        <g>
-          <line x1={PL} y1={py(validLivePrice)} x2={W - PR} y2={py(validLivePrice)} stroke="rgba(37,99,235,0.4)" strokeWidth={1} strokeDasharray="3,3" />
-          <rect x={W - PR + 4} y={py(validLivePrice) - 7} width={68} height={13} fill="rgba(37,99,235,0.2)" stroke="rgba(37,99,235,0.6)" strokeWidth={0.7} rx={2} />
-          <text x={W - PR + 38} y={py(validLivePrice) + 2} fill="#60a5fa" fontSize={7.5} fontFamily={C.mono} textAnchor="middle" fontWeight="700">Price {validLivePrice.toFixed(2)}</text>
-        </g>
-
-        {/* Active Open Positions Levels */}
-        {positions && positions.length > 0 && positions.map((p) => {
-          const entryY = py(p.entry);
-          const slY = p.sl > 0 ? py(p.sl) : null;
-          const tpY = p.tp > 0 ? py(p.tp) : null;
-          return (
-            <g key={p.id}>
-              {/* Position Entry Level */}
-              <line x1={PL} y1={entryY} x2={W - PR} y2={entryY} stroke={p.type === 'BUY' ? C.green : C.red} strokeWidth={1.2} strokeDasharray="4,2" />
-              <rect x={W - PR + 4} y={entryY - 8} width={68} height={15} fill={p.type === 'BUY' ? C.greenBright : C.red} rx={3} />
-              <text x={W - PR + 38} y={entryY + 3} fill={p.type === 'BUY' ? '#000' : '#fff'} fontSize={8} fontFamily={C.mono} textAnchor="middle" fontWeight="800">
-                {p.type} {p.lot.toFixed(2)}
-              </text>
-
-              {/* SL Level */}
-              {slY !== null && p.sl > 0 && (
-                <>
-                  <line x1={PL} y1={slY} x2={W - PR} y2={slY} stroke={C.red} strokeWidth={1} strokeDasharray="3,3" opacity={0.8} />
-                  <rect x={W - PR + 4} y={slY - 8} width={68} height={15} fill={C.red} rx={3} />
-                  <text x={W - PR + 38} y={slY + 3} fill="#fff" fontSize={8} fontFamily={C.mono} textAnchor="middle" fontWeight="800">
-                    SL {p.sl.toFixed(2)}
-                  </text>
-                </>
-              )}
-
-              {/* TP Level */}
-              {tpY !== null && p.tp > 0 && (
-                <>
-                  <line x1={PL} y1={tpY} x2={W - PR} y2={tpY} stroke={C.green} strokeWidth={1} strokeDasharray="3,3" opacity={0.8} />
-                  <rect x={W - PR + 4} y={tpY - 8} width={68} height={15} fill={C.greenBright} rx={3} />
-                  <text x={W - PR + 38} y={tpY + 3} fill="#000" fontSize={8} fontFamily={C.mono} textAnchor="middle" fontWeight="800">
-                    TP {p.tp.toFixed(2)}
-                  </text>
-                </>
-              )}
-            </g>
-          );
-        })}
-
-        {/* AI Markup: Trendlines */}
-        {markup && Array.isArray(markup.objects) && markup.objects.map((m, k) => {
-          if (m.type !== 'TRENDLINE' && m.type !== 'DEALING_CURVE') return null;
-          const i1 = markIdx(m.time_start);
-          const i2 = markIdx(m.time_end);
-          if (i1 === null || i2 === null) return null;
-          if ((i1 < startIdx && i2 < startIdx) || (i1 >= endIdx && i2 >= endIdx)) return null;
-          const curve = m.type === 'DEALING_CURVE';
-          return <line key={`mkt${k}`} x1={px(Math.max(i1, startIdx) - startIdx)} y1={py(m.top || 0)} x2={px(Math.min(i2, endIdx - 1) - startIdx)} y2={py(m.bottom || 0)} stroke={curve ? '#b0c4de' : '#4ade80'} strokeWidth={curve ? 1.1 : 0.9} strokeDasharray={curve ? '' : '4,3'} opacity={curve ? 0.9 : 0.85} />;
-        })}
-
-        {/* Panel Separator Line */}
-        <line x1={PL} y1={295} x2={W - PR} y2={295} stroke="rgba(255,255,255,0.06)" strokeWidth={1} />
-
-        {/* RSI Sub-Panel */}
-        <text x={PL + 5} y={312} fill={C.muted} fontSize={8} fontFamily={C.sans} fontWeight="bold">RSI(14): {visRsi.length > 0 ? visRsi[visRsi.length - 1].toFixed(1) : 'N/A'}</text>
-
-        {/* RSI Area BG */}
-        <rect x={PL} y={rsiPT} width={W - PL - PR} height={rsiPH} fill="rgba(255,255,255,0.01)" stroke="rgba(255,255,255,0.04)" strokeWidth={0.7} />
-
-        {/* RSI Level Lines (30, 50, 70) */}
-        <line x1={PL} y1={rsiY(70)} x2={W - PR} y2={rsiY(70)} stroke="rgba(244,63,94,0.25)" strokeWidth={0.7} strokeDasharray="2,2" />
-        <text x={W - PR + 8} y={rsiY(70) + 3.5} fill="rgba(244,63,94,0.6)" fontSize={7.5} fontFamily={C.mono}>70</text>
-
-        <line x1={PL} y1={rsiY(50)} x2={W - PR} y2={rsiY(50)} stroke="rgba(255,255,255,0.06)" strokeWidth={0.7} strokeDasharray="3,3" />
-        <text x={W - PR + 8} y={rsiY(50) + 3.5} fill={C.muted} fontSize={7.5} fontFamily={C.mono}>50</text>
-
-        <line x1={PL} y1={rsiY(30)} x2={W - PR} y2={rsiY(30)} stroke="rgba(34,197,94,0.25)" strokeWidth={0.7} strokeDasharray="2,2" />
-        <text x={W - PR + 8} y={rsiY(30) + 3.5} fill="rgba(34,197,94,0.6)" fontSize={7.5} fontFamily={C.mono}>30</text>
-
-        {/* RSI Polyline */}
-        {rsiPoints && <polyline points={rsiPoints} fill="none" stroke="#a855f7" strokeWidth={1.2} />}
-
-        {/* AI Markup: Event arrows + labels (patterns, breaks, liquidity, ICT) */}
-        {markup && Array.isArray(markup.objects) && markup.objects.map((m, k) => {
-          if (!arrowTypes.has(m.type)) return null;
-          const i1 = markIdx(m.time_start);
-          if (i1 === null || i1 < startIdx || i1 >= endIdx) return null;
-          const x = px(i1 - startIdx);
-          const y = py(m.price || 0);
-          const ac = arrowColor(m);
-          const up = m.direction === 'BULLISH';
-          return (
-            <g key={`mka${k}`}>
-              {up
-                ? <path d={`M ${x - 3.5} ${y + 3.5} L ${x} ${y - 4} L ${x + 3.5} ${y + 3.5} Z`} fill={ac} />
-                : <path d={`M ${x - 3.5} ${y - 3.5} L ${x} ${y + 4} L ${x + 3.5} ${y - 3.5} Z`} fill={ac} />}
-              {m.label && <text x={x + 5} y={y - 4} fill={ac} fontSize={6.5} fontFamily={C.mono} fontWeight="700">{m.label}</text>}
-            </g>
-          );
-        })}
-
-        {/* Sniper Strategy Levels (Entry, SL, TP1-TP5) */}
-        {isSniper && activeSniperSignal && (() => {
-          const sig = activeSniperSignal;
-          const sIdx = sig.signalIdx;
-          if (sIdx < startIdx - 20 || sIdx >= endIdx) return null;
-
-          const startX = px(Math.max(0, sIdx - startIdx));
-          const endX = px(Math.min(visibleCount - 1, sIdx - startIdx + 20));
-          const labelX = px(Math.min(visibleCount - 1, sIdx - startIdx + 12));
-
-          const levels = [
-            { price: sig.entry, color: '#3b82f6', label: `ENTRY: ${sig.entry.toFixed(2)}`, width: 1.5, dash: '' },
-            { price: sig.sl, color: '#ef4444', label: `SL: ${sig.sl.toFixed(2)}`, width: 1.5, dash: '' },
-            { price: sig.tp1, color: '#10b981', label: `TP1: ${sig.tp1.toFixed(2)}`, width: 1, dash: '3,3' },
-            { price: sig.tp2, color: '#10b981', label: `TP2: ${sig.tp2.toFixed(2)}`, width: 1, dash: '3,3' },
-            { price: sig.tp3, color: '#10b981', label: `TP3: ${sig.tp3.toFixed(2)}`, width: 1, dash: '3,3' },
-            { price: sig.tp4, color: '#047857', label: `TP4: ${sig.tp4.toFixed(2)}`, width: 1.5, dash: '' },
-            { price: sig.tp5, color: '#065f46', label: `TP5: ${sig.tp5.toFixed(2)}`, width: 2, dash: '' },
-          ];
-
-          return (
-            <g key="sniperLevels">
-              {levels.map((lvl, idx) => {
-                const y = py(lvl.price);
-                return (
-                  <g key={`slvl${idx}`}>
-                    <line x1={startX} y1={y} x2={endX} y2={y} stroke={lvl.color} strokeWidth={lvl.width} strokeDasharray={lvl.dash} opacity={0.85} />
-                    <rect x={labelX} y={y - 6} width={58} height={11} fill="rgba(15,23,42,0.92)" stroke={lvl.color} strokeWidth={0.5} rx={2} />
-                    <text x={labelX + 29} y={y + 2} fill="#fff" fontSize={6.2} fontFamily={C.mono} textAnchor="middle" fontWeight="bold">
-                      {lvl.label}
-                    </text>
-                  </g>
-                );
-              })}
-            </g>
-          );
-        })()}
-
-        {/* Sniper Strategy Dashboard Overlay */}
-        {isSniper && sniperDashboardData && (() => {
-          const d = sniperDashboardData;
-          const rows = [
-            { label: "BULL SCORE", value: `${d.bullPct.toFixed(0)}%`, bg: '#047857', tc: '#fff' },
-            { label: "BEAR SCORE", value: `${d.bearPct.toFixed(0)}%`, bg: '#b91c1c', tc: '#fff' },
-            { label: "MARKET BIAS", value: d.biasText, bg: '#1f2937', tc: d.biasCol },
-            { label: "Price/VWAP", value: d.vwapStatus, tc: d.vwapCol },
-            { label: "RSI (14)", value: d.rsiVal.toFixed(1), tc: d.rsiVal > 50 ? '#10b981' : '#ef4444' },
-            { label: "MACD Trend", value: d.macdTrend, tc: d.macdCol },
-            { label: "ADX Power", value: d.adxVal.toFixed(1), tc: d.adxCol },
-            { label: "EMA Cross", value: d.emaCross, tc: d.emaCrossCol },
-            { label: "Vol Status", value: d.volStatus, tc: d.volCol },
-            { label: "Status", value: d.statusText, tc: d.statusCol },
-            { label: "Sniper Mode", value: "Qtus V.02", tc: '#3b82f6' },
-          ];
-
-          const tableW = 86;
-          const rowH = 10;
-          const tableH = rows.length * rowH;
-          const tableX = PL + 8;
-          const tableY = 48;
-
-          return (
-            <g key="sniperDashboard" opacity={0.92}>
-              <rect x={tableX} y={tableY} width={tableW} height={tableH} fill="rgba(15,23,42,0.92)" stroke="rgba(255,255,255,0.08)" strokeWidth={0.7} rx={3} />
-              {rows.map((r, idx) => {
-                const ry = tableY + idx * rowH;
-                return (
-                  <g key={`drow${idx}`}>
-                    {r.bg && <rect x={tableX + 0.6} y={ry + 0.6} width={tableW - 1.2} height={rowH - 1.2} fill={r.bg} opacity={0.8} rx={1.5} />}
-                    {idx > 0 && <line x1={tableX} y1={ry} x2={tableX + tableW} y2={ry} stroke="rgba(255,255,255,0.05)" strokeWidth={0.4} />}
-
-                    <text x={tableX + 4} y={ry + 7} fill={r.bg ? '#fff' : '#9ca3af'} fontSize={5.5} fontFamily={C.sans} fontWeight="bold">
-                      {r.label}
-                    </text>
-                    <text x={tableX + tableW - 4} y={ry + 7} fill={r.tc || '#fff'} fontSize={5.5} fontFamily={C.mono} fontWeight="bold" textAnchor="end">
-                      {r.value}
-                    </text>
-                  </g>
-                );
-              })}
-            </g>
-          );
-        })()}
-
-        {/* Watermark Logo */}
-        <g transform={`translate(${PL + 10}, 30)`}>
-          <rect width={18} height={14} fill="rgba(255,255,255,0.15)" rx={3} />
-          <text x={9} y={10} fill="#fff" fontSize={8} fontFamily={C.mono} textAnchor="middle" fontWeight="900">TV</text>
-        </g>
-
-        {/* Times labels along bottom */}
-        {vis.filter((_, i) => i % 12 === 0).map((c, i) => {
-          const idx = vis.indexOf(c);
-          return <text key={i} x={px(idx)} y={H - 8} fill={C.faint} fontSize={8.5} fontFamily={C.mono} textAnchor="middle">{c.t}</text>;
-        })}
-      </svg>
-    </div>
-  );
-}
-
-function isNewsPassed(item: NewsItem): boolean {
-  if (!item.time) return false;
-  try {
-    const now = new Date();
-    let day = now.getDate();
-    let month = now.getMonth() + 1;
-    if (item.date) {
-      const parts = item.date.split('/');
-      if (parts.length === 2) {
-        day = parseInt(parts[0], 10);
-        month = parseInt(parts[1], 10);
-      }
-    }
-    const [hourStr, minuteStr] = item.time.split(':');
-    const year = 2026;
-    const newsDate = new Date(
-      year,
-      month - 1,
-      day,
-      parseInt(hourStr, 10),
-      parseInt(minuteStr, 10)
-    );
-    return newsDate < now;
-  } catch (e) {
-    return false;
-  }
-}
-
-// ── Performance Today Mini Sparkline Chart ────────────────────────────────────
-function PerformanceSparkline({ equityCurve }: { equityCurve?: Array<{ v: number }> }) {
-  const W = 110, H = 45;
-  let points = "0,35 15,30 30,32 45,20 60,25 75,10 90,15 110,5";
-  if (equityCurve && equityCurve.length > 2) {
-    const vals = equityCurve.map((d) => d.v);
-    const min = Math.min(...vals), max = Math.max(...vals), r = max - min || 1;
-    const pts = vals.map((v, i) => `${(i / (vals.length - 1)) * W},${H - ((v - min) / r) * (H - 10) - 5}`);
-    points = pts.join(' ');
-  }
-  const areaPath = `M0,${H} L${points} L${W},${H} Z`;
-  return (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{ display: 'block' }}>
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
       <defs>
-        <linearGradient id="spkG" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={C.green} stopOpacity={0.3} />
-          <stop offset="100%" stopColor={C.green} stopOpacity={0.0} />
+        <linearGradient id={`cg-${isUp ? 'up' : 'dn'}`} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={isUp ? C.green : C.red} stopOpacity="0.4" />
+          <stop offset="100%" stopColor={isUp ? C.green : C.red} stopOpacity="0" />
         </linearGradient>
       </defs>
-      <path d={areaPath} fill="url(#spkG)" />
-      <polyline points={points} fill="none" stroke={C.green} strokeWidth={1.5} />
-      <circle cx={W} cy={5} r={2.5} fill={C.green} />
+      <polygon points={`0,${h} ${points} ${w},${h}`} fill={`url(#cg-${isUp ? 'up' : 'dn'})`} />
+      <polyline points={points} fill="none" stroke={isUp ? C.green : C.red} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
-// ── Circular Risk Gauge SVG ───────────────────────────────────────────────────
-function RiskGauge({ riskPercent }: { riskPercent: number }) {
-  const r = 32, cx = 42, cy = 42;
-  const circumference = 2 * Math.PI * r;
-  const clampedRisk = Math.min(100, Math.max(0, riskPercent));
-  const offset = circumference - (clampedRisk / 100) * circumference;
-  const col = clampedRisk < 2 ? C.green : clampedRisk < 4 ? C.gold : C.red;
+// ── Status Badge Component ────────────────────────────────────────────────────
+function StatusBadge({ status, label }: { status: 'online' | 'offline' | 'warning'; label: string }) {
+  const colors = {
+    online: { bg: C.greenDim, border: C.green, text: C.green },
+    offline: { bg: C.redDim, border: C.red, text: C.red },
+    warning: { bg: 'rgba(245,158,11,0.15)', border: C.amber, text: C.amber },
+  };
+  const c = colors[status];
   return (
-    <svg width="84" height="84" viewBox="0 0 84 84" style={{ display: 'block' }}>
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="5.5" />
-      <circle
-        cx={cx} cy={cy} r={r} fill="none" stroke={col} strokeWidth="5.5"
-        strokeDasharray={`${circumference}`}
-        strokeDashoffset={offset}
-        strokeLinecap="round"
-        transform={`rotate(-90 ${cx} ${cy})`}
-        style={{ transition: 'stroke-dashoffset 1s ease-out' }}
-      />
-      <text x={cx} y={cy - 2} textAnchor="middle" fill={C.faint} fontSize="6.5" fontFamily={C.mono} letterSpacing="0.05em">RISK</text>
-      <text x={cx} y={cy + 10} textAnchor="middle" fill={col} fontSize="13" fontWeight="800" fontFamily={C.mono}>{clampedRisk.toFixed(2)}%</text>
-    </svg>
-  );
-}
-
-// ── UI Helper Components Matching Reference Image Exact Styling ────────────────
-function Panel({ style, children }: { style?: CSSProperties; children: ReactNode }) {
-  return <div style={{ ...glass, padding: '6px 8px', display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden', ...style }}>{children}</div>;
-}
-
-function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px', flexShrink: 0 }}>
-      <div style={{ fontSize: 8.5, fontWeight: 700, color: C.dim, letterSpacing: '0.06em', fontFamily: C.mono, textTransform: 'uppercase' }}>
-        - {children}
-      </div>
-      {action}
+    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', background: c.bg, border: `1px solid ${c.border}`, borderRadius: 4 }}>
+      <div style={{ width: 5, height: 5, borderRadius: '50%', background: c.text, boxShadow: status === 'online' ? `0 0 6px ${c.text}` : 'none' }} />
+      <span style={{ fontSize: 9, fontFamily: C.mono, fontWeight: 700, color: c.text, letterSpacing: '0.05em' }}>{label}</span>
     </div>
   );
 }
 
-function Row({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: 13 }}>
-      <span style={{ fontSize: 7.5, color: C.muted, fontFamily: C.sans }}>{label}</span>
-      <span style={{ fontSize: 7.5, fontFamily: C.mono, fontWeight: 600, color: color || C.text }}>{value}</span>
-    </div>
-  );
+// ── Chat Message Type (matching API response) ───────────────────────────────────
+interface ChatMessage {
+  role: 'user' | 'ai';
+  content: string;
+  timestamp: string;
 }
 
-function IndRow({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', minHeight: 13 }}>
-      <span style={{ fontSize: 7.5, color: C.faint, fontFamily: C.mono }}>{label}</span>
-      <span style={{ fontSize: 7.5, fontFamily: C.mono, fontWeight: 600, color: color || C.dim }}>{value}</span>
-    </div>
-  );
-}
-
-function Divider() { return <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '3px 0', flexShrink: 0 }} />; }
-function VDiv() { return <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.08)', margin: '0 4px', flexShrink: 0 }} />; }
-
-function HStat({ label, value, color }: { label: string; value: string; color?: string }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', flexShrink: 0 }}>
-      <span style={{ fontSize: 6.5, color: C.muted, fontFamily: C.sans, letterSpacing: '0.04em' }}>{label}</span>
-      <span style={{ fontSize: 9.5, fontFamily: C.mono, fontWeight: 700, color: color || C.text }}>{value}</span>
-    </div>
-  );
-}
-
-function TFBtn({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        padding: '1px 5px', fontSize: 7, fontFamily: C.mono, cursor: 'pointer',
-        background: active ? 'rgba(37,99,235,0.4)' : 'transparent',
-        border: `1px solid ${active ? '#3b82f6' : 'transparent'}`,
-        borderRadius: '3px', color: active ? '#fff' : C.muted, fontWeight: active ? 700 : 500,
-      }}
-    >{label}</button>
-  );
-}
-
-function getSessionName(): string {
-  const h = new Date().getUTCHours();
-  if (h >= 0 && h < 8) return 'Asian';
-  if (h >= 8 && h < 13) return 'London';
-  if (h >= 13 && h < 22) return 'New York';
-  return 'Asian';
-}
-
-const translations = {
-  VI: {
-    ask: "Giá Ask",
-    bid: "Giá Bid",
-    spread: "Chênh lệch",
-    balance: "Số dư",
-    equity: "Vốn khả dụng",
-    margin: "Ký quỹ",
-    freeMargin: "Ký quỹ tự do",
-    marginLevel: "Mức ký quỹ",
-    plToday: "P/L Hôm nay",
-    drawdown: "Sụt giảm",
-    latency: "Độ trễ",
-    accountOverview: "TỔNG QUAN TÀI KHOẢN",
-    performanceToday: "HIỆU SUẤT HÔM NAY",
-    chartTitle: "BIỂU ĐỒ - XAUUSD",
-    autoTrade: "TỰ ĐỘNG",
-    aiAssistant: "TRỢ LÝ AI",
-    activePositions: "VỊ THẾ ĐANG MỞ",
-    pendingOrders: "LỆNH CHỜ KHỚP",
-    tradeLedger: "SỔ LỆNH GIAO DỊCH",
-    systemLogs: "NHẬT KÝ HỆ THỐNG",
-    ticket: "Vé (Ticket)",
-    type: "Loại",
-    volume: "Khối lượng",
-    entry: "Giá vào",
-    current: "Giá hiện tại",
-    profit: "Lợi nhuận",
-    action: "Thao tác",
-    time: "Thời gian",
-    target: "Mục tiêu",
-    price: "Mức giá",
-    account: "Tài khoản",
-    currency: "Tiền tệ",
-    leverage: "Đòn bẩy",
-    broker: "Nhà môi giới",
-    credit: "Tín dụng",
-    marginUsed: "Ký quỹ đã dùng",
-    realizedPL: "P/L Thực tế",
-    floatingPL: "P/L Trạng thái",
-    totalPL: "Tổng P/L",
-    winRate: "Tỷ lệ thắng",
-    trades: "Giao dịch",
-    bestTrade: "Giao dịch tốt nhất",
-    worstTrade: "Giao dịch tệ nhất",
-    noActivePositions: "Không có vị thế giao dịch nào đang mở.",
-    noPendingOrders: "Không có lệnh chờ nào.",
-    noHistory: "Chưa ghi nhận lịch sử giao dịch hôm nay.",
-    noLogs: "Chưa có log hệ thống.",
-    loadingData: "Đang tải dữ liệu...",
-    closeAllConfirm: "Xác nhận reset toàn bộ hệ thống? (Tất cả vị thế đang mở và lệnh chờ sẽ bị đóng/hủy, PnL ngày hôm nay sẽ được đặt lại về 0)",
-    resetSuccess: "Reset hệ thống thành công!",
-    resetFailed: "Reset thất bại: "
-  },
-  EN: {
-    ask: "Ask",
-    bid: "Bid",
-    spread: "Spread",
-    balance: "Balance",
-    equity: "Equity",
-    margin: "Margin",
-    freeMargin: "Free Margin",
-    marginLevel: "Margin Level",
-    plToday: "P/L Today",
-    drawdown: "Drawdown",
-    latency: "Latency",
-    accountOverview: "ACCOUNT OVERVIEW",
-    performanceToday: "PERFORMANCE TODAY",
-    chartTitle: "CHART - XAUUSD",
-    autoTrade: "AUTO TRADE",
-    aiAssistant: "AI ASSISTANT",
-    activePositions: "ACTIVE POSITIONS",
-    pendingOrders: "PENDING ORDERS",
-    tradeLedger: "TRADE LEDGER",
-    systemLogs: "SYSTEM LOGS",
-    ticket: "Ticket",
-    type: "Type",
-    volume: "Volume",
-    entry: "Entry",
-    current: "Current",
-    profit: "Profit",
-    action: "Action",
-    time: "Time",
-    target: "Target",
-    price: "Price",
-    account: "Account",
-    currency: "Currency",
-    leverage: "Leverage",
-    broker: "Broker",
-    credit: "Credit",
-    marginUsed: "Margin Used",
-    realizedPL: "Realized P/L",
-    floatingPL: "Floating P/L",
-    totalPL: "Total P/L",
-    winRate: "Win Rate",
-    trades: "Trades",
-    bestTrade: "Best Trade",
-    worstTrade: "Worst Trade",
-    noActivePositions: "No active positions.",
-    noPendingOrders: "No pending orders.",
-    noHistory: "No trading history recorded today.",
-    noLogs: "No system logs available.",
-    loadingData: "Loading system data...",
-    closeAllConfirm: "Confirm system reset? (All open positions and pending orders will be closed/cancelled, and today's PnL will be reset to 0)",
-    resetSuccess: "System reset successfully!",
-    resetFailed: "Reset failed: "
-  }
-};
-
-// ── Main Dashboard Application ─────────────────────────────────────────────────
-export default function App() {
+// ── Main Dashboard ────────────────────────────────────────────────────────────
+export default function DashboardPage() {
   const router = useRouter();
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [activeTab, setActiveTab] = useState<'positions' | 'orders' | 'history'>('positions');
+  const [expandedSection, setExpandedSection] = useState<string | null>('brain');
+  const [copilotInput, setCopilotInput] = useState('');
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
+  const [copilotTyping, setCopilotTyping] = useState(false);
 
-  const [lang, setLang] = useState<'VI' | 'EN'>('VI');
-  useEffect(() => {
-    const saved = localStorage.getItem('quantai_lang');
-    if (saved === 'VI' || saved === 'EN') {
-      setLang(saved);
-    }
-  }, []);
-
-  const changeLang = (l: 'VI' | 'EN') => {
-    setLang(l);
-    localStorage.setItem('quantai_lang', l);
-  };
-
-  const t = (key: keyof typeof translations['VI']) => {
-    return translations[lang]?.[key] || translations['VI'][key] || key;
-  };
-
-  // Authentication Guard
-  useEffect(() => {
-    const token = localStorage.getItem('quantai_auth_token') || document.cookie.includes('quantai_auth=');
-    if (!token) {
-      router.push('/login');
-    }
-  }, [router]);
-
-  const [price, setPrice] = useState(0);
-  const [askPrice, setAskPrice] = useState(0);
-  const [bidPrice, setBidPrice] = useState(0);
-  const [balance, setBalance] = useState(0);
-  const [equity, setEquity] = useState(0);
-  const [margin, setMargin] = useState(0);
-  const [marginFree, setMarginFree] = useState(0);
-  const [floatingPnl, setFloatingPnl] = useState(0);
-  const [marginLevel, setMarginLevel] = useState(0);
-  const [latencyMs, setLatencyMs] = useState(0);
-  const [accountId, setAccountId] = useState(0);
-  const [currency, setCurrency] = useState('USD');
-  const [leverage, setLeverage] = useState(0);
-  const [broker, setBroker] = useState('');
-  const [todayPerf, setTodayPerf] = useState<TodayPerformance>({ realized_pl: 0, trades_today: 0, wins: 0, losses: 0, best_trade_today: 0, worst_trade_today: 0 });
-  const [tf, setTf] = useState('M15');
-  const [useRealTradingViewChart, setUseRealTradingViewChart] = useState(false);
-  const [candles, setCandles] = useState<Candle[]>([]);
-  const [markup, setMarkup] = useState<MarkupResponse | null>(null);
-  const [chatMsgs, setChatMsgs] = useState<ChatMsg[]>([]);
-  const [chatInput, setChatInput] = useState('');
-  const [clock, setClock] = useState('');
-  const [isControlCenterOpen, setIsControlCenterOpen] = useState(false);
-  const [controlCenter, setControlCenter] = useState<ControlCenterStatus | null>(null);
-  const controlCenterTriggerRef = useRef<HTMLButtonElement>(null);
+  // Data states
+  const [status, setStatus] = useState<any>(null);
   const [positions, setPositions] = useState<Position[]>([]);
-  const [tradeHistory, setTradeHistory] = useState<TradeHistory[]>([]);
+  const [market, setMarket] = useState<{ candles?: Candle[]; indicators?: TechnicalIndicators; markup?: MarkupResponse } | null>(null);
+  const [history, setHistory] = useState<TradeHistory[]>([]);
   const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [selectedAiModel, setSelectedAiModel] = useState<string>('auto');
-  const [selectedTradingMethod, setSelectedTradingMethod] = useState<string>('ULTRA_CONFLUENCE');
-  const [isMt5Connected, setIsMt5Connected] = useState(false);
-
-  const [indicators, setIndicators] = useState<TechnicalIndicators>({
-    data_status: 'UNAVAILABLE', rsi: 0, atr: 0, macd: 'N/A', stoch: 'N/A',
-    ema20: 0, ema50: 0, ema200: 0, volume: 0, vol_ratio: 'N/A',
-    pivot: 0, r1: 0, r2: 0, s1: 0, s2: 0,
-  });
-
-  const [performance, setPerformance] = useState<AccountPerformance>({
-    data_status: 'UNAVAILABLE', win_rate: null, profit_factor: null,
-    max_drawdown: null, recovery_factor: null, best_trade: null,
-    worst_trade: null, equity_curve: [],
-  });
-
-  const [aiSignal, setAiSignal] = useState<AISignalData>({
-    primary_signal: 'NO_TRADE', confidence: 'N/A',
-    reason_codes: ['SIGNAL_UNAVAILABLE'], data_status: 'UNAVAILABLE',
-  });
-
-  const [news, setNews] = useState<NewsItem[]>([]);
   const [brain, setBrain] = useState<BrainState | null>(null);
   const [adjustments, setAdjustments] = useState<BrainAdjustment[]>([]);
-  const [uptimeSec, setUptimeSec] = useState(0);
-  const [selectedNews, setSelectedNews] = useState<{
-    title: string;
-    impact?: string;
-    actual?: string;
-    forecast?: string;
-    previous?: string;
-    date?: string;
-    time?: string;
-  } | null>(null);
-  const [newsAnalysis, setNewsAnalysis] = useState<NewsAnalysisResponse | null>(null);
-  const [analyzingNews, setAnalyzingNews] = useState(false);
-  const [showFullNewsModal, setShowFullNewsModal] = useState(false);
-  const [showFullLogsModal, setShowFullLogsModal] = useState(false);
-  const [logsFilterLevel, setLogsFilterLevel] = useState<string>('ALL');
-  const [logsSearchQuery, setLogsSearchQuery] = useState<string>('');
-  const logsContainerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (logsContainerRef.current) {
-      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
-    }
-  }, [logs]);
-
-  const handleSelectNews = async (newsItem: {
-    title: string;
-    impact?: string;
-    actual?: string;
-    forecast?: string;
-    previous?: string;
-    date?: string;
-    time?: string;
-  }) => {
-    setSelectedNews(newsItem);
-    setAnalyzingNews(true);
-    setNewsAnalysis(null);
-    const res = await analyzeNewsEvent(newsItem);
-    setNewsAnalysis(res);
-    setAnalyzingNews(false);
-  };
+  const [ccStatus, setCcStatus] = useState<ControlCenterStatus | null>(null);
 
   const chatRef = useRef<HTMLDivElement>(null);
-  const chatInitRef = useRef(false);
+  const logsRef = useRef<HTMLDivElement>(null);
 
-  const handleToggleAutoTrade = async () => {
-    const currentArmed = controlCenter?.safeguards?.ai_auto_loop ?? false;
-    const res = await updateAiAutoLoop(!currentArmed);
-    if (res && res.status === "SUCCESS") {
-      const cc = await fetchControlCenterStatus();
-      if (cc) setControlCenter(cc);
-    }
-  };
-
-  const handleTradingMethodChange = async (method: string) => {
-    setSelectedTradingMethod(method);
-    const res = await updateTradingMethod(method);
-    if (res && res.status === "SUCCESS") {
-      const cc = await fetchControlCenterStatus();
-      if (cc) setControlCenter(cc);
-    }
-  };
-
-  const handleResetAll = async () => {
-    if (!window.confirm(t('closeAllConfirm'))) {
-      return;
-    }
-    const res = await executeResetAll();
-    if (res && res.status === 'SUCCESS') {
-      alert(t('resetSuccess'));
-      window.location.reload();
-    } else {
-      alert(t('resetFailed') + (res?.message || 'Unknown error'));
-    }
-  };
-
-  const handleAutoBuy = async () => {
-    const res = await executeOrderBuy(0.10);
-    setChatMsgs((m) => [...m, { role: 'ai', text: `[BUY] ${res.message}`, time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) }]);
-    const pos = await fetchPositions(); if (pos) setPositions(pos);
-  };
-  const handleAutoSell = async () => {
-    const res = await executeOrderSell(0.10);
-    setChatMsgs((m) => [...m, { role: 'ai', text: `[SELL] ${res.message}`, time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) }]);
-    const pos = await fetchPositions(); if (pos) setPositions(pos);
-  };
-  const handleAutoCloseAll = async () => {
-    const res = await executeOrderCloseAll();
-    setChatMsgs((m) => [...m, { role: 'ai', text: `[CLOSE ALL] ${res.message}`, time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) }]);
-    const pos = await fetchPositions(); if (pos) setPositions(pos);
-  };
-  const handleCloseProfitable = async () => {
-    const res = await executeCloseProfit();
-    setChatMsgs((m) => [...m, { role: 'ai', text: `[CLOSE PROFIT] ${res.message}`, time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) }]);
-    const pos = await fetchPositions(); if (pos) setPositions(pos);
-  };
-  const handleCloseLosing = async () => {
-    const res = await executeCloseLosing();
-    setChatMsgs((m) => [...m, { role: 'ai', text: `[CLOSE LOSING] ${res.message}`, time: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) }]);
-    const pos = await fetchPositions(); if (pos) setPositions(pos);
-  };
-
-  // Clock
+  // Auth check
   useEffect(() => {
-    const tick = () => {
-      const n = new Date();
-      const utc7 = new Date(n.getTime() + 7 * 60 * 60 * 1000);
-      setClock(`${utc7.getUTCHours().toString().padStart(2, '0')}:${utc7.getUTCMinutes().toString().padStart(2, '0')}:${utc7.getUTCSeconds().toString().padStart(2, '0')}`);
-      setUptimeSec((u) => u + 1);
-    };
-    tick(); const id = setInterval(tick, 1000); return () => clearInterval(id);
-  }, []);
+    const token = localStorage.getItem('quantai_auth_token');
+    if (!token) { router.replace('/login'); return; }
+    setIsAuthenticated(true);
+  }, [router]);
 
-  // Realtime MT5 Data Synchronizer
+  // Data polling
   useEffect(() => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let active = true;
+    if (!isAuthenticated) return;
 
-    const syncData = async () => {
-      const [statusResult, marketResult, positionsResult, historyResult, controlCenterResult, pendingResult, logsResult, chatHistoryResult, brainResult, adjustmentsResult] = await Promise.all([
-        fetchStatus({ signal: controller.signal }),
-        fetchMarket('XAUUSD', tf, { signal: controller.signal }),
-        fetchPositions({ signal: controller.signal }),
-        fetchHistory({ signal: controller.signal }),
-        fetchControlCenterStatus({ signal: controller.signal }),
-        fetchPendingOrders({ signal: controller.signal }),
-        fetchLogs({ signal: controller.signal }),
-        fetchChatHistory(),
-        fetchBrain({ signal: controller.signal }),
-        fetchAdjustments({ signal: controller.signal }),
-      ]).catch(() => [null, null, null, null, null, null, null, null, null, null] as const);
-
-      if (!active || controller.signal.aborted) return;
-      if (controlCenterResult) {
-        setControlCenter(controlCenterResult);
-        if (controlCenterResult.safeguards?.trading_method) {
-          setSelectedTradingMethod(controlCenterResult.safeguards.trading_method);
-        }
-      }
-      if (pendingResult) setPendingOrders(pendingResult);
-      if (logsResult) setLogs(logsResult as LogEntry[]);
-      if (chatHistoryResult) setChatMsgs(chatHistoryResult);
-      if (brainResult) setBrain(brainResult);
-      if (adjustmentsResult) setAdjustments(adjustmentsResult as BrainAdjustment[]);
-
-      if (statusResult) {
-        setIsMt5Connected(statusResult.mt5_connected);
-        setPrice(statusResult.current_ask);
-        setAskPrice(statusResult.current_ask);
-        setBidPrice(statusResult.current_bid);
-        setBalance(statusResult.balance);
-        setEquity(statusResult.equity);
-        setMargin(statusResult.margin);
-        setMarginFree(statusResult.margin_free);
-        setFloatingPnl(statusResult.floating_pnl);
-        setMarginLevel(statusResult.margin_level);
-        setLatencyMs(statusResult.latency_ms);
-        setAccountId(statusResult.account_id);
-        setCurrency(statusResult.currency);
-        setLeverage(statusResult.leverage);
-        setBroker(statusResult.broker);
-        if (statusResult.today_performance) setTodayPerf(statusResult.today_performance);
-        if (statusResult.indicators) setIndicators(statusResult.indicators);
-        if (statusResult.performance) setPerformance(statusResult.performance);
-        if (statusResult.ai_signal) setAiSignal(statusResult.ai_signal);
-        if (statusResult.news) setNews(statusResult.news);
-      }
-
-      if (marketResult && marketResult.candles && marketResult.candles.length > 0) { setCandles(marketResult.candles); if (marketResult.indicators) setIndicators(marketResult.indicators); if (marketResult.markup) setMarkup(marketResult.markup); }
-      if (positionsResult && statusResult?.mt5_connected) setPositions(positionsResult);
-      if (historyResult && statusResult?.mt5_connected) setTradeHistory(historyResult);
-
-      if (active && !controller.signal.aborted) timer = setTimeout(syncData, 1000);
+    const loadAll = async () => {
+      try {
+        const [s, ps, m, h, po, l, b, a, cc] = await Promise.all([
+          fetchStatus().catch(() => null),
+          fetchPositions().catch(() => []),
+          fetchMarket().catch(() => null),
+          fetchHistory().catch(() => []),
+          fetchPendingOrders().catch(() => []),
+          fetchLogs({}).catch(() => []),
+          fetchBrain().catch(() => null),
+          fetchAdjustments().catch(() => []),
+          fetchControlCenterStatus().catch(() => null),
+        ]);
+        setStatus(s);
+        setPositions(ps || []);
+        setMarket(m);
+        setHistory(h || []);
+        setPendingOrders(po || []);
+        setLogs(l || []);
+        setBrain(b);
+        setAdjustments(a || []);
+        setCcStatus(cc);
+      } catch { /* silent */ }
     };
 
-    void syncData();
-    return () => { active = false; if (timer) clearTimeout(timer); controller.abort(); };
-  }, [tf]);
+    loadAll();
+    const interval = setInterval(loadAll, 5000);
+    return () => clearInterval(interval);
+  }, [isAuthenticated]);
 
-  useEffect(() => { if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight; }, [chatMsgs]);
+  // Auto-scroll refs
+  useEffect(() => { if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight; }, [chatHistory]);
+  useEffect(() => { if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight; }, [logs]);
 
-  const triggerAIChat = async (customPrompt: string) => {
-    const t = new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-    setChatMsgs((m) => [...m, { role: 'user', text: customPrompt, time: t }]);
-    const aiRes = await sendCopilotChat(customPrompt, 'XAUUSD', tf, selectedAiModel);
-    if (aiRes) { setChatMsgs((m) => [...m, aiRes]); }
-    else { setChatMsgs((m) => [...m, { role: 'ai', text: 'AI unavailable.', time: t }]); }
+  // Copilot chat
+  const handleCopilot = async () => {
+    if (!copilotInput.trim() || copilotTyping) return;
+    const userMsg: ChatMessage = { role: 'user', content: copilotInput, timestamp: new Date().toISOString() };
+    setChatHistory(prev => [...prev, userMsg]);
+    const query = copilotInput;
+    setCopilotInput('');
+    setCopilotTyping(true);
+
+    try {
+      const res = await sendCopilotChat(query);
+      if (res) {
+        // API returns {role: 'ai', text: string, time: string}
+        const aiMsg: ChatMessage = { role: 'ai', content: res.text || 'Da xu ly yeu cau.', timestamp: new Date().toISOString() };
+        setChatHistory(prev => [...prev, aiMsg]);
+      } else {
+        setChatHistory(prev => [...prev, { role: 'ai', content: 'Khong the xu ly yeu cau. Vui long thu lai.', timestamp: new Date().toISOString() }]);
+      }
+    } catch {
+      setChatHistory(prev => [...prev, { role: 'ai', content: 'Khong the xu ly yeu cau. Vui long thu lai.', timestamp: new Date().toISOString() }]);
+    } finally {
+      setCopilotTyping(false);
+    }
   };
 
-  const sendChat = async () => { if (!chatInput.trim()) return; const p = chatInput; setChatInput(''); await triggerAIChat(p); };
+  // Calculate metrics
+  const openPnl = positions.reduce((s, p) => s + (p.profit || 0), 0);
+  const realizedPnl = status?.today_performance?.realized_pl || 0;
+  const totalPnl = openPnl + realizedPnl;
+  const balance = status?.balance || status?.account?.balance || 0;
+  const equity = balance + openPnl + realizedPnl;
+  const marginUsed = positions.reduce((s, p) => s + ((p as any).margin || 0), 0);
+  const marginLevel = equity > 0 && marginUsed > 0 ? (equity / marginUsed) * 100 : 0;
 
-  const execLocked = controlCenter?.execution?.execution_locked;
-  const btnActionStyle = (bg: string, borderCol: string, textCol: string): CSSProperties => ({
-    padding: '5px 0', background: bg, border: `1px solid ${borderCol}`, borderRadius: '4px',
-    color: textCol, fontSize: 8.5, fontWeight: 700, cursor: execLocked ? 'not-allowed' : 'pointer',
-    fontFamily: C.mono, opacity: execLocked ? 0.6 : 1, textAlign: 'center', transition: 'all 0.15s',
-  });
+  // Generate mini chart data
+  const generateMiniData = (base: number, len = 12): number[] => {
+    const data = [base];
+    for (let i = 1; i < len; i++) {
+      data.push(data[i - 1] + (Math.random() - 0.48) * base * 0.005);
+    }
+    return data;
+  };
 
-  const activeBalance = balance;
-  const activeEquity = equity;
-  const activeMargin = margin;
-  const activeFreeMargin = marginFree;
-  const activeMarginLevel = marginLevel;
-  const activeTotalPL = todayPerf.realized_pl + floatingPnl;
-  const activeDrawdown = activeBalance > 0 ? Math.max(0, ((activeBalance - activeEquity) / activeBalance * 100)) : 0.0;
-  const activeRiskPct = activeBalance > 0 ? Math.min(100, (activeMargin / activeBalance * 100)) : 0.0;
-  const plPct = (activeBalance - activeTotalPL) > 0 ? (activeTotalPL / (activeBalance - activeTotalPL) * 100) : 0.0;
+  // Close position handler
+  const handleClosePosition = async (ticket?: number) => {
+    if (!ticket) return;
+    try {
+      await fetch('/api/order/close', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticket }),
+      });
+      setPositions(prev => prev.filter(p => p.ticket !== ticket));
+    } catch { /* silent */ }
+  };
 
-  const displayPositions = positions;
-  const displayPending = pendingOrders;
-  const displayHistory = tradeHistory;
+  // Cancel order handler
+  const handleCancelOrder = async (ticket?: number) => {
+    if (!ticket) return;
+    try {
+      await fetch('/api/order/cancel_pending', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_ticket: ticket }),
+      });
+      setPendingOrders(prev => prev.filter(o => o.ticket !== ticket));
+    } catch { /* silent */ }
+  };
+
+  if (!isAuthenticated) return null;
+
+  // Extract AI bias/signal from brain state
+  const aiBias = brain?.strategies?.[0]?.status === 'ACTIVE' 
+    ? (brain.recent_decisions?.[0]?.action === 'BUY' ? 'BULLISH' : brain.recent_decisions?.[0]?.action === 'SELL' ? 'BEARISH' : 'NEUTRAL')
+    : 'NEUTRAL';
+  const aiSignal = brain?.recent_decisions?.[0]?.action || null;
+  const aiConfidence = brain?.recent_decisions?.[0]?.confidence ? Math.round(brain.recent_decisions[0].confidence * 100) : 0;
 
   return (
-    <div style={{
-      background: C.bgMain, height: '100dvh', maxHeight: '100dvh', width: '100vw', overflow: 'hidden',
-      fontFamily: C.sans, color: C.text, display: 'flex', flexDirection: 'column', gap: '3px', padding: '3px', boxSizing: 'border-box',
-    }}>
-      {/* ── HEADER BAR ── */}
-      <header style={{ ...glass, height: '40px', flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 8px', gap: '6px', borderRadius: '5px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0 }}>
-          <div style={{ width: 22, height: 22, background: 'linear-gradient(135deg,#059669,#10b981)', borderRadius: '4px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 10, fontWeight: 900, fontFamily: C.mono }}>A</div>
+    <div style={{ height: '100vh', width: '100vw', background: C.bgMain, display: 'flex', flexDirection: 'column', overflow: 'hidden', fontFamily: C.sans }}>
+      {/* TOP BAR */}
+      <div style={{
+        height: 48,
+        background: 'linear-gradient(180deg, rgba(10,14,24,0.98) 0%, rgba(5,7,12,0.95) 100%)',
+        borderBottom: `1px solid ${C.border}`,
+        display: 'flex', alignItems: 'center', padding: '0 16px', gap: 16, flexShrink: 0,
+        backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
+      }}>
+        {/* Logo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            width: 28, height: 28, borderRadius: 6,
+            background: 'linear-gradient(135deg, rgba(212,175,55,0.3) 0%, rgba(10,15,28,0.9) 100%)',
+            border: '1px solid rgba(212,175,55,0.4)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.gold} strokeWidth="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+            </svg>
+          </div>
           <div>
-            <div style={{ fontSize: 11, fontWeight: 800, color: '#fff', fontFamily: C.mono, letterSpacing: '0.06em', lineHeight: 1 }}>GOLDQUANT AI</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: 1 }}>
-              <span style={{ fontSize: 6.5, color: C.muted, fontFamily: C.mono }}>Nguyễn Quang Tú</span>
-              <span style={{ fontSize: 5.5, color: C.green, fontFamily: C.mono, fontWeight: 800 }}>• LIVE</span>
+            <div style={{ fontSize: 11, fontFamily: C.mono, fontWeight: 800, color: C.gold, letterSpacing: '0.08em' }}>ATE DESK</div>
+            <div style={{ fontSize: 7, fontFamily: C.mono, color: C.muted, letterSpacing: '0.05em' }}>INSTITUTIONAL TERMINAL</div>
+          </div>
+        </div>
+
+        <div style={{ width: 1, height: 24, background: C.border }} />
+
+        {/* Account Metrics */}
+        <div style={{ display: 'flex', gap: 20, alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>EQUITY</div>
+            <div style={{ fontSize: 14, fontFamily: C.mono, fontWeight: 800, color: totalPnl >= 0 ? C.green : C.red }}>
+              ${equity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>P&L TODAY</div>
+            <div style={{ fontSize: 12, fontFamily: C.mono, fontWeight: 700, color: totalPnl >= 0 ? C.green : C.red }}>
+              {totalPnl >= 0 ? '+' : ''}{totalPnl.toFixed(2)}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>MARGIN</div>
+            <div style={{ fontSize: 11, fontFamily: C.mono, fontWeight: 600, color: C.dim }}>
+              ${marginUsed.toFixed(2)} <span style={{ color: C.muted }}>/</span> <span style={{ color: marginLevel < 150 ? C.amber : C.muted }}>{marginLevel.toFixed(0)}%</span>
             </div>
           </div>
         </div>
-        <VDiv />
-        <HStat label={t('ask')} value={askPrice > 0 ? `$${askPrice.toFixed(2)}` : "N/A"} color={C.green} />
-        <VDiv />
-        <HStat label={t('bid')} value={bidPrice > 0 ? `$${bidPrice.toFixed(2)}` : "N/A"} color={C.blue} />
-        <VDiv />
-        <HStat label={t('spread')} value={(askPrice > 0 && bidPrice > 0) ? `${(askPrice - bidPrice).toFixed(2)}` : "N/A"} color={C.gold} />
-        <VDiv />
-        <HStat label={t('balance')} value={`$${activeBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-        <VDiv />
-        <HStat label={t('equity')} value={`$${activeEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} color={C.green} />
-        <VDiv />
-        <HStat label={t('margin')} value={`$${activeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-        <VDiv />
-        <HStat label={t('freeMargin')} value={`$${activeFreeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-        <VDiv />
-        <HStat label={t('marginLevel')} value={`${activeMarginLevel.toFixed(2)}%`} color={C.green} />
-        <VDiv />
-        <HStat
-          label={t('plToday')}
-          value={`${activeTotalPL >= 0 ? '+$' : '-$'}${Math.abs(activeTotalPL).toFixed(2)} (${plPct >= 0 ? '+' : ''}${plPct.toFixed(2)}%)`}
-          color={activeTotalPL > 0 ? C.green : activeTotalPL < 0 ? C.red : C.text}
-        />
-        <VDiv />
-        <HStat label={t('drawdown')} value={`${activeDrawdown.toFixed(2)}%`} color={C.red} />
-        <VDiv />
-        <HStat label={t('latency')} value={`${latencyMs || 23}ms`} color={C.green} />
+
         <div style={{ flex: 1 }} />
-        <div style={{ fontSize: 8, color: C.text, fontFamily: C.mono, display: 'flex', gap: '6px', alignItems: 'center', flexShrink: 0 }}>
-          <span style={{ color: C.text, fontWeight: 700 }}>{clock || '14:27:35'}</span>
-          <span style={{ fontSize: 6.5, color: C.muted }}>(UTC+7)</span>
-          <VDiv />
-          <button ref={controlCenterTriggerRef} type="button" onClick={() => setIsControlCenterOpen(true)} style={{ color: C.dim, background: 'transparent', border: 0, padding: 0, cursor: 'pointer', fontSize: 10 }}>[CFG]</button>
-          <button
-            type="button"
-            onClick={() => changeLang(lang === 'VI' ? 'EN' : 'VI')}
-            style={{ color: C.text, background: 'transparent', border: 0, padding: 0, cursor: 'pointer', fontSize: 8, fontFamily: C.mono, fontWeight: 700 }}
-            title={lang === 'VI' ? 'Chuyển sang tiếng Anh' : 'Switch to Vietnamese'}
-          >
-            {lang === 'VI' ? 'VI' : 'EN'}
-          </button>
-          <VDiv />
-          <button
-            type="button"
-            onClick={handleResetAll}
-            style={{ color: C.red, background: 'transparent', border: 0, padding: 0, cursor: 'pointer', fontSize: 8, fontFamily: C.mono, fontWeight: 700 }}
-            title={lang === 'VI' ? 'Reset toàn bộ hệ thống (PnL & Lệnh mở)' : 'Reset all system data (PnL & Open Positions)'}
-          >
-            [RESET]
-          </button>
-          <VDiv />
-          <button
-            type="button"
-            onClick={() => {
-              localStorage.removeItem('quantai_auth_token');
-              localStorage.removeItem('quantai_user_info');
-              localStorage.removeItem('firebase:authUser:qtusdev');
-              document.cookie = 'quantai_auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-              window.location.href = '/login';
-            }}
-            style={{ color: C.red, background: 'transparent', border: 0, padding: 0, cursor: 'pointer', fontSize: 8, fontFamily: C.mono, fontWeight: 700 }}
-            title="Khóa phiên / Đăng xuất"
-          >
-            [LOCK]
-          </button>
+
+        {/* Status */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <StatusBadge status={ccStatus?.account?.mt5_connected ? 'online' : 'offline'} label={ccStatus?.account?.mt5_connected ? 'MT5 CONNECTED' : 'MT5 OFFLINE'} />
+          <StatusBadge status={ccStatus?.safeguards?.ai_auto_loop ? 'online' : 'offline'} label={ccStatus?.safeguards?.ai_auto_loop ? 'AI ARMED' : 'AI OFF'} />
         </div>
-      </header>
 
-      <ControlCenter open={isControlCenterOpen} onClose={() => setIsControlCenterOpen(false)} triggerRef={controlCenterTriggerRef} />
+        {/* Clock */}
+        <div style={{ padding: '4px 10px', background: 'rgba(0,0,0,0.4)', borderRadius: 6, border: `1px solid ${C.border}` }}>
+          <div style={{ fontSize: 14, fontFamily: C.mono, fontWeight: 700, color: C.text }}>
+            {new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
+          </div>
+          <div style={{ fontSize: 7, fontFamily: C.mono, color: C.muted, textAlign: 'center' }}>
+            VN {new Date().toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })}
+          </div>
+        </div>
+      </div>
 
-      {/* ── BODY GRID ── */}
-      <div className="dashboard-body" style={{ flex: 1, display: 'grid', gridTemplateRows: 'minmax(0, 1.3fr) minmax(0, 0.75fr) minmax(0, 1.35fr)', gap: '3px', padding: '0', minHeight: 0, overflow: 'hidden' }}>
-
-        {/* ── ROW 1 (42%): Account Overview | Chart | AI Assistant ── */}
-        <div className="dashboard-row dashboard-row-primary" style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 210px) minmax(0, 1fr) minmax(280px, 340px)', gap: '3px', minHeight: 0 }}>
-
-          {/* ACCOUNT OVERVIEW */}
-          <Panel style={{ justifyContent: 'space-between' }}>
-            <SectionTitle action={<span style={{ fontSize: 6.5, color: (controlCenter?.account?.trade_mode === 'REAL') ? C.gold : C.muted, fontFamily: C.mono, fontWeight: 800 }}>{accountId > 0 ? `${controlCenter?.account?.trade_mode || 'ACC'}-${accountId}` : 'DISCONNECTED'}</span>}>{t('accountOverview')}</SectionTitle>
-            <Row label={t('account')} value={accountId > 0 ? `${controlCenter?.account?.trade_mode || 'ACC'}-${accountId}` : 'DISCONNECTED'} />
-            <Row label={t('currency')} value={currency || 'USD'} />
-            <Row label={t('leverage')} value={leverage > 0 ? `1:${leverage}` : 'N/A'} />
-            <Row label={t('broker')} value={broker || 'N/A'} />
-            <Row label={t('balance')} value={`$${activeBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-            <Row label={t('equity')} value={`$${activeEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} color={C.green} />
-            <Row label={t('credit')} value="$0.00" />
-            <Row label={t('freeMargin')} value={`$${activeFreeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-            <Row label={t('marginUsed')} value={`$${activeMargin.toLocaleString('en-US', { minimumFractionDigits: 2 })}`} />
-            <Row label={t('marginLevel')} value={`${activeMarginLevel.toFixed(2)}%`} color={C.green} />
-            <Divider />
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <SectionTitle action={<span style={{ fontSize: 8, color: C.green, fontFamily: C.mono }}>&gt;&gt;</span>}>{t('performanceToday')}</SectionTitle>
-                <Row label={t('realizedPL')} value={todayPerf.realized_pl !== 0 ? `${todayPerf.realized_pl >= 0 ? '+' : ''}$${todayPerf.realized_pl.toFixed(2)}` : '+$28.10'} color={todayPerf.realized_pl >= 0 ? C.green : C.red} />
-                <Row label={t('floatingPL')} value={`${(displayPositions.reduce((s, p) => s + p.profit, 0)) >= 0 ? '+' : ''}$${(displayPositions.reduce((s, p) => s + p.profit, 0)).toFixed(2)}`} color={(displayPositions.reduce((s, p) => s + p.profit, 0)) >= 0 ? C.green : C.red} />
-                <Row label={t('totalPL')} value={`${activeTotalPL >= 0 ? '+' : ''}$${activeTotalPL.toFixed(2)}`} color={activeTotalPL >= 0 ? C.green : C.red} />
-                <Row label={t('winRate')} value={todayPerf.trades_today > 0 ? `${((todayPerf.wins / todayPerf.trades_today) * 100).toFixed(2)}%` : '66.67%'} color={C.gold} />
-                <Row label={t('trades')} value={todayPerf.trades_today > 0 ? `${todayPerf.trades_today} (${todayPerf.wins}W / ${todayPerf.losses}L)` : '12 (8W / 4L)'} />
-                <Row label={t('bestTrade')} value={todayPerf.best_trade_today !== 0 ? `+$${todayPerf.best_trade_today.toFixed(2)}` : '+$45.63'} color={C.green} />
-                <Row label={t('worstTrade')} value={todayPerf.worst_trade_today !== 0 ? `$${todayPerf.worst_trade_today.toFixed(2)}` : '-$12.38'} color={C.red} />
-              </div>
-              <div style={{ paddingTop: 10 }}>
-                <PerformanceSparkline equityCurve={performance.equity_curve} />
-              </div>
+      {/* MAIN CONTENT */}
+      <div style={{
+        flex: 1, display: 'grid',
+        gridTemplateColumns: '320px 1fr 340px',
+        gridTemplateRows: '1fr 280px',
+        gap: 8, padding: 8, minHeight: 0, overflow: 'hidden',
+        background: `radial-gradient(ellipse at 0% 0%, rgba(212,175,55,0.04) 0%, transparent 50%), radial-gradient(ellipse at 100% 100%, rgba(16,185,129,0.03) 0%, transparent 50%), linear-gradient(180deg, #030508 0%, #020305 100%)`,
+      }}>
+        {/* LEFT: CONTROL CENTER */}
+        <div style={{ gridRow: '1 / 3', minHeight: 0, overflow: 'hidden' }}>
+          <Panel title="Control Center" live className="animate-border-glow">
+            <div style={{ height: '100%', overflow: 'auto' }}>
+              <ControlCenter />
             </div>
           </Panel>
+        </div>
 
-          {/* CHART */}
-          <Panel style={{ gap: 0, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px', flexShrink: 0 }}>
-              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
-                <SectionTitle>{t('chartTitle')} · M15</SectionTitle>
-                {['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'].map((t) => (
-                  <TFBtn key={t} label={t} active={tf === t} onClick={() => setTf(t)} />
-                ))}
-              </div>
-              <div style={{ display: 'flex', gap: '6px', alignItems: 'center', fontSize: 7, fontFamily: C.mono }}>
-                <span style={{ color: C.green }}>2,366.21 +1.09 (+0.05%)</span>
-                <button
-                  onClick={() => setUseRealTradingViewChart(!useRealTradingViewChart)}
-                  style={{
-                    background: useRealTradingViewChart ? 'rgba(37,99,235,0.3)' : 'rgba(255,255,255,0.06)',
-                    border: '1px solid rgba(255,255,255,0.1)', borderRadius: '3px', color: useRealTradingViewChart ? C.blue : C.dim,
-                    fontSize: 6.5, fontFamily: C.mono, padding: '1px 4px', cursor: 'pointer',
-                  }}
-                >
-                  {useRealTradingViewChart ? '[ TV Widget ]' : '[ MT5 Canvas ]'}
+        {/* CENTER TOP: POSITIONS & ORDERS */}
+        <div style={{ minHeight: 0, overflow: 'hidden' }}>
+          <Panel title="Positions & Orders" live>
+            <div style={{ display: 'flex', borderBottom: `1px solid ${C.border}`, background: 'rgba(0,0,0,0.2)', flexShrink: 0 }}>
+              {(['positions', 'orders', 'history'] as const).map(tab => (
+                <button key={tab} onClick={() => setActiveTab(tab)} style={{
+                  flex: 1, padding: '8px 12px',
+                  background: activeTab === tab ? 'linear-gradient(180deg, rgba(212,175,55,0.15) 0%, rgba(212,175,55,0.05) 100%)' : 'transparent',
+                  borderBottom: activeTab === tab ? `2px solid ${C.gold}` : '2px solid transparent',
+                  color: activeTab === tab ? C.gold : C.muted,
+                  fontSize: 9, fontFamily: C.mono, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', cursor: 'pointer', transition: 'all 0.2s ease',
+                }}>
+                  {tab === 'positions' ? `POSITIONS (${positions.length})` : tab === 'orders' ? `ORDERS (${pendingOrders.length})` : 'HISTORY'}
                 </button>
-              </div>
-            </div>
-            <div style={{ flex: 1, minHeight: 0, height: '100%', display: 'flex' }}>
-              {useRealTradingViewChart ? (
-                <RealTradingViewWidget symbol="FX:XAUUSD" />
-              ) : (
-                <CandleChart candles={candles} livePrice={price || 2363.10} positions={displayPositions} indicators={indicators} markup={markup} selectedTradingMethod={selectedTradingMethod} />
-              )}
-            </div>
-          </Panel>
-
-          {/* AI ASSISTANT */}
-          <Panel style={{ gap: '3px' }}>
-            <SectionTitle action={
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <div
-                  style={{ display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', userSelect: 'none' }}
-                  onClick={handleToggleAutoTrade}
-                >
-                  <span style={{ fontSize: 6.5, color: (controlCenter?.safeguards?.ai_auto_loop) ? C.green : C.muted, fontWeight: 700, fontFamily: C.mono }}>{t('autoTrade')}</span>
-                  <div style={{
-                    width: 22, height: 10, borderRadius: 5, background: (controlCenter?.safeguards?.ai_auto_loop) ? 'rgba(34,197,94,0.3)' : 'rgba(255,255,255,0.08)',
-                    border: `1px solid ${(controlCenter?.safeguards?.ai_auto_loop) ? C.green : 'rgba(255,255,255,0.15)'}`, position: 'relative', transition: 'all 0.2s'
-                  }}>
-                    <div style={{
-                      width: 6, height: 6, borderRadius: '50%', background: (controlCenter?.safeguards?.ai_auto_loop) ? C.green : C.muted,
-                      position: 'absolute', top: 1, left: (controlCenter?.safeguards?.ai_auto_loop) ? 13 : 2, transition: 'all 0.2s'
-                    }} />
-                  </div>
-                </div>
-
-                <select
-                  value={selectedTradingMethod}
-                  onChange={(e) => handleTradingMethodChange(e.target.value)}
-                  style={{
-                    fontSize: 6.5, color: C.muted, fontFamily: C.mono, background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.08)', borderRadius: '3px', padding: '1px 3px',
-                    outline: 'none', cursor: 'pointer',
-                  }}
-                  title="Trading Method"
-                >
-                  <option value="ULTRA_CONFLUENCE" style={{ background: '#0b0f19', color: C.text }}>Ultra Confluence</option>
-                  <option value="SMC" style={{ background: '#0b0f19', color: C.text }}>SMC Concepts</option>
-                  <option value="ICT" style={{ background: '#0b0f19', color: C.text }}>ICT Killzone</option>
-                  <option value="PRICE_ACTION" style={{ background: '#0b0f19', color: C.text }}>Price Action</option>
-                  <option value="SNIPER" style={{ background: '#0b0f19', color: C.text }}>Sniper Strategy</option>
-                  <option value="INDICATOR" style={{ background: '#0b0f19', color: C.text }}>Chỉ báo (EMA/RSI)</option>
-                </select>
-
-                <select
-                  value={selectedAiModel}
-                  onChange={(e) => setSelectedAiModel(e.target.value)}
-                  style={{
-                    fontSize: 6.5, color: C.muted, fontFamily: C.mono, background: 'rgba(255,255,255,0.04)',
-                    border: '1px solid rgba(255,255,255,0.08)', borderRadius: '3px', padding: '1px 3px',
-                    outline: 'none', cursor: 'pointer',
-                  }}
-                >
-                  <option value="auto" style={{ background: '#0b0f19', color: C.text }}>Auto Fallback</option>
-                  <optgroup label="🆓 OpenCode Zen Free (Mặc định - Không cần Key)" style={{ background: '#0b0f19', color: C.muted }}>
-                    <option value="deepseek-v4-flash-free" style={{ background: '#0b0f19', color: C.green }}>DeepSeek V4 Flash</option>
-                    <option value="big-pickle" style={{ background: '#0b0f19', color: C.green }}>Big Pickle</option>
-                    <option value="mimo-v2.5-free" style={{ background: '#0b0f19', color: C.green }}>MiMo V2.5</option>
-                    <option value="nemotron-3-ultra-free" style={{ background: '#0b0f19', color: C.green }}>Nemotron 3 Ultra</option>
-                    <option value="north-mini-code-free" style={{ background: '#0b0f19', color: C.green }}>North Mini</option>
-                    <option value="laguna-s-2.1-free" style={{ background: '#0b0f19', color: C.green }}>Laguna S 2.1</option>
-                    <option value="longcat-2.0-free" style={{ background: '#0b0f19', color: C.green }}>LongCat 2.0</option>
-                  </optgroup>
-                  <optgroup label="💎 Premium (Cần API Key)" style={{ background: '#0b0f19', color: C.muted }}>
-                    <option value="gpt-4o" style={{ background: '#0b0f19', color: C.green }}>GPT-4o</option>
-                    <option value="kimi-k3" style={{ background: '#0b0f19', color: C.gold }}>Kimi-K3</option>
-                    <option value="gemini-3.5-flash" style={{ background: '#0b0f19', color: C.blue }}>Gemini 3.5 Flash</option>
-                  </optgroup>
-                </select>
-              </div>
-            }>{t('aiAssistant')}</SectionTitle>
-
-            {/* Market Analysis Card (Live Data) */}
-            <div style={{ padding: '6px 8px', background: 'rgba(30, 20, 50, 0.75)', border: '1px solid rgba(168, 85, 247, 0.35)', borderRadius: '5px', flexShrink: 0, boxShadow: '0 0 15px rgba(168, 85, 247, 0.15)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-                <div style={{ fontSize: 7.5, color: '#e9d5ff', fontWeight: 600 }}>Market Analysis</div>
-                <div style={{ fontSize: 6.5, color: C.muted, fontFamily: C.mono }}>
-                  {clock} {indicators.data_status === 'LIVE_VERIFIED' ? '• LIVE' : '• N/A'}
-                </div>
-              </div>
-              <div style={{ fontSize: 7, color: '#c0a0e0', fontFamily: C.mono, lineHeight: 1.35, marginBottom: 4 }}>
-                XAUUSD {bidPrice > 0 ? `@ ${bidPrice.toFixed(2)} / ${askPrice > 0 ? askPrice.toFixed(2) : '—'}` : 'N/A'}. {' '}
-                EMA20 {indicators.ema20 > 0 ? indicators.ema20.toFixed(2) : 'N/A'} | EMA50 {indicators.ema50 > 0 ? indicators.ema50.toFixed(2) : 'N/A'} | EMA200 {indicators.ema200 > 0 ? indicators.ema200.toFixed(2) : 'N/A'}. {' '}
-                RSI(14) {indicators.rsi > 0 ? indicators.rsi.toFixed(1) : 'N/A'} | ATR(14) {indicators.atr > 0 ? indicators.atr.toFixed(2) : 'N/A'} | Pivot {indicators.pivot > 0 ? indicators.pivot.toFixed(2) : 'N/A'}.
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-                <span style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>Trading Bias</span>
-                <span style={{ fontSize: 8, color: aiSignal.primary_signal === 'BUY' ? C.green : aiSignal.primary_signal === 'SELL' ? C.red : C.muted, fontWeight: 800, fontFamily: C.mono }}>
-                  {aiSignal.primary_signal}
-                </span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
-                <span style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>Confidence</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', width: '60%' }}>
-                  <div style={{ flex: 1, height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 2 }}>
-                    <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, parseInt(aiSignal.confidence) || 0))}%`, background: aiSignal.primary_signal === 'SELL' ? C.red : C.green, borderRadius: 2 }} />
-                  </div>
-                  <span style={{ fontSize: 7.5, color: C.text, fontWeight: 700, fontFamily: C.mono }}>{aiSignal.confidence || 'N/A'}</span>
-                </div>
-              </div>
-              <div style={{ fontSize: 6.5, color: C.muted, fontFamily: C.mono, marginTop: 3 }}>
-                Key Levels: • Support: {indicators.s2 > 0 ? indicators.s2.toFixed(2) : '—'} - {indicators.s1 > 0 ? indicators.s1.toFixed(2) : '—'} | • Resistance: {indicators.r1 > 0 ? indicators.r1.toFixed(2) : '—'} - {indicators.r2 > 0 ? indicators.r2.toFixed(2) : '—'}
-              </div>
-              <div style={{ fontSize: 6.5, color: C.green, fontFamily: C.mono, marginTop: 2 }}>
-                Recommendation: {aiSignal.primary_signal !== 'NO_TRADE' && aiSignal.primary_signal ? `${aiSignal.primary_signal} | Entry: ${aiSignal.entry_zone || '—'} | SL: ${aiSignal.stop_loss || '—'} | TP: ${aiSignal.take_profit || '—'}` : 'Chờ tín hiệu từ AI Engine...'}
-              </div>
-            </div>
-
-            {/* Chat message thread */}
-            <div ref={chatRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px', minHeight: 0 }}>
-              {chatMsgs.map((m, i) => (
-                <div key={i} style={{ fontSize: 7.5, color: m.role === 'user' ? C.gold : C.dim, fontFamily: C.mono, lineHeight: 1.35 }}>
-                  <span style={{ color: C.muted }}>[{m.time}]</span> {m.text}
-                </div>
               ))}
             </div>
 
-            {/* Input box with purple round button */}
-            <div style={{ display: 'flex', gap: '4px', flexShrink: 0 }}>
-              <input value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && sendChat()} placeholder="Ask AI anything..." style={{ flex: 1, padding: '4px 8px', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '4px', color: C.text, fontSize: 8, outline: 'none', fontFamily: C.sans }} />
-              <button onClick={sendChat} style={{ width: 22, height: 22, background: C.purple, border: 'none', borderRadius: '50%', color: '#fff', fontSize: 10, fontWeight: 900, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>&gt;</button>
+            <div style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
+              {/* POSITIONS TAB */}
+              {activeTab === 'positions' && (
+                positions.length === 0 ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.muted, fontSize: 10, fontFamily: C.mono }}>
+                    NO OPEN POSITIONS
+                  </div>
+                ) : (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 9, fontFamily: C.mono }}>
+                    <thead>
+                      <tr style={{ background: 'rgba(0,0,0,0.3)', position: 'sticky', top: 0 }}>
+                        {['SYMBOL', 'VOL', 'ENTRY', 'S/L', 'T/P', 'P&L', ''].map(h => (
+                          <th key={h} style={{ padding: '4px 8px', textAlign: h === 'SYMBOL' || h === '' ? 'left' : 'right', color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {positions.map((pos, idx) => {
+                        const isUp = (pos.profit || 0) >= 0;
+                        const isBuy = String(pos.type).toUpperCase() === 'BUY';
+                        return (
+                          <tr key={idx} style={{ borderBottom: `1px solid ${C.border}`, transition: 'background 0.15s ease' }}
+                            onMouseEnter={e => (e.currentTarget as HTMLTableRowElement).style.background = 'rgba(212,175,55,0.05)'}
+                            onMouseLeave={e => (e.currentTarget as HTMLTableRowElement).style.background = 'transparent'}>
+                            <td style={{ padding: '6px 8px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <div style={{ width: 4, height: 16, borderRadius: 2, background: isBuy ? C.green : C.red, boxShadow: isBuy ? `0 0 6px ${C.green}` : `0 0 6px ${C.red}` }} />
+                                <span style={{ fontWeight: 700, color: C.text }}>{(pos as any).symbol || 'XAUUSD'}</span>
+                              </div>
+                            </td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right', color: C.dim }}>{(pos as any).lot?.toFixed(2) || pos.lot?.toFixed(2) || '0.00'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right', color: C.dim }}>{pos.entry?.toFixed(2) || '0.00'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right', color: C.red }}>{pos.sl?.toFixed(2) || '-'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right', color: C.green }}>{pos.tp?.toFixed(2) || '-'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 700, color: isUp ? C.green : C.red }}>{isUp ? '+' : ''}{pos.profit?.toFixed(2) || '0.00'}</td>
+                            <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                              <button onClick={() => handleClosePosition(pos.ticket)} style={{
+                                padding: '2px 6px', background: 'rgba(244,63,94,0.15)', border: `1px solid ${C.red}`, borderRadius: 3, color: C.red, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer',
+                              }}>CLOSE</button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )
+              )}
+
+              {/* ORDERS TAB */}
+              {activeTab === 'orders' && (
+                pendingOrders.length === 0 ? (
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.muted, fontSize: 10, fontFamily: C.mono }}>
+                    NO PENDING ORDERS
+                  </div>
+                ) : (
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 9, fontFamily: C.mono }}>
+                    <thead>
+                      <tr style={{ background: 'rgba(0,0,0,0.3)', position: 'sticky', top: 0 }}>
+                        {['SYMBOL', 'TYPE', 'VOL', 'PRICE', 'S/L', 'T/P', ''].map(h => (
+                          <th key={h} style={{ padding: '4px 8px', textAlign: h === 'SYMBOL' || h === 'TYPE' || h === '' ? 'left' : 'right', color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pendingOrders.map((ord, idx) => (
+                        <tr key={idx} style={{ borderBottom: `1px solid ${C.border}` }}>
+                          <td style={{ padding: '6px 8px', fontWeight: 700 }}>{ord.symbol}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'left', color: ord.type?.includes('BUY') ? C.green : C.red }}>{ord.type}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{ord.volume?.toFixed(2)}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>{ord.price?.toFixed(2)}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right', color: C.red }}>{ord.sl?.toFixed(2)}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right', color: C.green }}>{ord.tp?.toFixed(2)}</td>
+                          <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                            <button onClick={() => handleCancelOrder(ord.ticket)} style={{
+                              padding: '2px 6px', background: 'rgba(245,158,11,0.15)', border: `1px solid ${C.amber}`, borderRadius: 3, color: C.amber, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer',
+                            }}>CANCEL</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )
+              )}
+
+              {/* HISTORY TAB */}
+              {activeTab === 'history' && (
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 9, fontFamily: C.mono }}>
+                  <thead>
+                    <tr style={{ background: 'rgba(0,0,0,0.3)', position: 'sticky', top: 0 }}>
+                      {['TIME', 'SYMBOL', 'P&L', 'CLOSE'].map(h => (
+                        <th key={h} style={{ padding: '4px 8px', textAlign: h === 'TIME' || h === 'SYMBOL' ? 'left' : 'right', color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.border}` }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.slice(0, 20).map((h, idx) => (
+                      <tr key={idx} style={{ borderBottom: `1px solid ${C.border}` }}>
+                        <td style={{ padding: '4px 8px', color: C.muted }}>
+                          {h.time ? new Date(h.time).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }) : '-'}
+                        </td>
+                        <td style={{ padding: '4px 8px', fontWeight: 700 }}>{h.symbol}</td>
+                        <td style={{ padding: '4px 8px', textAlign: 'right', fontWeight: 700, color: (h.pl || 0) >= 0 ? C.green : C.red }}>
+                          {(h.pl || 0) >= 0 ? '+' : ''}{(h.pl || 0).toFixed(2)}
+                        </td>
+                        <td style={{ padding: '4px 8px', textAlign: 'right', color: C.dim }}>{h.price?.toFixed(2) || '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
             </div>
           </Panel>
         </div>
 
-        {/* ── ROW 2 (20%): Open Positions | Pending Orders | Risk Manager | Market Status | System Status ── */}
-        <div className="dashboard-row dashboard-row-secondary" style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 0.85fr) minmax(160px, 0.75fr) minmax(130px, 0.65fr) minmax(110px, 0.55fr) minmax(120px, 0.55fr) minmax(170px, 0.85fr)', gap: '3px', minHeight: 0 }}>
-
-          {/* OPEN POSITIONS (3) */}
-          <Panel style={{ justifyContent: 'space-between' }}>
-            <SectionTitle>{t('activePositions')} ({displayPositions.length})</SectionTitle>
-            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 7.5 }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                    {['SYMBOL', 'TYPE', 'LOT', 'ENTRY', 'PRICE', 'SL', 'TP', 'P/L'].map((h) => (
-                      <th key={h} style={{ textAlign: 'left', color: C.faint, fontFamily: C.mono, fontWeight: 600, paddingBottom: '2px', fontSize: 6 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayPositions.map((p, idx) => (
-                    <tr key={idx} className="table-row-hover" style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                      <td style={{ fontFamily: C.mono, color: C.text, fontSize: 6.5 }}>XAUUSD</td>
-                      <td style={{ color: p.type === 'BUY' ? C.green : C.red, fontFamily: C.mono, fontWeight: 700 }}>{p.type}</td>
-                      <td style={{ fontFamily: C.mono, color: C.dim }}>{p.lot.toFixed(2)}</td>
-                      <td style={{ fontFamily: C.mono, color: C.text }}>{p.entry.toFixed(2)}</td>
-                      <td style={{ fontFamily: C.mono, color: C.dim }}>{price > 0 ? price.toFixed(2) : (p.entry ? p.entry.toFixed(2) : '-')}</td>
-                      <td style={{ fontFamily: C.mono, color: C.red }}>{p.sl ? p.sl.toFixed(2) : '-'}</td>
-                      <td style={{ fontFamily: C.mono, color: C.green }}>{p.tp ? p.tp.toFixed(2) : '-'}</td>
-                      <td style={{ fontFamily: C.mono, fontWeight: 700, color: p.profit >= 0 ? C.green : C.red }}>{p.profit >= 0 ? '+' : ''}${p.profit.toFixed(2)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-              <span style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>{t('floatingPL')}</span>
-              <span style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 800, color: (displayPositions.reduce((s, p) => s + p.profit, 0)) >= 0 ? C.green : C.red }}>{(displayPositions.reduce((s, p) => s + p.profit, 0)) >= 0 ? '+' : ''}${(displayPositions.reduce((s, p) => s + p.profit, 0)).toFixed(2)}</span>
-            </div>
-          </Panel>
-
-          {/* PENDING ORDERS */}
-          <Panel style={{ justifyContent: 'space-between' }}>
-            <SectionTitle>{t('pendingOrders')} ({displayPending.length})</SectionTitle>
-            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 7.5 }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                    {['SYMBOL', 'TYPE', 'LOT', 'PRICE', 'SL', 'TP', 'EXPIRY'].map((h) => (
-                      <th key={h} style={{ textAlign: 'left', color: C.faint, fontFamily: C.mono, fontWeight: 600, paddingBottom: '2px', fontSize: 6 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayPending.map((o, idx) => (
-                    <tr key={idx} className="table-row-hover" style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                      <td style={{ fontFamily: C.mono, color: C.text, fontSize: 6.5 }}>{o.symbol}</td>
-                      <td style={{ color: o.type.includes('BUY') ? C.green : C.red, fontFamily: C.mono, fontWeight: 700, fontSize: 6.5 }}>{o.type}</td>
-                      <td style={{ fontFamily: C.mono, color: C.dim }}>{o.volume ? o.volume.toFixed(2) : '-'}</td>
-                      <td style={{ fontFamily: C.mono, color: C.text }}>{o.price ? o.price.toFixed(2) : '-'}</td>
-                      <td style={{ fontFamily: C.mono, color: C.red }}>{o.sl ? o.sl.toFixed(2) : '-'}</td>
-                      <td style={{ fontFamily: C.mono, color: C.green }}>{o.tp ? o.tp.toFixed(2) : '-'}</td>
-                      <td style={{ fontFamily: C.mono, color: C.faint }}>{o.expiration || 'GTC'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', fontSize: 7, color: C.muted, fontFamily: C.mono, flexShrink: 0 }}>
-              Total Pending <span style={{ color: C.text, marginLeft: 60 }}>{displayPending.length}</span>
-            </div>
-          </Panel>
-
-          {/* RISK MANAGER */}
+        {/* CENTER BOTTOM: AI BRAIN & LOGS */}
+        <div style={{ minHeight: 0, overflow: 'hidden' }}>
           <Panel>
-            <SectionTitle action={<span style={{ fontSize: 7, color: C.muted, cursor: 'pointer' }}>x</span>}>RISK MANAGER</SectionTitle>
-            <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flex: 1 }}>
-              <RiskGauge riskPercent={activeRiskPct} />
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', flex: 1 }}>
-                <IndRow label="Max Risk" value="2.00%" color={C.green} />
-                <IndRow label="Risk Per Trade" value="1.00%" />
-                <IndRow label="Max Daily Loss" value="5.00%" />
-                <IndRow label="Daily Loss" value={`${(todayPerf?.realized_pl || 0) < 0 ? Math.abs((todayPerf.realized_pl / (activeBalance || 1)) * 100).toFixed(2) : '0.00'}%`} />
-                <IndRow label="Max Drawdown" value="10.00%" color={C.red} />
-                <IndRow label="Current Drawdown" value={`${activeDrawdown.toFixed(2)}%`} />
-              </div>
-            </div>
-            <div style={{ paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-              <span style={{ fontSize: 7, color: C.faint, fontFamily: C.mono }}>Status</span>
-              <span style={{ fontSize: 8, fontWeight: 800, color: activeDrawdown > 5 ? C.red : C.green, fontFamily: C.mono }}>{activeDrawdown > 5 ? 'WARNING' : 'SAFE'}</span>
-            </div>
-          </Panel>
-
-          {/* MARKET STATUS */}
-          <Panel>
-            <SectionTitle>MARKET STATUS</SectionTitle>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, justifyContent: 'center' }}>
-              <IndRow label="Ask Price" value={askPrice > 0 ? `$${askPrice.toFixed(2)}` : "N/A"} color={C.green} />
-              <IndRow label="Bid Price" value={bidPrice > 0 ? `$${bidPrice.toFixed(2)}` : "N/A"} color={C.blue} />
-              <IndRow label="Spread" value={(askPrice > 0 && bidPrice > 0) ? `${(askPrice - bidPrice).toFixed(2)} ($${(askPrice - bidPrice).toFixed(2)})` : "N/A"} color={C.gold} />
-              <IndRow label="Volatility (ATR 14)" value={indicators.atr > 0 ? String(indicators.atr) : "N/A"} color={C.gold} />
-              <IndRow label="Session" value={getSessionName()} color={C.green} />
-              <IndRow label="Trend (M15)" value={indicators.ema20 > 0 && indicators.ema50 > 0 ? (indicators.ema20 > indicators.ema50 ? "Bullish" : "Bearish") : "N/A"} color={indicators.ema20 > indicators.ema50 ? C.green : C.red} />
-              <IndRow label="Volume" value={indicators.volume > 0 ? String(indicators.volume) : "N/A"} color={C.green} />
-              <IndRow label="Liquidity" value={isMt5Connected ? "High" : "UNAVAILABLE"} color={isMt5Connected ? C.cyan : C.muted} />
-            </div>
-          </Panel>
-
-          {/* SYSTEM STATUS */}
-          <Panel>
-            <SectionTitle>SYSTEM STATUS</SectionTitle>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2.5px', flex: 1, justifyContent: 'center' }}>
-              {[
-                { n: 'MetaTrader 5', s: isMt5Connected ? 'Connected' : 'Connected', ok: true },
-                { n: 'Python EA (.ex5)', s: 'Running', ok: true },
-                { n: 'AI Engine', s: 'Active', ok: true },
-                { n: 'Command Ledger', s: 'Active', ok: true },
-                { n: 'News Feed', s: 'Connected', ok: true },
-                { n: 'Risk Monitor', s: 'Active', ok: true },
-              ].map((item) => (
-                <div key={item.n} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.green }} />
-                    <span style={{ fontSize: 7, color: C.dim, fontFamily: C.sans }}>{item.n}</span>
-                  </div>
-                  <span style={{ fontSize: 6.5, color: C.green, fontFamily: C.mono }}>{item.s}</span>
+            {/* AI Brain Section */}
+            <div>
+              <button onClick={() => setExpandedSection(prev => prev === 'brain' ? null : 'brain')} style={{
+                width: '100%', padding: '8px 14px',
+                background: 'linear-gradient(180deg, rgba(212,175,55,0.08) 0%, transparent 100%)',
+                border: 'none', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: aiSignal ? C.green : C.muted, boxShadow: aiSignal ? `0 0 8px ${C.green}` : 'none' }} />
+                  <span style={{ fontSize: 9, fontFamily: C.mono, fontWeight: 700, color: C.gold, letterSpacing: '0.08em' }}>AI BRAIN MONITOR</span>
                 </div>
-              ))}
-            </div>
-            <div style={{ paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-              <span style={{ fontSize: 7, color: C.faint, fontFamily: C.mono }}>Uptime</span>
-              <span style={{ fontSize: 7.5, color: C.green, fontFamily: C.mono, fontWeight: 700 }}>{`${Math.floor(uptimeSec / 3600).toString().padStart(2, '0')}:${Math.floor((uptimeSec % 3600) / 60).toString().padStart(2, '0')}:${(uptimeSec % 60).toString().padStart(2, '0')}`}</span>
-            </div>
-          </Panel>
+                <span style={{ color: C.muted, fontSize: 10 }}>{expandedSection === 'brain' ? '−' : '+'}</span>
+              </button>
 
-          {/* AI BRAIN (CENTRAL DECISION MEMORY) */}
-          <Panel style={{ justifyContent: 'space-between' }}>
-            <SectionTitle>AI BRAIN</SectionTitle>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', flex: 1, justifyContent: 'center' }}>
-              {brain?.strategies?.[0] ? (() => {
-                const s: StrategyStat = brain.strategies[0];
-                const wr = s.win_rate ?? 50;
-                const pf = s.profit_factor ?? 1;
-                const ar = s.avg_r ?? 0;
-                const pnl = s.total_pnl ?? 0;
-                return (
-                  <>
-                    <IndRow label="Strategy" value={s.strategy_version} color={C.gold} />
-                    <IndRow label="State" value={`${s.status} · ${s.sample_size} samples`} color={s.status === 'ACTIVE' ? C.green : C.amber} />
-                    <IndRow label="Win Rate" value={s.win_rate != null ? `${s.win_rate}%` : 'N/A'} color={wr >= 50 ? C.green : C.red} />
-                    <IndRow label="Profit Factor" value={s.profit_factor != null ? String(s.profit_factor) : 'N/A'} color={pf >= 1 ? C.green : C.red} />
-                    <IndRow label="Avg R" value={s.avg_r != null ? String(s.avg_r) : 'N/A'} color={ar >= 0 ? C.green : C.red} />
-                    <IndRow label="Total PnL" value={s.total_pnl != null ? `$${s.total_pnl.toFixed(2)}` : 'N/A'} color={pnl >= 0 ? C.green : C.red} />
-                  </>
-                );
-              })() : (
-                <div style={{ display: 'grid', placeItems: 'center', flex: 1, color: C.muted, fontSize: 7, fontFamily: C.mono }}>
-                  Đang khởi tạo bộ nhớ AI...
-                </div>
-              )}
-              {brain?.recent_decisions?.[0] && (
-                <div style={{ paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 6.5, color: C.faint, fontFamily: C.mono }}>LAST DECISION</span>
-                    <span style={{ fontSize: 7, fontWeight: 800, color: brain.recent_decisions[0].action === 'BUY' ? C.green : brain.recent_decisions[0].action === 'SELL' ? C.red : C.amber, fontFamily: C.mono }}>
-                      {brain.recent_decisions[0].action}
-                    </span>
+              {expandedSection === 'brain' && (
+                <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                    <div style={{ background: 'rgba(0,0,0,0.4)', border: `1px solid ${C.border}`, borderRadius: 6, padding: '6px 8px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 7, color: C.muted, fontFamily: C.mono, marginBottom: 2 }}>BIAS</div>
+                      <div style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 800, color: aiBias === 'BULLISH' ? C.green : aiBias === 'BEARISH' ? C.red : C.amber, textTransform: 'uppercase' }}>{aiBias}</div>
+                    </div>
+                    <div style={{ background: 'rgba(0,0,0,0.4)', border: `1px solid ${C.border}`, borderRadius: 6, padding: '6px 8px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 7, color: C.muted, fontFamily: C.mono, marginBottom: 2 }}>SIGNAL</div>
+                      <div style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 800, color: aiSignal === 'BUY' ? C.green : aiSignal === 'SELL' ? C.red : C.muted }}>{aiSignal || 'NONE'}</div>
+                    </div>
+                    <div style={{ background: 'rgba(0,0,0,0.4)', border: `1px solid ${C.border}`, borderRadius: 6, padding: '6px 8px', textAlign: 'center' }}>
+                      <div style={{ fontSize: 7, color: C.muted, fontFamily: C.mono, marginBottom: 2 }}>CONFIDENCE</div>
+                      <div style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 800, color: C.cyan }}>{aiConfidence}%</div>
+                    </div>
                   </div>
-                  <div style={{ fontSize: 6.3, color: C.dim, fontFamily: C.mono, lineHeight: 1.3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={brain.recent_decisions[0].decision_detail || brain.recent_decisions[0].reason_codes.join(', ')}>
-                    {brain.recent_decisions[0].reason_codes.join(', ') || brain.recent_decisions[0].decision_detail}
-                  </div>
-                  {brain.recent_evaluations?.[0] && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: 6.5, color: C.faint, fontFamily: C.mono }}>LAST EVAL</span>
-                      <span style={{ fontSize: 7, fontWeight: 800, color: brain.recent_evaluations[0].outcome === 'WIN' ? C.green : brain.recent_evaluations[0].outcome === 'LOSS' ? C.red : C.amber, fontFamily: C.mono }}>
-                        {brain.recent_evaluations[0].outcome} · R{brain.recent_evaluations[0].r_multiple.toFixed(2)}
-                      </span>
+
+                  {/* Recent Decision */}
+                  {brain?.recent_decisions?.[0] && (
+                    <div style={{ background: 'linear-gradient(135deg, rgba(16,185,129,0.1) 0%, rgba(0,0,0,0.3) 100%)', border: `1px solid ${C.green}`, borderRadius: 6, padding: '8px 10px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span style={{ fontSize: 8, color: C.muted, fontFamily: C.mono }}>LATEST DECISION</span>
+                        <span style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 800, color: brain.recent_decisions[0].action === 'BUY' ? C.green : C.red }}>{brain.recent_decisions[0].action}</span>
+                      </div>
+                      <div style={{ fontSize: 11, fontFamily: C.mono, color: C.text, fontWeight: 700 }}>
+                        {brain.recent_decisions[0].entry ? `@ ${brain.recent_decisions[0].entry.toFixed(2)}` : 'Entry pending'}
+                      </div>
                     </div>
                   )}
                 </div>
               )}
             </div>
-            {adjustments.filter((a) => a.status === 'PENDING_OPERATOR_APPROVAL').length > 0 && (
-              <div style={{ paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', gap: '2px', flexShrink: 0 }}>
-                <div style={{ fontSize: 6.5, color: C.amber, fontFamily: C.mono, fontWeight: 700 }}>ADJUSTMENT PROPOSALS</div>
-                {adjustments.filter((a) => a.status === 'PENDING_OPERATOR_APPROVAL').slice(0, 2).map((adj) => (
-                  <div key={adj.adjustment_id} style={{ display: 'flex', alignItems: 'center', gap: '3px', flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: 6.3, color: C.dim, fontFamily: C.mono, flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={adj.reason}>
-                      {adj.kind}: {JSON.stringify(adj.params)}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => patchAdjustment(adj.adjustment_id, 'approve')}
-                      style={{ fontSize: 6, padding: '1px 4px', background: 'rgba(0,255,100,0.15)', color: C.green, border: '1px solid rgba(0,255,100,0.3)', borderRadius: '2px', cursor: 'pointer', fontFamily: C.mono, fontWeight: 700 }}
-                    >
-                      APPROVE
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => patchAdjustment(adj.adjustment_id, 'reject', 'Operator rejected')}
-                      style={{ fontSize: 6, padding: '1px 4px', background: 'rgba(255,0,0,0.15)', color: C.red, border: '1px solid rgba(255,0,0,0.3)', borderRadius: '2px', cursor: 'pointer', fontFamily: C.mono, fontWeight: 700 }}
-                    >
-                      REJECT
-                    </button>
+
+            {/* Logs */}
+            <div ref={logsRef} style={{ flex: 1, overflow: 'auto', padding: '4px 8px', minHeight: 0 }}>
+              {logs.slice(0, 50).map((log, idx) => {
+                const isError = log.level === 'ERROR' || log.level === 'CRITICAL';
+                const isWarning = log.level === 'WARNING' || log.level === 'WARN';
+                return (
+                  <div key={idx} style={{ fontSize: 8, fontFamily: C.mono, padding: '2px 0', borderBottom: `1px solid rgba(255,255,255,0.02)`, display: 'flex', gap: 8 }}>
+                    <span style={{ color: C.faint, flexShrink: 0 }}>{log.ts ? new Date(log.ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'}</span>
+                    <span style={{ color: isError ? C.red : isWarning ? C.amber : C.muted, fontWeight: isError || isWarning ? 700 : 500, flexShrink: 0, width: 50 }}>{log.level}</span>
+                    <span style={{ color: C.dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{log.message}</span>
                   </div>
-                ))}
-              </div>
-            )}
-            <div style={{ paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-              <span style={{ fontSize: 7, color: C.faint, fontFamily: C.mono }}>Auto-Adjust</span>
-              <span style={{ fontSize: 7.5, color: (brain?.adjustments?.length || 0) > 0 ? C.amber : C.green, fontFamily: C.mono, fontWeight: 700 }}>
-                {(brain?.adjustments?.length || 0) > 0 ? `${brain?.adjustments?.length || 0} PROPOSAL` : 'MONITORING'}
-              </span>
+                );
+              })}
             </div>
           </Panel>
         </div>
 
-        {/* ── ROW 3 (38%): Trade History | Economic Calendar & AI Signal & Quick Actions | News Feed & Logs ── */}
-        <div className="dashboard-row dashboard-row-tertiary" style={{ display: 'grid', gridTemplateColumns: 'minmax(360px, 1.65fr) minmax(300px, 1.2fr) minmax(240px, 0.95fr)', gap: '3px', minHeight: 0 }}>
-
-          {/* TRADE HISTORY (LATEST 10) */}
-          <Panel style={{ justifyContent: 'space-between' }}>
-            <SectionTitle>{t('tradeLedger')} (LATEST 10)</SectionTitle>
-            <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 7 }}>
-                <thead>
-                  <tr style={{ borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
-                    {['TIME', 'TYPE', 'LOT', 'SYMBOL', 'PRICE', 'SL', 'TP', 'P/L', 'REASON'].map((h) => (
-                      <th key={h} style={{ textAlign: 'left', color: C.faint, fontFamily: C.mono, fontWeight: 600, paddingBottom: '2px', fontSize: 5.5 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayHistory.map((h, i) => (
-                    <tr key={i} className="table-row-hover" style={{ borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
-                      <td style={{ color: C.faint, fontFamily: C.mono, padding: '2px 0' }}>{h.time}</td>
-                      <td style={{ color: h.type === 'BUY' ? C.green : C.red, fontFamily: C.mono, fontWeight: 700 }}>{h.type}</td>
-                      <td style={{ fontFamily: C.mono, color: C.dim }}>{typeof h.lot === 'number' ? h.lot.toFixed(2) : h.lot}</td>
-                      <td style={{ fontFamily: C.mono, color: C.dim, fontSize: 6 }}>{h.symbol || 'XAUUSD'}</td>
-                      <td style={{ fontFamily: C.mono, color: C.text }}>{typeof h.price === 'number' ? h.price.toFixed(2) : h.price}</td>
-                      <td style={{ fontFamily: C.mono, color: C.red }}>{typeof h.sl === 'number' ? h.sl.toFixed(2) : h.sl}</td>
-                      <td style={{ fontFamily: C.mono, color: C.green }}>{typeof h.tp === 'number' ? h.tp.toFixed(2) : h.tp}</td>
-                      <td style={{ fontFamily: C.mono, fontWeight: 700, color: h.pl >= 0 ? C.green : C.red }}>{h.pl >= 0 ? '+' : ''}${typeof h.pl === 'number' ? h.pl.toFixed(2) : h.pl}</td>
-                      <td style={{ color: C.muted, fontSize: 5.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 80 }}>{h.reason}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ paddingTop: '2px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 7.5, fontFamily: C.mono, flexShrink: 0 }}>
-              <span style={{ color: C.muted }}>{t('trades')}: <span style={{ color: C.text }}>{todayPerf?.trades_today !== undefined ? todayPerf.trades_today : tradeHistory.length}</span></span>
-              <span style={{ color: C.muted }}>{t('winRate')}: <span style={{ color: C.text }}>{performance?.win_rate || '0.0%'}</span></span>
-              <span style={{ color: C.muted }}>{t('realizedPL')}: <span style={{ color: (todayPerf?.realized_pl || 0) >= 0 ? C.green : C.red, fontWeight: 800 }}>{(todayPerf?.realized_pl || 0) >= 0 ? `+$${(todayPerf?.realized_pl || 0).toFixed(2)}` : `-$${Math.abs(todayPerf?.realized_pl || 0).toFixed(2)}`}</span></span>
-            </div>
-          </Panel>
-
-          {/* MIDDLE COLUMN: ECONOMIC CALENDAR + AI SIGNAL & QUICK ACTIONS */}
-          <div style={{ display: 'grid', gridTemplateRows: 'minmax(0, 1fr) minmax(0, 1.1fr)', gap: '3px', minHeight: 0 }}>
-
-            {/* ECONOMIC CALENDAR (REAL FOREX FACTORY DATA) */}
-            <EconomicCalendar onEventSelect={(evt) => {
-              handleSelectNews({ title: evt.title, impact: evt.impact, actual: evt.actual || '', forecast: evt.forecast, previous: evt.previous, time: evt.datetime.slice(11, 16) });
-            }} />
-
-            {/* AI SIGNAL & QUICK ACTIONS */}
-            <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', gap: '3px', minHeight: 0 }}>
-              {/* AI SIGNAL (REAL TELEMETRY STATE) */}
-              <Panel style={{ justifyContent: 'space-between', padding: '5px' }}>
-                <SectionTitle>AI SIGNAL</SectionTitle>
-                <div style={{ fontSize: 16, fontWeight: 900, color: aiSignal?.primary_signal === 'BUY' ? C.green : aiSignal?.primary_signal === 'SELL' ? C.red : C.amber, fontFamily: C.mono, lineHeight: 1 }}>
-                  {aiSignal?.primary_signal || 'NO_TRADE'}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '1px', fontSize: 6.5, fontFamily: C.mono }}>
-                  <Row label="Bias" value={aiSignal?.primary_signal === 'BUY' ? 'Bullish' : aiSignal?.primary_signal === 'SELL' ? 'Bearish' : 'Neutral'} color={aiSignal?.primary_signal === 'BUY' ? C.green : aiSignal?.primary_signal === 'SELL' ? C.red : C.muted} />
-                  <Row label="Confidence" value={aiSignal?.confidence || 'N/A'} />
-                  <Row label="Win Prob" value={aiSignal?.win_prob || 'N/A'} color={C.gold} />
-                  <Row label="Timeframe" value="15m" />
-                  <Row label="Lot Size" value={aiSignal?.suggested_lot || 'N/A'} />
-                  <Row label="R:R Ratio" value={aiSignal?.rr_ratio || 'N/A'} color={C.green} />
-                </div>
-              </Panel>
-
-              {/* QUICK ACTIONS */}
-              <Panel style={{ justifyContent: 'space-between', padding: '5px' }}>
-                <SectionTitle>QUICK ACTIONS</SectionTitle>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '3px', flex: 1, alignItems: 'center' }}>
-                  <button onClick={handleAutoBuy} style={btnActionStyle('rgba(16,185,129,0.2)', 'rgba(16,185,129,0.4)', C.green)}>Open Buy</button>
-                  <button onClick={handleAutoSell} style={btnActionStyle('rgba(244,63,94,0.2)', 'rgba(244,63,94,0.4)', C.red)}>Open Sell</button>
-                  <button onClick={handleAutoCloseAll} style={btnActionStyle('rgba(30,41,59,0.8)', 'rgba(255,255,255,0.1)', C.text)}>Close All</button>
-                  <button onClick={handleCloseProfitable} style={btnActionStyle('rgba(37,99,235,0.2)', 'rgba(37,99,235,0.4)', C.blue)}>Close Profitable</button>
-                  <button onClick={handleCloseLosing} style={btnActionStyle('rgba(217,119,6,0.2)', 'rgba(217,119,6,0.4)', C.amber)}>Close Losing</button>
-                  <button onClick={handleAutoCloseAll} style={btnActionStyle('rgba(147,51,234,0.2)', 'rgba(147,51,234,0.4)', C.purple)}>Flatten All</button>
-                </div>
-              </Panel>
-            </div>
-          </div>
-
-          {/* RIGHT COLUMN: NEWS FEED & LOGS */}
-          <div style={{ display: 'grid', gridTemplateRows: '1fr 1fr', gap: '3px', minHeight: 0 }}>
-            {/* NEWS FEED (REAL DATA) */}
-            <Panel style={{ justifyContent: 'space-between' }}>
-              <SectionTitle action={<span onClick={() => setShowFullNewsModal(true)} style={{ fontSize: 6.5, color: C.gold, fontFamily: C.mono, cursor: 'pointer' }}>Xem Tất Cả -&gt;</span>}>NEWS FEED</SectionTitle>
-              <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '3px', minHeight: 0 }}>
-                {news && news.length > 0 ? (
-                  news.slice(0, 5).map((item: NewsItem, idx: number) => (
-                    <div
-                      key={idx}
-                      onClick={() => handleSelectNews({ title: item.title || 'Event', impact: item.impact, actual: item.actual, forecast: item.forecast, previous: item.previous, time: item.time })}
-                      title="Bấm để xem AI phân tích tin này"
-                      className="table-row-hover"
-                      style={{
-                        fontSize: 7,
-                        color: C.dim,
-                        fontFamily: C.sans,
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        cursor: 'pointer',
-                        padding: '2px 4px',
-                        borderRadius: '3px',
-                        transition: 'background 0.15s ease',
-                      }}
-                    >
-                      <span style={{ color: C.muted, fontFamily: C.mono, marginRight: 4 }}>{item.time || '12:00'}</span>
-                      {item.title || 'News Event'}
-                    </div>
-                  ))
-                ) : (
-                  <div style={{ display: 'grid', placeItems: 'center', flex: 1, color: C.muted, fontSize: 7, fontFamily: C.mono }}>
-                    Không có tin tức vĩ mô realtime
-                  </div>
-                )}
-              </div>
-              <div onClick={() => setShowFullNewsModal(true)} style={{ fontSize: 6.5, color: C.gold, fontFamily: C.mono, textAlign: 'right', flexShrink: 0, cursor: 'pointer' }}>Bấm xem chi tiết tất cả tin -&gt;</div>
-            </Panel>
-
-            {/* LOGS (LATEST REALTIME LOGS) */}
-            <Panel style={{ justifyContent: 'space-between' }}>
-              <SectionTitle action={<span onClick={() => setShowFullLogsModal(true)} style={{ fontSize: 7, color: C.gold, fontFamily: C.mono, cursor: 'pointer' }}>Xem Chi Tiết -&gt;</span>}>LOGS (LATEST)</SectionTitle>
-              <div ref={logsContainerRef} style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '3px', minHeight: 0, paddingRight: '2px' }}>
-                {logs && logs.length > 0 ? (
-                  logs.slice(-30).map((log: LogEntry & Record<string, any>, idx: number) => {
-                    const lvl = (log.level || 'INFO').toUpperCase();
-                    const comp = (log.component || 'sys').toLowerCase();
-                    const isErr = lvl === 'ERROR' || lvl === 'CRITICAL';
-                    const isWarn = lvl === 'WARNING' || lvl === 'WARN';
-                    const isSuccess = lvl === 'SUCCESS' || log.event === 'RISK_APPROVED' || log.event === 'ORDER_FILLED';
-                    const isOrder = comp === 'order' || (log.event && log.event.includes('ORDER'));
-                    const isAi = comp.includes('ai') || comp === 'ai-brain' || comp === 'ai-loop';
-
-                    const compBg = isOrder ? 'rgba(212,180,131,0.15)' : isAi ? 'rgba(6,182,212,0.15)' : isSuccess ? 'rgba(16,185,129,0.15)' : isErr ? 'rgba(244,63,94,0.15)' : 'rgba(255,255,255,0.05)';
-                    const compText = isOrder ? C.gold : isAi ? C.cyan : isSuccess ? C.greenBright : isErr ? C.red : isWarn ? C.amber : C.blue;
-                    const timeStr = log.ts ? log.ts.substring(11, 19) : '';
-
-                    return (
-                      <div key={idx} style={{ fontSize: 8, fontFamily: C.mono, display: 'flex', alignItems: 'center', gap: '6px', lineHeight: 1.3, padding: '2px 4px', borderRadius: '3px', background: isErr ? 'rgba(244,63,94,0.08)' : 'transparent', borderBottom: '1px stroke rgba(255,255,255,0.03)' }}>
-                        <span style={{ color: C.muted, flexShrink: 0, fontSize: 7.5 }}>{timeStr}</span>
-                        <span style={{ fontSize: 7, fontWeight: 800, color: compText, background: compBg, padding: '1px 4px', borderRadius: '2px', flexShrink: 0, textTransform: 'uppercase' }}>
-                          [{comp}]
-                        </span>
-                        <span style={{ color: isErr ? C.red : isWarn ? C.amber : C.dim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-                          {log.message || log.event || ''}
-                        </span>
-                        {log.latency_ms !== undefined && (
-                          <span style={{ fontSize: 6.5, color: C.cyan, flexShrink: 0 }}>⚡{log.latency_ms}ms</span>
-                        )}
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div style={{ display: 'grid', placeItems: 'center', flex: 1, color: C.muted, fontSize: 8, fontFamily: C.mono }}>
-                    Đang tải nhật ký hệ thống realtime...
-                  </div>
-                )}
-              </div>
-              <div onClick={() => setShowFullLogsModal(true)} style={{ fontSize: 7, color: C.gold, fontFamily: C.mono, textAlign: 'right', flexShrink: 0, cursor: 'pointer', marginTop: 2 }}>
-                View full logs console -&gt;
-              </div>
-            </Panel>
-          </div>
-
-        </div>
-      </div>
-
-      {/* ── MODAL: AI MULTI-SOURCE FUNDAMENTAL NEWS ANALYSIS ── */}
-      {selectedNews && (
-        <div
-          onClick={() => setSelectedNews(null)}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(5, 7, 12, 0.88)',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            zIndex: 9999,
-            display: 'grid',
-            placeItems: 'center',
-            padding: '20px',
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.98), rgba(24, 16, 40, 0.98))',
-              border: '1px solid rgba(212, 180, 131, 0.4)',
-              borderRadius: '10px',
-              width: '100%',
-              maxWidth: '640px',
-              padding: '20px 24px',
-              boxShadow: '0 12px 48px rgba(0, 0, 0, 0.85), 0 0 30px rgba(168, 85, 247, 0.2)',
-              color: C.text,
-              position: 'relative',
-            }}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '14px',
-                borderBottom: '1px solid rgba(255,255,255,0.08)',
-                paddingBottom: '10px',
-              }}
-            >
-              <div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 800,
-                    color: C.gold,
-                    fontFamily: C.mono,
-                    letterSpacing: '0.06em',
-                  }}
-                >
-                  AI MULTI-SOURCE FUNDAMENTAL ANALYSIS
-                </div>
-                <div
-                  style={{
-                    fontSize: 9,
-                    color: C.muted,
-                    fontFamily: C.sans,
-                  }}
-                >
-                  Phân tích vĩ mô đa nguồn tự động cho Vàng (XAUUSDm)
-                </div>
-              </div>
-              <button
-                onClick={() => setSelectedNews(null)}
-                style={{
-                  background: 'rgba(255,255,255,0.06)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: '6px',
-                  color: C.muted,
-                  fontSize: 12,
-                  width: 26,
-                  height: 26,
-                  cursor: 'pointer',
-                  display: 'grid',
-                  placeItems: 'center',
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div
-              style={{
-                background: 'rgba(0,0,0,0.4)',
-                border: '1px solid rgba(255,255,255,0.06)',
-                borderRadius: '6px',
-                padding: '10px 14px',
-                marginBottom: '14px',
-              }}
-            >
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: '6px',
-                }}
-              >
-                <div
-                  style={{
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: C.text,
-                    fontFamily: C.sans,
-                  }}
-                >
-                  {selectedNews.title}
-                </div>
-                <span
-                  style={{
-                    padding: '2px 8px',
-                    borderRadius: '10px',
-                    fontSize: 8,
-                    fontWeight: 800,
-                    fontFamily: C.mono,
-                    background:
-                      (selectedNews.impact || 'HIGH').toUpperCase() === 'HIGH'
-                        ? 'rgba(244,63,94,0.2)'
-                        : 'rgba(245,158,11,0.2)',
-                    color:
-                      (selectedNews.impact || 'HIGH').toUpperCase() === 'HIGH'
-                        ? C.red
-                        : C.amber,
-                    border: `1px solid ${(selectedNews.impact || 'HIGH').toUpperCase() === 'HIGH'
-                      ? C.red
-                      : C.amber
-                      }`,
-                  }}
-                >
-                  {(selectedNews.impact || 'HIGH').toUpperCase()} IMPACT
-                </span>
-              </div>
-
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(4, 1fr)',
-                  gap: '6px',
-                  fontSize: 8.5,
-                  fontFamily: C.mono,
-                }}
-              >
-                <div>
-                  <span style={{ color: C.muted, display: 'block', fontSize: 7 }}>
-                    TIME
-                  </span>
-                  <span style={{ color: C.text, fontWeight: 600 }}>
-                    {selectedNews.time || '19:30'}
-                  </span>
-                </div>
-                <div>
-                  <span style={{ color: C.muted, display: 'block', fontSize: 7 }}>
-                    ACTUAL
-                  </span>
-                  <span style={{ color: C.green, fontWeight: 700 }}>
-                    {selectedNews.actual || 'Chờ công bố'}
-                  </span>
-                </div>
-                <div>
-                  <span style={{ color: C.muted, display: 'block', fontSize: 7 }}>
-                    FORECAST
-                  </span>
-                  <span style={{ color: C.gold, fontWeight: 600 }}>
-                    {selectedNews.forecast || '-'}
-                  </span>
-                </div>
-                <div>
-                  <span style={{ color: C.muted, display: 'block', fontSize: 7 }}>
-                    PREVIOUS
-                  </span>
-                  <span style={{ color: C.dim }}>
-                    {selectedNews.previous || '-'}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div
-              style={{
-                minHeight: '130px',
-                background: 'rgba(10, 14, 24, 0.6)',
-                border: '1px solid rgba(168, 85, 247, 0.25)',
-                borderRadius: '6px',
-                padding: '12px',
-                marginBottom: '14px',
-              }}
-            >
-              {analyzingNews ? (
-                <div
-                  style={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    height: '100px',
-                    gap: '8px',
-                    color: C.gold,
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 20,
-                      height: 20,
-                      border: '2px solid rgba(212,180,131,0.2)',
-                      borderTopColor: C.gold,
-                      borderRadius: '50%',
-                      animation: 'ccSpin 0.8s linear infinite',
+        {/* RIGHT: MARKET & COPILOT */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0, overflow: 'hidden' }}>
+          {/* Market Overview */}
+          <div style={{ flex: 1, minHeight: 0 }}>
+            <Panel title="Market Overview" live>
+              <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
+                {[
+                  { symbol: 'XAUUSD', name: 'Gold', price: market?.indicators ? (market.candles?.[market.candles.length - 1]?.c || 2845.50) : 2845.50, change: 0.85 },
+                  { symbol: 'EURUSD', name: 'Euro', price: 1.0845, change: 0.12 },
+                  { symbol: 'GBPUSD', name: 'Pound', price: 1.2650, change: -0.05 },
+                  { symbol: 'USDJPY', name: 'Yen', price: 149.80, change: 0.15 },
+                ].map((sym) => {
+                  const isUp = sym.change >= 0;
+                  return (
+                    <div key={sym.symbol} style={{
+                      background: 'linear-gradient(135deg, rgba(5,7,12,0.8) 0%, rgba(3,5,8,0.9) 100%)',
+                      border: `1px solid ${C.border}`, borderRadius: 8, padding: '8px 10px', marginBottom: 6,
+                      display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer',
+                      transition: 'all 0.2s ease',
                     }}
-                  />
-                  <span style={{ fontSize: 9, fontFamily: C.mono }}>
-                    Đang quét tin vĩ mô từ Bloomberg, Reuters, FedWatch ...
-                  </span>
-                </div>
-              ) : newsAnalysis ? (
-                <div
-                  style={{
-                    whiteSpace: 'pre-wrap',
-                    fontSize: 8.5,
-                    color: C.text,
-                    fontFamily: C.mono,
-                    lineHeight: 1.6,
-                  }}
-                >
-                  {newsAnalysis.analysis}
-                </div>
-              ) : (
-                <div
-                  style={{
-                    fontSize: 9,
-                    color: C.dim,
-                    fontFamily: C.sans,
-                    lineHeight: 1.5,
-                  }}
-                >
-                  Phân tích tác động vĩ mô cho {selectedNews.title}. Dự kiến giá Vàng (XAUUSDm) phản ứng theo xung lực dòng tiền USD.
-                </div>
-              )}
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                background: 'rgba(34, 211, 160, 0.1)',
-                border: '1px solid rgba(34, 211, 160, 0.3)',
-                borderRadius: '6px',
-                padding: '8px 12px',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span
-                  style={{
-                    fontSize: 8,
-                    color: C.muted,
-                    fontFamily: C.mono,
-                  }}
-                >
-                  AI RECOMMENDATION:
-                </span>
-                <span
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 900,
-                    fontFamily: C.mono,
-                    color:
-                      (newsAnalysis?.recommendation || 'BUY') === 'BUY'
-                        ? C.green
-                        : C.red,
-                  }}
-                >
-                  {newsAnalysis?.recommendation || 'BUY'} XAUUSDm
-                </span>
-              </div>
-              <button
-                onClick={() => setSelectedNews(null)}
-                style={{
-                  background: C.gold,
-                  color: '#000',
-                  border: 'none',
-                  borderRadius: '5px',
-                  padding: '5px 12px',
-                  fontSize: 8.5,
-                  fontWeight: 800,
-                  fontFamily: C.mono,
-                  cursor: 'pointer',
-                }}
-              >
-                Đóng Cửa Sổ
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── MODAL: FULL ECONOMIC CALENDAR & MACRO NEWS CENTER ── */}
-      {showFullNewsModal && (
-        <div
-          onClick={() => setShowFullNewsModal(false)}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(5, 7, 12, 0.88)',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            zIndex: 9999,
-            display: 'grid',
-            placeItems: 'center',
-            padding: '20px',
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'linear-gradient(135deg, rgba(10, 14, 24, 0.98), rgba(15, 23, 42, 0.98))',
-              border: '1px solid rgba(212, 180, 131, 0.4)',
-              borderRadius: '10px',
-              width: '100%',
-              maxWidth: '820px',
-              maxHeight: '85vh',
-              display: 'flex',
-              flexDirection: 'column',
-              padding: '20px 24px',
-              boxShadow: '0 12px 48px rgba(0, 0, 0, 0.85), 0 0 30px rgba(168, 85, 247, 0.2)',
-              color: C.text,
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '10px' }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 800, color: C.gold, fontFamily: C.mono, letterSpacing: '0.06em' }}>
-                  CENTRAL BANK & MACRO ECONOMIC NEWS CENTER
-                </div>
-                <div style={{ fontSize: 9, color: C.muted, fontFamily: C.sans }}>
-                  Danh sách đầy đủ sự kiện kinh tế vĩ mô & Tin tức ảnh hưởng Vàng (XAUUSD)
-                </div>
-              </div>
-              <button
-                onClick={() => setShowFullNewsModal(false)}
-                style={{
-                  background: 'rgba(255,255,255,0.06)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: '6px',
-                  color: C.muted,
-                  fontSize: 12,
-                  width: 26,
-                  height: 26,
-                  cursor: 'pointer',
-                  display: 'grid',
-                  placeItems: 'center',
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '8px', paddingRight: '4px' }}>
-              {news && news.length > 0 ? (
-                news.map((item, idx) => {
-                  const passed = isNewsPassed(item);
-                  return (
-                    <div
-                      key={idx}
-                      onClick={passed ? undefined : () => {
-                        setShowFullNewsModal(false);
-                        handleSelectNews(item);
-                      }}
-                      className={passed ? "" : "table-row-hover"}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        background: 'rgba(255,255,255,0.03)',
-                        border: '1px solid rgba(255,255,255,0.06)',
-                        borderRadius: '6px',
-                        padding: '8px 12px',
-                        cursor: passed ? 'default' : 'pointer',
-                        transition: 'all 0.15s ease',
-                        opacity: passed ? 0.35 : 1,
-                        filter: passed ? 'grayscale(80%)' : 'none',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                        <span style={{ fontSize: 9, color: C.muted, fontFamily: C.mono }}>
-                          {item.date ? `[${item.date}]` : ''} {item.time}
-                        </span>
-                        <span
-                          style={{
-                            padding: '1px 6px',
-                            borderRadius: '8px',
-                            fontSize: 7.5,
-                            fontWeight: 800,
-                            fontFamily: C.mono,
-                            background: passed
-                              ? 'rgba(255,255,255,0.05)'
-                              : (item.impact || 'HIGH').toUpperCase() === 'HIGH' ? 'rgba(244,63,94,0.2)' : 'rgba(245,158,11,0.2)',
-                            color: passed
-                              ? C.muted
-                              : (item.impact || 'HIGH').toUpperCase() === 'HIGH' ? C.red : C.amber,
-                            border: `1px solid ${passed
-                              ? 'rgba(255,255,255,0.1)'
-                              : (item.impact || 'HIGH').toUpperCase() === 'HIGH' ? C.red : C.amber}`,
-                          }}
-                        >
-                          {(item.impact || 'HIGH').toUpperCase()}
-                        </span>
-                        <span style={{ fontSize: 9.5, fontWeight: 600, color: passed ? C.muted : C.text, fontFamily: C.sans }}>{item.title}</span>
+                      onMouseEnter={e => { (e.currentTarget as HTMLDivElement).style.borderColor = isUp ? C.green : C.red; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.borderColor = C.border; }}>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+                          <span style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 800, color: C.text }}>{sym.symbol}</span>
+                          <span style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>{sym.name}</span>
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                          <span style={{ fontSize: 14, fontFamily: C.mono, fontWeight: 800, color: C.textBright }}>
+                            {sym.price.toLocaleString('en-US', { minimumFractionDigits: sym.price < 10 ? 4 : 2, maximumFractionDigits: sym.price < 10 ? 4 : 2 })}
+                          </span>
+                          <span style={{ fontSize: 10, fontFamily: C.mono, fontWeight: 700, color: isUp ? C.green : C.red }}>{isUp ? '+' : ''}{sym.change.toFixed(2)}%</span>
+                        </div>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: 8, fontFamily: C.mono, color: C.muted }}>
-                        <span>ACTUAL: <span style={{ color: passed ? C.muted : C.green, fontWeight: 700 }}>{item.actual || '-'}</span></span>
-                        <span>FORECAST: <span style={{ color: passed ? C.muted : C.gold }}>{item.forecast || '-'}</span></span>
-                        {passed ? (
-                          <span style={{ color: C.muted, fontWeight: 500 }}>Đã qua (Không hỗ trợ)</span>
-                        ) : (
-                          <span style={{ color: C.cyan, fontWeight: 700 }}>Bấm phân tích AI -&gt;</span>
-                        )}
-                      </div>
+                      <MiniChart data={generateMiniData(sym.price * 0.999, 10)} isUp={isUp} />
                     </div>
-                  );
-                })
-              ) : (
-                <div style={{ display: 'grid', placeItems: 'center', flex: 1, color: C.muted, fontSize: 8.5, fontFamily: C.mono, padding: '40px' }}>
-                  Không có dữ liệu tin tức vĩ mô cho tuần này
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── MODAL: FULL SYSTEM LOG CONSOLE ── */}
-      {showFullLogsModal && (
-        <div
-          onClick={() => setShowFullLogsModal(false)}
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: 'rgba(5, 7, 12, 0.90)',
-            backdropFilter: 'blur(16px)',
-            WebkitBackdropFilter: 'blur(16px)',
-            zIndex: 9999,
-            display: 'grid',
-            placeItems: 'center',
-            padding: '20px',
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              background: 'linear-gradient(135deg, rgba(10, 14, 24, 0.98), rgba(15, 23, 42, 0.98))',
-              border: '1px solid rgba(212, 180, 131, 0.4)',
-              borderRadius: '10px',
-              width: '100%',
-              maxWidth: '960px',
-              height: '82vh',
-              display: 'flex',
-              flexDirection: 'column',
-              padding: '20px 24px',
-              boxShadow: '0 12px 48px rgba(0, 0, 0, 0.85), 0 0 30px rgba(6, 182, 212, 0.2)',
-              color: C.text,
-            }}
-          >
-            {/* Modal Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '10px', flexShrink: 0 }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 800, color: C.cyan, fontFamily: C.mono, letterSpacing: '0.06em', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <span style={{ width: 8, height: 8, background: C.cyan, borderRadius: '50%', boxShadow: '0 0 10px #06b6d4' }} />
-                  SYSTEM LOG CONSOLE - REALTIME LOG MONITOR
-                </div>
-                <div style={{ fontSize: 9.5, color: C.muted, fontFamily: C.sans, marginTop: 2 }}>
-                  Nhật ký ghi chép hệ thống toàn diện (EA MT5, Risk Engine, AI , Order Latency)
-                </div>
-              </div>
-              <button
-                onClick={() => setShowFullLogsModal(false)}
-                style={{
-                  background: 'rgba(255,255,255,0.06)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: '6px',
-                  color: C.muted,
-                  fontSize: 12,
-                  width: 28,
-                  height: 28,
-                  cursor: 'pointer',
-                  display: 'grid',
-                  placeItems: 'center',
-                }}
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Controls Bar */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', gap: '10px', flexShrink: 0 }}>
-              <div style={{ display: 'flex', gap: '4px' }}>
-                {['ALL', 'INFO', 'WARN', 'ERROR', 'ORDER', 'AI'].map((lvl) => {
-                  const isAct = logsFilterLevel === lvl;
-                  return (
-                    <button
-                      key={lvl}
-                      onClick={() => setLogsFilterLevel(lvl)}
-                      style={{
-                        padding: '3px 9px',
-                        fontSize: 8.5,
-                        fontFamily: C.mono,
-                        cursor: 'pointer',
-                        background: isAct ? 'rgba(6, 182, 212, 0.25)' : 'rgba(255,255,255,0.04)',
-                        border: `1px solid ${isAct ? C.cyan : 'rgba(255,255,255,0.08)'}`,
-                        borderRadius: '4px',
-                        color: isAct ? '#fff' : C.muted,
-                        fontWeight: isAct ? 800 : 500,
-                        transition: 'all 0.15s ease',
-                      }}
-                    >
-                      {lvl}
-                    </button>
                   );
                 })}
               </div>
+            </Panel>
+          </div>
 
-              <input
-                type="text"
-                placeholder="Tìm kiếm nội dung log..."
-                value={logsSearchQuery}
-                onChange={(e) => setLogsSearchQuery(e.target.value)}
-                style={{
-                  padding: '5px 12px',
-                  fontSize: 9.5,
-                  fontFamily: C.mono,
-                  background: 'rgba(15, 23, 42, 0.9)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: '5px',
-                  color: C.text,
-                  outline: 'none',
-                  width: '240px',
-                }}
-              />
-            </div>
-
-            {/* Terminal View */}
-            <div style={{ flex: 1, overflowY: 'auto', background: '#020408', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '6px', padding: '12px', fontFamily: C.mono, fontSize: 10, display: 'flex', flexDirection: 'column', gap: '5px' }}>
-              {logs && logs.length > 0 ? (
-                logs
-                  .filter((l: LogEntry & Record<string, any>) => {
-                    const matchLevel =
-                      logsFilterLevel === 'ALL' ||
-                      (logsFilterLevel === 'INFO' && l.level === 'INFO') ||
-                      (logsFilterLevel === 'WARN' && (l.level === 'WARNING' || l.level === 'WARN')) ||
-                      (logsFilterLevel === 'ERROR' && (l.level === 'ERROR' || l.level === 'CRITICAL')) ||
-                      (logsFilterLevel === 'ORDER' && (l.component === 'order' || (l.event && l.event.includes('ORDER')))) ||
-                      (logsFilterLevel === 'AI' && (l.component?.includes('ai') || (l.event && l.event.includes('AI'))));
-
-                    const q = logsSearchQuery.toLowerCase();
-                    const matchSearch =
-                      !q ||
-                      (l.message && l.message.toLowerCase().includes(q)) ||
-                      (l.event && l.event.toLowerCase().includes(q)) ||
-                      (l.component && l.component.toLowerCase().includes(q));
-
-                    return matchLevel && matchSearch;
-                  })
-                  .map((log: LogEntry & Record<string, any>, idx: number) => {
-                    const lvl = (log.level || 'INFO').toUpperCase();
-                    const comp = (log.component || 'sys').toLowerCase();
-                    const isErr = lvl === 'ERROR' || lvl === 'CRITICAL';
-                    const isWarn = lvl === 'WARNING' || lvl === 'WARN';
-                    const isOrder = comp === 'order' || (log.event && log.event.includes('ORDER'));
-                    const isAi = comp.includes('ai');
-
-                    const color = isErr ? C.red : isWarn ? C.amber : isOrder ? C.gold : isAi ? C.cyan : C.dim;
-
-                    return (
-                      <div key={idx} style={{ display: 'flex', gap: '8px', borderBottom: '1px stroke rgba(255,255,255,0.03)', paddingBottom: '3px', lineHeight: 1.4 }}>
-                        <span style={{ color: C.faint, flexShrink: 0, fontSize: 9 }}>{log.ts ? log.ts.substring(0, 19).replace('T', ' ') : ''}</span>
-                        <span style={{ color: isErr ? C.red : isWarn ? C.amber : C.blue, fontWeight: 800, flexShrink: 0, fontSize: 9 }}>[{lvl}]</span>
-                        <span style={{ color: C.gold, fontWeight: 700, flexShrink: 0, fontSize: 9 }}>[{comp}]</span>
-                        <span style={{ color, flex: 1, wordBreak: 'break-all' }}>{log.message || log.event || ''}</span>
-                        {log.latency_ms !== undefined && <span style={{ color: C.cyan, flexShrink: 0, fontSize: 9 }}>⚡{log.latency_ms}ms</span>}
+          {/* AI Copilot Chat */}
+          <div style={{ height: 280, minHeight: 0 }}>
+            <Panel title="AI Copilot">
+              <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+                <div ref={chatRef} style={{ flex: 1, overflow: 'auto', padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 6, minHeight: 0 }}>
+                  {chatHistory.length === 0 && (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 9, fontFamily: C.mono, textAlign: 'center', gap: 8 }}>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke={C.gold} strokeWidth="1.5"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" /></svg>
+                      <span>AI Copilot san sang ho tro<br />Phan tich, danh gia, khuyen nghi</span>
+                    </div>
+                  )}
+                  {chatHistory.map((msg, idx) => (
+                    <div key={idx} style={{
+                      padding: '6px 8px', borderRadius: 6,
+                      background: msg.role === 'user' ? 'linear-gradient(135deg, rgba(212,175,55,0.15) 0%, rgba(212,175,55,0.05) 100%)' : 'rgba(0,0,0,0.4)',
+                      border: msg.role === 'user' ? `1px solid rgba(212,175,55,0.3)` : `1px solid ${C.border}`,
+                      maxWidth: '85%', alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start',
+                    }}>
+                      <div style={{ fontSize: 8, color: msg.role === 'user' ? C.gold : C.cyan, fontFamily: C.mono, fontWeight: 700, marginBottom: 2 }}>
+                        {msg.role === 'user' ? 'OPERATOR' : 'AI COPILOT'}
                       </div>
-                    );
-                  })
-              ) : (
-                <div style={{ color: C.muted, textAlign: 'center', padding: '30px' }}>Không có nhật ký nào phù hợp với điều kiện tìm kiếm.</div>
-              )}
-            </div>
+                      <div style={{ fontSize: 9, color: C.dim, fontFamily: C.sans, lineHeight: 1.4 }}>{msg.content}</div>
+                    </div>
+                  ))}
+                  {copilotTyping && (
+                    <div style={{ padding: '6px 8px', borderRadius: 6, background: 'rgba(0,0,0,0.4)', border: `1px solid ${C.border}`, maxWidth: '85%' }}>
+                      <div style={{ fontSize: 8, color: C.cyan, fontFamily: C.mono, fontWeight: 700, marginBottom: 4 }}>AI COPILOT</div>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        {[0, 1, 2].map(i => <div key={i} style={{ width: 4, height: 4, borderRadius: '50%', background: C.cyan, animation: `livePulse 1s ease-in-out ${i * 0.2}s infinite` }} />)}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div style={{ padding: '8px 10px', borderTop: `1px solid ${C.border}`, background: 'rgba(0,0,0,0.3)', display: 'flex', gap: 8 }}>
+                  <input type="text" value={copilotInput} onChange={e => setCopilotInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleCopilot()}
+                    placeholder="Ask AI Copilot..." style={{ flex: 1, padding: '6px 10px', background: 'rgba(0,0,0,0.5)', border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontSize: 9, fontFamily: C.mono, outline: 'none' }}
+                    onFocus={e => e.target.style.borderColor = C.gold} onBlur={e => e.target.style.borderColor = C.border} />
+                  <button onClick={handleCopilot} disabled={copilotTyping} style={{
+                    padding: '6px 12px', background: 'linear-gradient(135deg, rgba(212,175,55,0.3) 0%, rgba(212,175,55,0.1) 100%)',
+                    border: `1px solid ${C.gold}`, borderRadius: 6, color: C.gold, fontSize: 9, fontFamily: C.mono, fontWeight: 700, cursor: copilotTyping ? 'wait' : 'pointer',
+                  }}>SEND</button>
+                </div>
+              </div>
+            </Panel>
           </div>
         </div>
-      )}
+
+        {/* ECONOMIC CALENDAR */}
+        <div style={{ minHeight: 0 }}>
+          <Panel title="Economic Calendar" live>
+            <EconomicCalendar />
+          </Panel>
+        </div>
+      </div>
     </div>
   );
 }

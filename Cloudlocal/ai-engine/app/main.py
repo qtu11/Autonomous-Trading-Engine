@@ -1,5 +1,6 @@
 """
 AI Engine Service - Handles AI model inference and analysis
+FIXED: ATR calculation, confidence bounds
 """
 import os
 import asyncio
@@ -48,15 +49,20 @@ class AnalysisResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global redis_client
-    redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
-    await redis_client.ping()
-    logger.info("AI Engine connected to Redis")
+    try:
+        redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, decode_responses=True)
+        await redis_client.ping()
+        logger.info("AI Engine connected to Redis")
+    except Exception as e:
+        logger.warning(f"Redis connection failed: {e}")
+        redis_client = None
     yield
-    await redis_client.close()
+    if redis_client:
+        await redis_client.close()
     logger.info("AI Engine shutdown")
 
 
-app = FastAPI(title="GoldQuant AI Engine", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="GoldQuant AI Engine", version="1.0.1", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -64,7 +70,7 @@ async def health_check():
     return {
         "status": "UP",
         "service": "GoldQuant AI Engine",
-        "version": "1.0.0",
+        "version": "1.0.1",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "redis_connected": redis_client is not None
     }
@@ -118,12 +124,16 @@ async def analyze_market(request: AnalysisRequest):
         elif (signal == "BUY" and rsi > 70) or (signal == "SELL" and rsi < 30):
             confidence -= 15
 
-        if atr >= 4.0:
+        # FIX: ATR threshold for XAUUSD (around $2-4 is typical)
+        if atr >= 3.0:
             confidence += 5
 
+        # FIX: Clamp confidence between 0 and 100
         confidence = max(0, min(100, confidence))
 
-        sl_dist = max(3.0, atr * 1.5)
+        # FIX: Use ATR value directly if provided, otherwise calculate
+        atr_value = float(atr) if atr else 2.5
+        sl_dist = max(3.0, atr_value * 1.5)
         tp_dist = sl_dist * 2.0
 
         if signal == "BUY":
@@ -139,8 +149,10 @@ async def analyze_market(request: AnalysisRequest):
             stop_loss = 0
             take_profit = 0
 
-        risk_amount = balance * 0.01
-        suggested_lot = round(max(0.01, min(2.0, risk_amount / (sl_dist * 100))), 2)
+        # FIX: Safe risk calculation
+        risk_amount = balance * 0.01 if balance > 0 else 100
+        risk_per_pip = sl_dist if sl_dist > 0 else 3.0
+        suggested_lot = round(max(0.01, min(2.0, risk_amount / (risk_per_pip * 100))), 2)
 
         risk_level = "LOW" if confidence > 80 else "MEDIUM" if confidence > 60 else "HIGH"
 
@@ -153,9 +165,10 @@ async def analyze_market(request: AnalysisRequest):
             reasoning_parts.append("EMA crossover neutral - No clear trend")
 
         reasoning_parts.append(f"RSI: {rsi:.1f}")
-        reasoning_parts.append(f"ATR: {atr:.2f} (volatility {'high' if atr >= 4 else 'normal'})")
+        reasoning_parts.append(f"ATR: {atr_value:.2f} (volatility {'high' if atr_value >= 3 else 'normal'})")
 
-        if account_info.get("floating_pnl", 0) < -100:
+        floating_pnl = account_info.get("floating_pnl", 0) or 0
+        if floating_pnl < -100:
             reasoning_parts.append("WARNING: Significant floating loss detected")
 
         reasoning = ". ".join(reasoning_parts)
@@ -192,8 +205,8 @@ async def analyze_news_impact(news_event: Dict[str, Any], indicators: Dict[str, 
         try:
             f_clean = str(forecast).replace("%", "").replace("K", "").replace("M", "").strip()
             p_clean = str(previous).replace("%", "").replace("K", "").replace("M", "").strip()
-            f_val = float(f_clean)
-            p_val = float(p_clean)
+            f_val = float(f_clean) if f_clean else None
+            p_val = float(p_clean) if p_clean else None
         except Exception:
             pass
 

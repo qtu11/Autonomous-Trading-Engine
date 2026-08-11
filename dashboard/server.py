@@ -8,6 +8,7 @@ import urllib.request
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 
 import pandas as pd
@@ -740,13 +741,6 @@ def validate_environment_security() -> dict[str, Any]:
         warnings.append("TELEGRAM_BOT_TOKEN / TELEGRAM_TOKEN")
     if not TELEGRAM_CHAT_ID:
         warnings.append("TELEGRAM_CHAT_ID")
-        
-    if not (MT5_SAVED_LOGIN or os.getenv("MT5_LOGIN")):
-        warnings.append("MT5_LOGIN")
-    if not (MT5_SAVED_PASSWORD or os.getenv("MT5_PASSWORD")):
-        warnings.append("MT5_PASSWORD")
-    if not (MT5_SAVED_SERVER or os.getenv("MT5_SERVER")):
-        warnings.append("MT5_SERVER")
 
     if missing_required:
         logger.error(f"🔒 SECURITY AUDIT WARNING - THIẾU BIẾN TRONG .ENV: {', '.join(missing_required)}")
@@ -2045,6 +2039,12 @@ def get_mt5_telemetry():
         telemetry["broker"] = et.get("broker") or telemetry["broker"]
         telemetry["currency"] = "USD"
 
+    if not telemetry.get("news"):
+        try:
+            telemetry["news"] = fetch_real_economic_calendar()
+        except Exception:
+            telemetry["news"] = []
+
     telemetry["latency_ms"] = round((time.time() - t0) * 1000, 1)
     return telemetry
 
@@ -2260,16 +2260,13 @@ LIVE_BROKER_COMPANY = os.getenv("ATE_LIVE_BROKER_COMPANY") or os.getenv("QUANTAI
 
 @app.post("/api/v1/bridge/commands/claim", dependencies=[Depends(require_bridge_token)])
 async def claim_command(req: CommandClaimRequest):
+    # Auto-identity: the EA self-reports its real account (login/server/company)
+    # on every claim/telemetry/heartbeat, so no pre-configured login allowlist is
+    # needed. Access is gated by the bridge token + armed mode only.
     identity_ok = False
-    active_login = MT5_SAVED_LOGIN or DEMO_LOGIN or LIVE_LOGIN
-    active_server = MT5_SAVED_SERVER or DEMO_SERVER or LIVE_SERVER
-    
     if req.trade_mode in ("DEMO", "REAL") and (DEMO_ARMED or LIVE_ARMED):
-        if active_login > 0:
-            identity_ok = (req.account_login == active_login)
-        else:
-            identity_ok = True
-            
+        identity_ok = True
+
     if (
         req.symbol != EXECUTION_SYMBOL
         or not identity_ok
@@ -2392,21 +2389,49 @@ _EA_PUSHED_CANDLES: dict[str, dict[str, list[dict[str, Any]]]] = {}
 _EA_CANDLE_SYMBOL_ALIASES = ("XAUUSDm", "XAUUSD.m", "XAUUSD_m", "XAUUSD", "GOLD")
 
 
+def _candle_symbol_key(symbol: str) -> str:
+    """Normalize broker symbol spellings to a base key for candle matching.
+
+    Exness spellings vary per account type (XAUUSDm, XAUUSDc, XAUUSD.a ...),
+    so strip separators and map any XAUUSD*/GOLD* variant to its base asset.
+    """
+    key = (symbol or "").strip().upper()
+    for sep in (".", "_", "-"):
+        key = key.split(sep, 1)[0]
+    if key.startswith("XAUUSD"):
+        return "XAUUSD"
+    if key.startswith("GOLD"):
+        return "GOLD"
+    if len(key) > 4 and key[-1] in ("M", "C"):
+        key = key[:-1]
+    return key
+
+
 def _find_ea_candles(symbol: str, tf: str) -> tuple[list[dict[str, Any]], str | None]:
     """Look up EA-pushed candles with symbol/timeframe alias normalization.
 
     Returns (candles, actual_timeframe) or ([], None). Tries the exact key
-    first, then symbol aliases, then any timeframe stored for a matching
-    symbol (preferring the requested TF, then M15, then the first available).
+    first, then symbol aliases (including broker-suffix normalization such as
+    XAUUSDc/XAUUSDm), then any timeframe stored for a matching symbol
+    (preferring the requested TF, then M15, then the first available).
     """
     exact = _EA_PUSHED_CANDLES.get(symbol)
     if exact is not None and tf in exact:
         return exact[tf], tf
+    wanted = _candle_symbol_key(symbol)
+    matches: list[str] = []
     for alias in _EA_CANDLE_SYMBOL_ALIASES:
-        if alias in _EA_PUSHED_CANDLES and tf in _EA_PUSHED_CANDLES[alias]:
-            return _EA_PUSHED_CANDLES[alias][tf], tf
-    for alias in _EA_CANDLE_SYMBOL_ALIASES:
-        stored = _EA_PUSHED_CANDLES.get(alias)
+        if alias in _EA_PUSHED_CANDLES and alias not in matches:
+            matches.append(alias)
+    for stored_key in _EA_PUSHED_CANDLES:
+        if stored_key not in matches and _candle_symbol_key(stored_key) == wanted:
+            matches.append(stored_key)
+    for key in matches:
+        stored = _EA_PUSHED_CANDLES[key]
+        if tf in stored:
+            return stored[tf], tf
+    for key in matches:
+        stored = _EA_PUSHED_CANDLES[key]
         if not stored:
             continue
         for cand_tf in (tf, "M15", "M5", "M1", "H1", "H4", "D1"):
@@ -2415,6 +2440,36 @@ def _find_ea_candles(symbol: str, tf: str) -> tuple[list[dict[str, Any]], str | 
         first_tf = next(iter(stored))
         return stored[first_tf], first_tf
     return [], None
+
+
+def _ea_multi_timeframe_data(symbol: str) -> dict[str, pd.DataFrame]:
+    """Build multi-timeframe DataFrames from EA-pushed candles (no MT5 required).
+
+    Each requested timeframe is mapped to the closest stored EA timeframe so the
+    AI prompt receives real price rows even when the EA only pushes its chart TF.
+    """
+    stored = _EA_PUSHED_CANDLES.get(symbol) or {}
+    preferred = {
+        "M15": ("M15", "M5", "M1", "H1", "H4", "D1"),
+        "H1": ("H1", "M30", "M15", "M5", "M1", "H4", "D1"),
+        "H4": ("H4", "H1", "M30", "M15", "M5", "M1", "D1"),
+        "M5": ("M5", "M1", "M15", "H1", "H4", "D1"),
+    }
+    mtf: dict[str, pd.DataFrame] = {}
+    for wanted, order in preferred.items():
+        for cand_tf in order:
+            rows = stored.get(cand_tf)
+            if not rows:
+                continue
+            df = pd.DataFrame(rows)
+            if "ts" in df.columns:
+                df["time"] = pd.to_datetime(df["ts"], errors="coerce")
+            elif "t" in df.columns:
+                df["time"] = pd.to_datetime(df["t"], errors="coerce")
+            df = df.rename(columns={"o": "open", "h": "high", "l": "low", "c": "close", "v": "tick_volume"})
+            mtf[wanted] = df
+            break
+    return mtf
 
 
 @app.post("/api/v1/bridge/candles", dependencies=[Depends(require_bridge_token)])
@@ -3015,31 +3070,84 @@ def issue_ai_trade_command(is_live: bool = True) -> dict[str, Any]:
             "indicators": {}, "proposal": {},
         }
 
-    if mt5 is None or not (mt5.terminal_info() if mt5 else False):
+    # ── Native MT5 context (Windows host) ───────────────────────────────────
+    mt5_ok = bool(mt5) and bool(mt5.terminal_info())
+    # EA bridge fallback (Linux Docker backend): live data pushed by the MQL5 EA.
+    ea_fresh = (
+        _LAST_EA_TELEMETRY is not None
+        and _LAST_EA_HEARTBEAT is not None
+        and (datetime.now(timezone.utc) - _LAST_EA_HEARTBEAT).total_seconds() <= EA_HEARTBEAT_STALE_SECONDS * 6
+    )
+
+    if mt5_ok:
+        tick = mt5.symbol_info_tick(EXECUTION_SYMBOL)
+        account = mt5.account_info()
+        spec = get_symbol_spec(EXECUTION_SYMBOL)
+        if tick is None or account is None or spec is None:
+            return {
+                "status": "SKIPPED",
+                "reason_codes": ["REJECT_MARKET_DATA_UNAVAILABLE"],
+                "command": None, "pos_count": 0, "total_pnl": 0.0,
+                "indicators": {}, "proposal": {},
+            }
+        indicators = get_technical_indicators(EXECUTION_SYMBOL)
+        mtf_data = fetch_mt5_multi_timeframe(EXECUTION_SYMBOL)
+        positions = list(mt5.positions_get(symbol=EXECUTION_SYMBOL) or [])
+        balance    = float(account.balance)
+        equity     = float(account.equity)
+        margin_free = float(account.margin_free)
+        pos_count  = len(positions)
+    elif ea_fresh:
+        # EA-bridge mode: build virtual tick/account/spec from pushed telemetry.
+        et: dict[str, Any] = _LAST_EA_TELEMETRY  # type: ignore[assignment]
+        ask_f = float(et.get("ask", 0) or 0)
+        bid_f = float(et.get("bid", 0) or 0)
+        if ask_f <= 0 or bid_f <= 0:
+            return {
+                "status": "SKIPPED",
+                "reason_codes": ["REJECT_MARKET_DATA_UNAVAILABLE"],
+                "command": None, "pos_count": 0, "total_pnl": 0.0,
+                "indicators": {}, "proposal": {},
+            }
+        tick = SimpleNamespace(ask=ask_f, bid=bid_f)
+        account = SimpleNamespace(
+            balance=float(et.get("balance", 0) or 0),
+            equity=float(et.get("equity", 0) or 0),
+            margin_free=float(et.get("margin_free", 0) or 0),
+            profit=float(et.get("profit", 0) or 0),
+            login=int(et.get("account_id", 0) or 0),
+            server=str(et.get("server") or ""),
+            currency="USD",
+        )
+        spec = SimpleNamespace(
+            symbol=EXECUTION_SYMBOL,
+            volume_min=0.01, volume_max=100.0, volume_step=0.01,
+            tick_size=0.01, trade_tick_size=0.01,
+            tick_value=1.0, trade_tick_value=1.0,
+            max_spread=30.0,
+        )
+        positions = []
+        balance    = float(account.balance)
+        equity     = float(account.equity)
+        margin_free = float(account.margin_free)
+        pos_count  = int(et.get("positions", 0) or 0)
+        ea_candles, _ea_tf = _find_ea_candles(EXECUTION_SYMBOL, "M15")
+        if not ea_candles:
+            return {
+                "status": "SKIPPED",
+                "reason_codes": ["REJECT_MARKET_DATA_UNAVAILABLE"],
+                "command": None, "pos_count": pos_count, "total_pnl": 0.0,
+                "indicators": {}, "proposal": {},
+            }
+        indicators = calc_indicators_from_candles(ea_candles)
+        mtf_data = _ea_multi_timeframe_data(EXECUTION_SYMBOL)
+    else:
         return {
             "status": "SKIPPED",
             "reason_codes": ["REJECT_MT5_UNAVAILABLE"],
             "command": None, "pos_count": 0, "total_pnl": 0.0,
             "indicators": {}, "proposal": {},
         }
-
-    tick = mt5.symbol_info_tick(EXECUTION_SYMBOL)
-    account = mt5.account_info()
-    spec = _get_symbol_spec(EXECUTION_SYMBOL)
-    if tick is None or account is None or spec is None:
-        return {
-            "status": "SKIPPED",
-            "reason_codes": ["REJECT_MARKET_DATA_UNAVAILABLE"],
-            "command": None, "pos_count": 0, "total_pnl": 0.0,
-            "indicators": {}, "proposal": {},
-        }
-
-    indicators = get_technical_indicators(EXECUTION_SYMBOL)
-    mtf_data = fetch_mt5_multi_timeframe(EXECUTION_SYMBOL)
-    positions = list(mt5.positions_get(symbol=EXECUTION_SYMBOL) or [])
-    balance    = float(account.balance)
-    equity     = float(account.equity)
-    margin_free = float(account.margin_free)
 
     system_prompt, user_prompt = build_ai_trading_prompt(
         symbol=EXECUTION_SYMBOL,
@@ -3109,8 +3217,8 @@ def issue_ai_trade_command(is_live: bool = True) -> dict[str, Any]:
         volume_min=float(spec.volume_min),
         volume_max=float(spec.volume_max),
         volume_step=float(spec.volume_step),
-        tick_size=float(spec.trade_tick_size),
-        tick_value=float(spec.trade_tick_value),
+        tick_size=float(getattr(spec, "trade_tick_size", getattr(spec, "tick_size", 0.01))),
+        tick_value=float(getattr(spec, "trade_tick_value", getattr(spec, "tick_value", 1.0))),
         max_spread=30.0,
     )
     rs_snapshot = AccountSnapshot(
@@ -3120,7 +3228,6 @@ def issue_ai_trade_command(is_live: bool = True) -> dict[str, Any]:
     )
     rs_policy = RiskPolicy(execution_enabled=True)
 
-    pos_count = len(positions)
     total_pnl  = sum(float(getattr(p, "profit", 0)) for p in positions)
     decision   = evaluate_risk(
         proposal=proposal,
@@ -3199,7 +3306,8 @@ def issue_ai_trade_command(is_live: bool = True) -> dict[str, Any]:
         desired_volume=base_vol,
         existing_lot_volumes=[float(getattr(p, "volume", 0)) for p in prev_pos],
         risk_per_lot=(abs(float(proposal.entry or 0) - float(proposal.stop_loss or 0))
-                      / spec.tick_size * spec.trade_tick_value),
+                      / float(getattr(spec, "trade_tick_size", getattr(spec, "tick_size", 0.01)))
+                      * float(getattr(spec, "trade_tick_value", getattr(spec, "tick_value", 1.0)))),
         equity=equity,
         spec=rs_spec,
         max_basket_loss_fraction=MAX_BASKET_LOSS_FRACTION,
@@ -4181,8 +4289,11 @@ async def _ai_decision_loop() -> None:
                         ind_info = result.get("indicators") or {}
                         prop_info = result.get("proposal") or {}
                         ai_dec  = result.get("ai_decision") or {}
-                        raw_positions = (mt5.positions_get(symbol=EXECUTION_SYMBOL) or mt5.positions_get() or [])
-                        active_cnt = len(raw_positions)
+                        if bool(mt5) and mt5.terminal_info():
+                            raw_positions = (mt5.positions_get(symbol=EXECUTION_SYMBOL) or mt5.positions_get() or [])
+                            active_cnt = len(raw_positions)
+                        else:
+                            active_cnt = int((_LAST_EA_TELEMETRY or {}).get("positions", 0) or 0)
 
                         ema20 = float(ind_info.get("ema20") or 0.0)
                         ema50 = float(ind_info.get("ema50") or 0.0)

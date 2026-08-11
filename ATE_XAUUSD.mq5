@@ -15,26 +15,24 @@ input string   InpApiUrl           = "https://autonomous-trading-engine.vercel.a
 input ulong    InpMagicNumber      = 888999;                 // EA Magic Number
 input string   InpSymbol           = "XAUUSDm";              // Trading Symbol (Blank for auto-detect chart)
 input int      InpPollIntervalSec  = 1;                      // AI Protocol Poll Interval (seconds)
-input bool     InpExecutionEnabled = true;                // Fail closed: execution starts DISABLED unless explicitly enabled
-input string   InpBridgeToken      = "20022007@Tu";                   // Required Bearer token for protected bridge endpoints (set in terminal/input params)
-input string   InpExecutorId       = "ate-ea-local";        // Unique executor identity for command leases
-input bool     InpVerifyAccount    = true;                  // Strict Account Verification (DEMO + LIVE allowlist)
+input bool     InpExecutionEnabled = true;                   // Fail closed: execution starts DISABLED unless explicitly enabled
+input string   InpBridgeToken      = "20022007@Tu";          // Required Bearer token for protected bridge endpoints (set in terminal/input params)
+input string   InpExecutorId       = "ate-ea-local";         // Unique executor identity for command leases
+input bool     InpVerifyAccount    = true;                   // Strict Account Verification (broker company allowlist only; account identity is self-reported to the backend)
 input string   InpExpectedCompany   = "Exness Technologies Ltd"; // Broker company allowlist
-input long     InpExpectedLiveLogin = 0;                    // LIVE account allowlist (0 = not configured -> LIVE refused)
-input string   InpExpectedLiveServer= "";                   // LIVE server allowlist (empty = not configured)
 input double   InpMaxSpread        = 0.50;                   // XAUUSDm raw-price spread cap
-input int      InpMaxPositions     = 5;                     // Matching symbol/magic position cap (kept in sync with backend risk policy)
+input int      InpMaxPositions     = 5;                      // Matching symbol/magic position cap (kept in sync with backend risk policy)
 input int      InpMaxDeviationPts  = 50;                     // Broker request deviation cap
 input int      InpCalendarIntervalSec = 300;                 // Economic calendar push interval (seconds)
 input int      InpMaxConsecutiveFailures = 5;                // Backoff threshold before slowing poll
 input int      InpTelemetryIntervalSec = 5;                  // Telemetry/heartbeat interval (seconds, >=1)
 input int      InpClaimIntervalSec   = 3;                    // Claim poll interval (seconds, >=1, < command TTL)
-input bool     InpNewsProtectionEnabled = true;             // Block new BUY/SELL entries around High impact USD news
-input int      InpProtectionIntervalSec = 30;               // News protection state poll interval (seconds)
-input bool     InpChartMarkupEnabled = true;               // Render AI chart markup (OB, FVG, BOS/CHoCH, swing, trendline...) on chart
-input int      InpMarkupReRenderSec  = 5;                  // Chart markup re-render interval (seconds)
-input int      InpMarkupMaxObjects   = 120;                // Markup object cap drawn per refresh
-input int      InpCandlesIntervalSec = 30;                 // Real-time live candles push interval (seconds)
+input bool     InpNewsProtectionEnabled = true;              // Block new BUY/SELL entries around High impact USD news
+input int      InpProtectionIntervalSec = 30;                // News protection state poll interval (seconds)
+input bool     InpChartMarkupEnabled = true;                 // Render AI chart markup (OB, FVG, BOS/CHoCH, swing, trendline...) on chart
+input int      InpMarkupReRenderSec  = 5;                    // Chart markup re-render interval (seconds)
+input int      InpMarkupMaxObjects   = 120;                  // Markup object cap drawn per refresh
+input int      InpCandlesIntervalSec = 30;                   // Real-time live candles push interval (seconds)
 
 //--- Global Variables
 CTrade         m_trade;
@@ -130,8 +128,6 @@ bool IsAuthorizedEnvironment()
    if(!InpVerifyAccount)
       return true;
 
-   long login      = AccountInfoInteger(ACCOUNT_LOGIN);
-   string server   = AccountInfoString(ACCOUNT_SERVER);
    string company  = AccountInfoString(ACCOUNT_COMPANY);
    long accountMode = AccountInfoInteger(ACCOUNT_TRADE_MODE);
 
@@ -142,11 +138,10 @@ bool IsAuthorizedEnvironment()
    }
    if(accountMode == ACCOUNT_TRADE_MODE_REAL)
    {
-      // Fail closed: LIVE is only accepted when the operator explicitly
-      // configured a LIVE login/server on this EA instance.
-      if(InpExpectedLiveLogin <= 0)      return false;
-      if(login != InpExpectedLiveLogin)  return false;
-      if(StringLen(InpExpectedLiveServer) > 0 && server != InpExpectedLiveServer) return false;
+      // Auto-identity: LIVE accounts are accepted without a pre-configured
+      // login/server allowlist. The EA self-reports its real account (login,
+      // server, company) to the backend on every telemetry/heartbeat/claim,
+      // so the web dashboard "logs in" automatically from the EA itself.
       if(company != InpExpectedCompany)  return false;
       return true;
    }

@@ -1,28 +1,25 @@
 """
 Trading System Configuration
-All settings centralized for easy configuration
+Standalone version - no pydantic dependency
 """
-from pydantic_settings import BaseSettings
-from typing import Optional
-from enum import Enum
+import os
+from typing import Optional, List
 
 
-class TradingMode(str, Enum):
-    """Trading mode selection"""
-    PAPER = "paper"          # Paper trading (no real money)
-    LIVE = "live"            # Live trading
-    BACKTEST = "backtest"    # Historical backtesting
+class TradingMode:
+    PAPER = "paper"
+    LIVE = "live"
+    BACKTEST = "backtest"
 
 
-class Broker(str, Enum):
-    """Supported brokers"""
+class Broker:
     BINANCE = "binance"
     BINANCE_FUTURES = "binance_futures"
     FOREX_COM = "forex_com"
     IC_MARKETS = "ic_markets"
 
 
-class Settings(BaseSettings):
+class Settings:
     """Application settings"""
     
     # App
@@ -37,24 +34,20 @@ class Settings(BaseSettings):
     SELECTED_BROKER: Broker = Broker.BINANCE
     
     # Risk Management
-    MAX_RISK_PER_TRADE: float = 1.0        # % of equity
-    MAX_DAILY_LOSS: float = 3.0            # % of equity
+    MAX_RISK_PER_TRADE: float = 1.0
+    MAX_DAILY_LOSS: float = 3.0
     MAX_CONSECUTIVE_LOSSES: int = 3
     MAX_OPEN_TRADES: int = 2
-    POSITION_SIZE_METHOD: str = "fixed"    # fixed, kelly, martingale
+    POSITION_SIZE_METHOD: str = "fixed"
     
-    # Broker API - BINANCE
-    BINANCE_API_KEY: Optional[str] = None
-    BINANCE_API_SECRET: Optional[str] = None
+    # Broker API
+    BINANCE_API_KEY: Optional[str] = os.getenv("BINANCE_API_KEY")
+    BINANCE_API_SECRET: Optional[str] = os.getenv("BINANCE_API_SECRET")
     BINANCE_TESTNET: bool = True
-    
-    # Broker API - FOREX
-    FOREX_API_KEY: Optional[str] = None
-    FOREX_API_SECRET: Optional[str] = None
     
     # Trading Parameters
     DEFAULT_TIMEFRAME: str = "1h"
-    SYMBOLS: list = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
+    SYMBOLS: List[str] = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
     
     # SMC Settings
     SWING_LOOKBACK: int = 20
@@ -78,13 +71,11 @@ class Settings(BaseSettings):
     EMA_9_PERIOD: int = 9
     EMA_21_PERIOD: int = 21
     RSI_PERIOD: int = 14
-    RSI_5M_PERIOD: int = 14
     ADX_PERIOD: int = 14
     MACD_FAST: int = 12
     MACD_SLOW: int = 26
     MACD_SIGNAL: int = 9
     ATR_PERIOD: int = 14
-    VOL_SMA_PERIOD: int = 20
     
     # Signal Thresholds
     ADX_STRONG_THRESHOLD: float = 25.0
@@ -97,38 +88,30 @@ class Settings(BaseSettings):
     TP1_RISK_MULT: float = 0.5
     TP2_RISK_MULT: float = 1.0
     TP3_RISK_MULT: float = 2.0
-    TP4_RISK_MULT: float = 3.0
-    TP5_RISK_MULT: float = 5.0
-    
-    # Partial TP
-    PARTIAL_TP1_PERCENT: float = 0.25
-    PARTIAL_TP2_PERCENT: float = 0.25
-    
-    # Trailing Stop
-    TRAILING_START_R: float = 2.0
-    TRAILING_DISTANCE_R: float = 1.0
     
     # Filters
     REQUIRE_ADX_FILTER: bool = True
     REQUIRE_VOLUME_FILTER: bool = True
     REQUIRE_HTF_CONFLUENCE: bool = True
     REQUIRE_PATTERN: bool = True
-    REQUIRE_FVG: bool = False
-    REQUIRE_OB: bool = False
-    REQUIRE_LIQUIDITY_SWEEP: bool = False
     KILLZONE_ONLY: bool = False
     
-    # WebSocket
-    WS_HEARTBEAT: int = 30
+    def __init__(self):
+        """Load from environment variables"""
+        self._load_env()
     
-    # Redis
-    REDIS_HOST: str = "localhost"
-    REDIS_PORT: int = 6379
-    REDIS_DB: int = 0
-    
-    class Config:
-        env_file = ".env"
-        case_sensitive = True
+    def _load_env(self):
+        """Load settings from environment"""
+        self.BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", self.BINANCE_API_KEY)
+        self.BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", self.BINANCE_API_SECRET)
+        
+        debug = os.getenv("DEBUG")
+        if debug is not None:
+            self.DEBUG = debug.lower() in ('true', '1', 'yes')
+        
+        symbols = os.getenv("SYMBOLS")
+        if symbols:
+            self.SYMBOLS = [s.strip() for s in symbols.split(',')]
 
 
 # Global settings instance

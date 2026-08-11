@@ -18,10 +18,8 @@ input int      InpPollIntervalSec  = 1;                      // AI Protocol Poll
 input bool     InpExecutionEnabled = true;                // Fail closed: execution starts DISABLED unless explicitly enabled
 input string   InpBridgeToken      = "20022007@Tu";                   // Required Bearer token for protected bridge endpoints (set in terminal/input params)
 input string   InpExecutorId       = "ate-ea-local";        // Unique executor identity for command leases
-input bool     InpVerifyAccount    = true;                  // Strict Account Verification (DEMO + LIVE allowlist)
+input bool     InpVerifyAccount    = true;                  // Strict Account Verification (broker company allowlist only; account identity is self-reported to the backend)
 input string   InpExpectedCompany   = "Exness Technologies Ltd"; // Broker company allowlist
-input long     InpExpectedLiveLogin = 0;                    // LIVE account allowlist (0 = not configured -> LIVE refused)
-input string   InpExpectedLiveServer= "";                   // LIVE server allowlist (empty = not configured)
 input double   InpMaxSpread        = 0.50;                   // XAUUSDm raw-price spread cap
 input int      InpMaxPositions     = 5;                     // Matching symbol/magic position cap (kept in sync with backend risk policy)
 input int      InpMaxDeviationPts  = 50;                     // Broker request deviation cap
@@ -123,8 +121,6 @@ bool IsAuthorizedEnvironment()
    if(!InpVerifyAccount)
       return true;
 
-   long login      = AccountInfoInteger(ACCOUNT_LOGIN);
-   string server   = AccountInfoString(ACCOUNT_SERVER);
    string company  = AccountInfoString(ACCOUNT_COMPANY);
    long accountMode = AccountInfoInteger(ACCOUNT_TRADE_MODE);
 
@@ -135,11 +131,10 @@ bool IsAuthorizedEnvironment()
    }
    if(accountMode == ACCOUNT_TRADE_MODE_REAL)
    {
-      // Fail closed: LIVE is only accepted when the operator explicitly
-      // configured a LIVE login/server on this EA instance.
-      if(InpExpectedLiveLogin <= 0)      return false;
-      if(login != InpExpectedLiveLogin)  return false;
-      if(StringLen(InpExpectedLiveServer) > 0 && server != InpExpectedLiveServer) return false;
+      // Auto-identity: LIVE accounts are accepted without a pre-configured
+      // login/server allowlist. The EA self-reports its real account (login,
+      // server, company) to the backend on every telemetry/heartbeat/claim,
+      // so the web dashboard "logs in" automatically from the EA itself.
       if(company != InpExpectedCompany)  return false;
       return true;
    }
