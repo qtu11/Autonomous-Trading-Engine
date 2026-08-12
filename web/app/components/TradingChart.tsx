@@ -79,6 +79,19 @@ export default function TradingChart({
         fontFamily: 'JetBrains Mono',
         fontSize: 10,
       },
+      localization: {
+        locale: 'en-US',
+        dateFormat: 'yyyy-MM-dd',
+        timeFormatter: (time: number) => {
+          const d = new Date(time * 1000);
+          const day = String(d.getDate()).padStart(2, '0');
+          const month = String(d.getMonth() + 1).padStart(2, '0');
+          const hours = String(d.getHours()).padStart(2, '0');
+          const mins = String(d.getMinutes()).padStart(2, '0');
+          return `${day}/${month} ${hours}:${mins}`;
+        },
+      },
+
       grid: {
         vertLines: { color: C.border, style: 1 },
         horzLines: { color: C.border, style: 1 },
@@ -307,8 +320,14 @@ export default function TradingChart({
     });
   }, [markupData, clearMarkup]);
 
+  // Sync markup prop with markupData state
+  useEffect(() => {
+    if (markup) setMarkupData(markup);
+  }, [markup]);
+
   // PHASE 1.4: Single effect for markup
   useEffect(() => { renderMarkup(); }, [renderMarkup]);
+
 
   // PHASE 1.4: Remove duplicate fetchData (parent already provides candles via prop)
   // Only fetch if no propCandles AND no parent fetch

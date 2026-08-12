@@ -403,8 +403,9 @@ export default function DashboardPage() {
           <div style={{ width: 1, background: C.border }} />
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 7, color: C.muted, fontFamily: C.mono }}>MARGIN</div>
-            <div style={{ fontSize: 14, fontFamily: C.mono, fontWeight: 800, color: marginLevel < 150 ? C.amber : C.dim }}>{marginLevel.toFixed(0)}%</div>
+            <div style={{ fontSize: 14, fontFamily: C.mono, fontWeight: 800, color: marginLevel < 150 && marginLevel > 0 ? C.amber : C.dim }}>{marginLevel >= 999 || marginLevel <= 0 ? 'N/A' : `${marginLevel.toFixed(0)}%`}</div>
           </div>
+
         </div>
 
         <div style={{ flex: 1 }} />
@@ -475,8 +476,14 @@ export default function DashboardPage() {
               </button>
             </div>
             <div style={{ flex: 1, overflow: 'auto' }}>
-              <ControlCenter />
+              <ControlCenter onMethodChange={async (method) => {
+                addNotif(`Trading Method updated to ${method}`, 'info');
+                setMarket(null);
+                const mk = await fetchMarket(selectedSymbol, chartTf);
+                if (mk) setMarket(mk);
+              }} />
             </div>
+
           </Panel>
 
           {!showCompact && (
@@ -698,15 +705,15 @@ export default function DashboardPage() {
 
       {/* QUICK TRADE FLOATING BUTTON */}
       <button onClick={() => setShowQuickTrade(true)} style={{
-        position: 'fixed', bottom: 20, right: showCompact ? 20 : 340,
-        width: 56, height: 56, borderRadius: '50%',
+        position: 'fixed', bottom: 16, right: 16,
+        width: 44, height: 44, borderRadius: '50%',
         background: `linear-gradient(135deg, ${C.gold} 0%, rgba(153,101,21,0.8) 100%)`,
         border: '2px solid rgba(255,255,255,0.2)',
         boxShadow: `0 8px 24px rgba(0,0,0,0.5), 0 0 20px ${C.gold}40`,
         cursor: 'pointer', zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center',
         transition: 'all 0.2s ease',
       }}>
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
       </button>
 
       <QuickTradePanel isOpen={showQuickTrade} onClose={() => setShowQuickTrade(false)} onExecute={handleQuickTrade} currentPrice={market?.candles?.[market.candles.length - 1]?.c || 2845} />
@@ -716,11 +723,6 @@ export default function DashboardPage() {
         setMarket(null);
       }} />
 
-      {showCompact && (
-        <div style={{ position: 'fixed', bottom: 90, right: showCompact ? 20 : 340, zIndex: 50 }}>
-          <RiskCalculator accountBalance={balance} onQuickTrade={handleQuickTrade} />
-        </div>
-      )}
 
       <style>{`
         @keyframes pulse {

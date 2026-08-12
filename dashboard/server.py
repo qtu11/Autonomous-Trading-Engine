@@ -153,10 +153,25 @@ def generate_stub_candles(count: int, tf: str, symbol: str) -> pd.DataFrame:
     except Exception:
         dates = pd.date_range(end=datetime.now(), periods=count, freq="h")
 
-    # Cập nhật base prices theo 2026 thực tế
-    base_prices = {"XAUUSD": 3370, "XAUUSDm": 3370, "EURUSD": 1.085, "GBPUSD": 1.27, "USDJPY": 155.0}
-    base = base_prices.get(symbol, 3370)
-    volatility = base * 0.005
+    # Symbol base price mapping (prevent forex symbols from copying Gold price)
+    sym_up = symbol.upper()
+    if "EUR" in sym_up:
+        base = 1.0850
+    elif "GBP" in sym_up:
+        base = 1.2750
+    elif "JPY" in sym_up:
+        base = 155.20
+    elif "AUD" in sym_up:
+        base = 0.6550
+    elif "CAD" in sym_up:
+        base = 1.3600
+    elif "BTC" in sym_up:
+        base = 95000.0
+    else:
+        base = 2850.0
+
+    volatility = base * 0.003
+
 
     # Use a local RNG to avoid polluting global random state (BUG-013 fix)
     seed = int(datetime.now().timestamp() // 300) + hash(symbol + tf) % 10000

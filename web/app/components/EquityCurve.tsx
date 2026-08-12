@@ -180,7 +180,8 @@ export default function EquityCurve({ initialBalance = 10000, currentEquity = 10
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 7, color: C.muted, fontFamily: C.mono, marginBottom: 2 }}>CURRENT</div>
-          <div style={{ fontSize: 14, fontFamily: C.mono, fontWeight: 800, color: C.text }}>${currentEquity.toLocaleString()}</div>
+          <div style={{ fontSize: 14, fontFamily: C.mono, fontWeight: 800, color: C.text }}>${currentEquity.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 7, color: C.muted, fontFamily: C.mono, marginBottom: 2 }}>CHANGE</div>

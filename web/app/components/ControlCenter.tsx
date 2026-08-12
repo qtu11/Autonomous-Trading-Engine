@@ -39,15 +39,18 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-// FIX LỖI 5: Trading Method buttons work correctly
-// FIX LỖI 6: Only AI Auto toggle, no other modes
-export default function ControlCenter() {
+interface ControlCenterProps {
+  onMethodChange?: (method: string) => void;
+}
+
+export default function ControlCenter({ onMethodChange }: ControlCenterProps = {}) {
   const [status, setStatus] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [aiConfig, setAiConfig] = useState<any>(null);
   const [mt5Login, setMt5Login] = useState('');
   const [mt5Password, setMt5Password] = useState('');
   const [mt5Server, setMt5Server] = useState('');
+
 
   const loadStatus = useCallback(async () => {
     try {
@@ -122,20 +125,21 @@ export default function ControlCenter() {
         </div>
 
         {isConnected ? (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-            <div style={{ padding: '8px 10px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: `1px solid ${C.border}`, textAlign: 'center' }}>
-              <div style={{ fontSize: 7, color: C.muted, marginBottom: 4 }}>ACCOUNT</div>
-              <div style={{ fontSize: 14, fontFamily: C.mono, fontWeight: 800, color: C.gold }}>{status.account?.login || '---'}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
+            <div style={{ padding: '6px 4px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: `1px solid ${C.border}`, textAlign: 'center', overflow: 'hidden' }}>
+              <div style={{ fontSize: 7, color: C.muted, marginBottom: 2 }}>ACCOUNT</div>
+              <div style={{ fontSize: 11, fontFamily: C.mono, fontWeight: 800, color: C.gold, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{status.account?.login || '---'}</div>
             </div>
-            <div style={{ padding: '8px 10px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: `1px solid ${C.border}`, textAlign: 'center' }}>
-              <div style={{ fontSize: 7, color: C.muted, marginBottom: 4 }}>BALANCE</div>
-              <div style={{ fontSize: 14, fontFamily: C.mono, fontWeight: 800, color: C.green }}>${(status.account?.balance || 0).toFixed(2)}</div>
+            <div style={{ padding: '6px 4px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: `1px solid ${C.border}`, textAlign: 'center', overflow: 'hidden' }}>
+              <div style={{ fontSize: 7, color: C.muted, marginBottom: 2 }}>BALANCE</div>
+              <div style={{ fontSize: 11, fontFamily: C.mono, fontWeight: 800, color: C.green, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>${(status.account?.balance || 0).toFixed(2)}</div>
             </div>
-            <div style={{ padding: '8px 10px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: `1px solid ${C.border}`, textAlign: 'center' }}>
-              <div style={{ fontSize: 7, color: C.muted, marginBottom: 4 }}>EQUITY</div>
-              <div style={{ fontSize: 14, fontFamily: C.mono, fontWeight: 800, color: C.cyan }}>${(status.account?.equity || 0).toFixed(2)}</div>
+            <div style={{ padding: '6px 4px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: `1px solid ${C.border}`, textAlign: 'center', overflow: 'hidden' }}>
+              <div style={{ fontSize: 7, color: C.muted, marginBottom: 2 }}>EQUITY</div>
+              <div style={{ fontSize: 11, fontFamily: C.mono, fontWeight: 800, color: C.cyan, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>${(status.account?.equity || 0).toFixed(2)}</div>
             </div>
           </div>
+
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <input type="text" placeholder="MT5 Login" value={mt5Login} onChange={e => setMt5Login(e.target.value)}
@@ -204,8 +208,10 @@ export default function ControlCenter() {
                   await updateTradingMethod(method); 
                   await loadAIConfig();
                   await loadStatus();
+                  onMethodChange?.(method);
                 } catch { /* silent */ } 
               }}
+
                 style={{
                   padding: '6px 12px', 
                   background: isActive ? C.goldDim : 'rgba(0,0,0,0.3)',
