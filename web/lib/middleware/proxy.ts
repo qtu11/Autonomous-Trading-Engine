@@ -32,13 +32,29 @@ export async function authedProxy(
   });
 
   try {
+    let authHeader = (req.headers.authorization as string) || '';
+    if (!authHeader.startsWith('Bearer ') || authHeader === 'Bearer authenticated') {
+      let token = '';
+      if (req.headers.cookie) {
+        const matchAcc = req.headers.cookie.match(/access_token=([^;]+)/);
+        const matchAuth = req.headers.cookie.match(/quantai_auth=([^;]+)/);
+        token = matchAcc ? matchAcc[1] : (matchAuth ? matchAuth[1] : '');
+      }
+      if (token && token !== 'authenticated') {
+        authHeader = `Bearer ${token}`;
+      } else {
+        const bridgeToken = process.env.QUANTAI_BRIDGE_TOKEN || 'openssl_rand_hex_32';
+        authHeader = `Bearer ${bridgeToken}`;
+      }
+    }
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      // Forward Bearer token to backend too (for backend's own auth)
-      'Authorization': req.headers.authorization as string || '',
+      'Authorization': authHeader,
       'X-Forwarded-User': user.login,
       'X-User-Role': user.role,
     };
+
 
     const init: RequestInit = { method, headers };
     if (method !== 'GET' && method !== 'HEAD' && req.body) {

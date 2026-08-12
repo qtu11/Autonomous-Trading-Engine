@@ -142,10 +142,10 @@ export default function EquityCurve({ initialBalance = 10000, currentEquity = 10
     // Labels
     ctx.font = '8px "JetBrains Mono", monospace';
     ctx.fillStyle = C.muted;
+    ctx.fillText(`$${max.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, padding.left, padding.top - 2);
     ctx.textAlign = 'left';
-    ctx.fillText(`$${max.toLocaleString()}`, padding.left, padding.top - 2);
-    ctx.textAlign = 'left';
-    ctx.fillText(`$${min.toLocaleString()}`, padding.left, height - padding.bottom + 12);
+    ctx.fillText(`$${min.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, padding.left, height - padding.bottom + 12);
+
 
   }, [data]);
 

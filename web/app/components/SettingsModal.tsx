@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { fetchSettings, updateSettings } from '@/lib/api';
+import { fetchSettings, updateSettings, loginMT5Account } from '@/lib/api';
 
 const C = {
   gold: '#D4B483',
@@ -22,17 +22,32 @@ interface SettingsModalProps {
   onUpdated?: (settings: any) => void;
 }
 
-// FIX LỖI 9: Full settings modal with account details, AI model, telegram, etc.
 export default function SettingsModal({ open, onClose, onUpdated }: SettingsModalProps) {
   const [data, setData] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<string>('');
   const [activeTab, setActiveTab] = useState<'account' | 'ai' | 'risk' | 'telegram' | 'shortcuts'>('account');
 
+  // Input states for interactive configuration
+  const [telegramToken, setTelegramToken] = useState('');
+  const [telegramChatId, setTelegramChatId] = useState('');
+  const [mt5Login, setMt5Login] = useState('');
+  const [mt5Pass, setMt5Pass] = useState('');
+  const [mt5Server, setMt5Server] = useState('');
+  const [customApiKey, setCustomApiKey] = useState('');
+  const [customGatewayUrl, setCustomGatewayUrl] = useState('');
+
   const load = useCallback(async () => {
     try {
       const s = await fetchSettings();
       setData(s);
+      const cfg = s?.runtime_config || {};
+      setTelegramToken(s?.telegram_bot_token || cfg.telegram_bot_token || '');
+      setTelegramChatId(s?.telegram_chat_id || cfg.telegram_chat_id || '');
+      setMt5Login(String(s?.account?.login || cfg.mt5_login || ''));
+      setMt5Server(s?.account?.server || cfg.mt5_server || '');
+      setCustomApiKey(cfg.gateway_key || cfg.api_key || '');
+      setCustomGatewayUrl(cfg.gateway_url || '');
     } catch { /* silent */ }
   }, []);
 
@@ -64,6 +79,36 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
     finally { setBusy(false); }
   };
 
+  const handleSaveTelegram = async () => {
+    await update({
+      telegram_bot_token: telegramToken,
+      telegram_chat_id: telegramChatId,
+      telegram_enabled: Boolean(telegramToken && telegramChatId),
+    });
+  };
+
+  const handleConnectMT5 = async () => {
+    setBusy(true);
+    try {
+      if (mt5Login) {
+        await loginMT5Account(Number(mt5Login), mt5Pass, mt5Server);
+      }
+
+      await update({
+        mt5_login: mt5Login,
+        mt5_server: mt5Server,
+      });
+    } catch { /* silent */ }
+    finally { setBusy(false); }
+  };
+
+  const handleSaveAIConfig = async () => {
+    await update({
+      gateway_key: customApiKey,
+      gateway_url: customGatewayUrl,
+    });
+  };
+
   const tabs = [
     { id: 'account' as const, label: 'ACCOUNT' },
     { id: 'ai' as const, label: 'AI MODEL' },
@@ -75,13 +120,13 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
   return (
     <div onClick={onClose} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(10px)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: 16,
     }}>
       <div onClick={e => e.stopPropagation()} style={{
         background: C.panelBg, border: `1px solid ${C.gold}`, borderRadius: 14,
-        width: 'min(920px, 96vw)', height: 'min(700px, 90vh)', overflow: 'hidden',
+        width: 'min(920px, 96vw)', maxHeight: '88vh', overflow: 'hidden',
         boxShadow: `0 20px 60px rgba(0,0,0,0.7), 0 0 30px ${C.gold}30`,
-        display: 'flex', flexDirection: 'column',
+        display: 'flex', flexDirection: 'column', margin: 'auto',
       }}>
         {/* Header */}
         <div style={{
@@ -112,14 +157,14 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
           ))}
         </div>
 
-        {/* Content */}
+        {/* Content - auto scrolling */}
         <div style={{ flex: 1, overflow: 'auto', padding: 20 }}>
           {activeTab === 'account' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               {/* MT5 Account Info */}
-              <Card title="MT5 ACCOUNT">
-                <Row label="Login" value={String(acc.login || '---')} />
-                <Row label="Server" value={acc.server || '---'} />
+              <Card title="MT5 ACCOUNT STATUS">
+                <Row label="Login" value={String(acc.login || cfg.mt5_login || '---')} />
+                <Row label="Server" value={acc.server || cfg.mt5_server || '---'} />
                 <Row label="Balance" value={`$${Number(acc.balance || 0).toFixed(2)}`} />
                 <Row label="Equity" value={`$${Number(acc.equity || 0).toFixed(2)}`} />
                 <Row label="MT5 Connected" value={acc.mt5_connected ? 'YES' : 'NO'} valueColor={acc.mt5_connected ? C.green : C.red} />
@@ -128,21 +173,31 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                 <Row label="Timeframe" value={cfg.timeframe || 'M15'} />
               </Card>
 
-              {/* Trading Status */}
-              <Card title="TRADING STATUS">
-                <Row label="Trading Method" value={cfg.trading_method || 'SMC'} valueColor={C.gold} />
-                <Row label="AI Auto Loop" value={cfg.ai_auto_loop ? 'ENABLED' : 'DISABLED'} valueColor={cfg.ai_auto_loop ? C.green : C.muted} />
-                <Row label="Kill Switch" value={cfg.kill_switch ? 'ACTIVE' : 'OFF'} valueColor={cfg.kill_switch ? C.red : C.green} />
-                <Row label="Demo Armed" value={cfg.demo_armed ? 'YES' : 'NO'} valueColor={cfg.demo_armed ? C.amber : C.muted} />
-                <Row label="Live Armed" value={cfg.live_armed ? 'YES' : 'NO'} valueColor={cfg.live_armed ? C.green : C.muted} />
+              {/* CONNECT MT5 credentials */}
+              <Card title="CONNECT MT5 ACCOUNT">
+                <Field label="MT5 Login Account">
+                  <input type="text" value={mt5Login} onChange={e => setMt5Login(e.target.value)} placeholder="Nhap so tk MT5..." style={inputStyle} />
+                </Field>
+                <Field label="MT5 Password">
+                  <input type="password" value={mt5Pass} onChange={e => setMt5Pass(e.target.value)} placeholder="Nhap mat khau MT5..." style={inputStyle} />
+                </Field>
+                <Field label="MT5 Server">
+                  <input type="text" value={mt5Server} onChange={e => setMt5Server(e.target.value)} placeholder="Ex: Exness-Real10" style={inputStyle} />
+                </Field>
+                <button onClick={handleConnectMT5} disabled={busy} style={{
+                  width: '100%', padding: '10px', background: C.blueDim, border: `1px solid ${C.blue}`,
+                  borderRadius: 6, color: C.blue, fontSize: 10, fontFamily: C.mono, fontWeight: 800, cursor: 'pointer', marginTop: 4,
+                }}>
+                  {busy ? 'CONNECTING...' : 'SAVE & CONNECT MT5'}
+                </button>
               </Card>
             </div>
           )}
 
           {activeTab === 'ai' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              <Card title="AI MODEL">
-                <Field label="Provider">
+              <Card title="AI MODEL CONFIGURATION">
+                <Field label="Active Model Provider">
                   <select value={cfg.active_ai_model || data?.active_ai_model || 'deepseek-v4-flash-free'}
                     onChange={e => update({ active_ai_model: e.target.value })}
                     style={selectStyle}>
@@ -151,17 +206,29 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                     ))}
                   </select>
                 </Field>
-                <Field label="Trading Method">
+                <Field label="Trading Method Strategy">
                   <select value={cfg.trading_method || 'SMC'} onChange={e => update({ trading_method: e.target.value })} style={selectStyle}>
-                    {['SNIPER','SMC','ICT','PRICE_ACTION','ULTRA_CONFLUENCE','INDICATOR'].map(m => <option key={m} value={m}>{m}</option>)}
+                    {['SNIPER','SMC','ICT','PA','ULTRA'].map(m => <option key={m} value={m}>{m}</option>)}
                   </select>
                 </Field>
-                <Field label="AI Auto Loop">
+                <Field label="AI Auto Loop Mode">
                   <Toggle on={!!cfg.ai_auto_loop} onChange={(v: boolean) => update({ ai_auto_loop: v })} />
                 </Field>
+                <Field label="Custom API Gateway Key (Optional)">
+                  <input type="password" value={customApiKey} onChange={e => setCustomApiKey(e.target.value)} placeholder="sk-..." style={inputStyle} />
+                </Field>
+                <Field label="Custom Gateway URL (Optional)">
+                  <input type="text" value={customGatewayUrl} onChange={e => setCustomGatewayUrl(e.target.value)} placeholder="https://api.openai.com/v1" style={inputStyle} />
+                </Field>
+                <button onClick={handleSaveAIConfig} disabled={busy} style={{
+                  width: '100%', padding: '8px', background: C.goldDim, border: `1px solid ${C.gold}`,
+                  borderRadius: 6, color: C.gold, fontSize: 9, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer', marginTop: 4,
+                }}>
+                  SAVE AI CONFIGURATION
+                </button>
               </Card>
 
-              <Card title="AVAILABLE MODELS">
+              <Card title="AVAILABLE AI PROVIDERS">
                 {models.map((m: any) => (
                   <div key={m.id} style={{ padding: '8px 0', borderBottom: `1px solid ${C.border}` }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -177,7 +244,7 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
 
           {activeTab === 'risk' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              <Card title="RISK MANAGEMENT">
+              <Card title="RISK MANAGEMENT RULES">
                 <Field label="Risk per Trade (%)">
                   <NumInput value={cfg.risk_per_trade_fraction ?? 0.01} step={0.005} min={0.001} max={0.10}
                     onCommit={(v: number) => update({ risk_per_trade_fraction: v })} />
@@ -205,33 +272,38 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                   const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {};
                   fetch('/api/order/close_all', { method: 'POST', headers, credentials: 'same-origin' }).then(onClose);
                 }} style={{
-                  width: '100%', padding: '8px', background: C.redDim, border: `1px solid ${C.red}`,
-                  borderRadius: 6, color: C.red, fontSize: 9, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer',
+                  width: '100%', padding: '10px', background: C.redDim, border: `1px solid ${C.red}`,
+                  borderRadius: 6, color: C.red, fontSize: 9, fontFamily: C.mono, fontWeight: 800, cursor: 'pointer',
                 }}>CLOSE ALL POSITIONS NOW</button>
-
               </Card>
             </div>
           )}
 
           {activeTab === 'telegram' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-              <Card title="TELEGRAM NOTIFICATIONS">
-                <Row label="Bot Token" value={data?.telegram_bot_token ? 'configured (encrypted)' : 'not set'} valueColor={data?.telegram_bot_token ? C.green : C.muted} />
-                <Row label="Chat ID" value={data?.telegram_chat_id || '---'} />
-                <Row label="Enabled" value={data?.telegram_enabled ? 'YES' : 'NO'} valueColor={data?.telegram_enabled ? C.green : C.muted} />
-                <div style={{ fontSize: 8, color: C.muted, marginTop: 8 }}>
-                  Edit encrypted secrets in <code style={{ color: C.gold }}>dashboard/user_control_config.json</code>
-                </div>
+              <Card title="TELEGRAM BOT CREDENTIALS">
+                <Field label="Telegram Bot Token">
+                  <input type="text" value={telegramToken} onChange={e => setTelegramToken(e.target.value)} placeholder="Ex: 123456789:ABCdef..." style={inputStyle} />
+                </Field>
+                <Field label="Telegram Chat ID">
+                  <input type="text" value={telegramChatId} onChange={e => setTelegramChatId(e.target.value)} placeholder="Ex: -100123456789" style={inputStyle} />
+                </Field>
+                <button onClick={handleSaveTelegram} disabled={busy} style={{
+                  width: '100%', padding: '10px', background: C.goldDim, border: `1px solid ${C.gold}`,
+                  borderRadius: 6, color: C.gold, fontSize: 10, fontFamily: C.mono, fontWeight: 800, cursor: 'pointer', marginTop: 4,
+                }}>
+                  {busy ? 'SAVING...' : 'SAVE TELEGRAM CONFIG'}
+                </button>
               </Card>
 
-              <Card title="NOTIFICATION SETTINGS">
-                <Field label="Notify on Open">
+              <Card title="NOTIFICATION EVENT TOGGLES">
+                <Field label="Notify on Open Position">
                   <Toggle on={data?.notify_on_open ?? true} onChange={(v: boolean) => update({ notify_on_open: v })} />
                 </Field>
-                <Field label="Notify on Close">
+                <Field label="Notify on Close Position">
                   <Toggle on={data?.notify_on_close ?? true} onChange={(v: boolean) => update({ notify_on_close: v })} />
                 </Field>
-                <Field label="Notify on Signal">
+                <Field label="Notify on New Signal">
                   <Toggle on={data?.notify_on_signal ?? true} onChange={(v: boolean) => update({ notify_on_signal: v })} />
                 </Field>
               </Card>
@@ -256,14 +328,14 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                 <Kbd k="Esc" desc="Close modal" />
               </Card>
 
-              <Card title="ABOUT">
-                <Row label="Version" value="2.0.0" />
-                <Row label="Build" value="ATE DESK" valueColor={C.gold} />
+              <Card title="ABOUT SYSTEM">
+                <Row label="Version" value="2.4.0" />
+                <Row label="Build" value="ATE FINANCIAL DESK" valueColor={C.gold} />
                 <Row label="Framework" value="Next.js + FastAPI" />
-                <Row label="AI Engine" value="Python ML" />
+                <Row label="AI Engine" value="Multi-AI Provider Engine" />
                 <div style={{ marginTop: 16, fontSize: 8, color: C.muted }}>
                   ATE — Autonomous Trading Engine<br/>
-                  Institutional-grade trading terminal with AI-powered signal generation and execution.
+                  Institutional-grade trading terminal with AI-powered signal generation and MT5 execution bridge.
                 </div>
               </Card>
             </div>
@@ -276,7 +348,7 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
           padding: '10px 20px', borderTop: `1px solid ${C.border}`, fontSize: 9, color: C.muted, fontFamily: C.mono, flexShrink: 0,
         }}>
           <span>{busy ? 'Saving...' : savedAt ? `Saved at ${savedAt}` : 'Ready'}</span>
-          <span>v2.0 · ATE DESK</span>
+          <span>v2.4 · ATE DESK</span>
         </div>
       </div>
     </div>
@@ -308,6 +380,12 @@ const Field = ({ label, children }: any) => (
 );
 
 const selectStyle = {
+  width: '100%', padding: '8px 10px', background: 'rgba(0,0,0,0.5)',
+  border: `1px solid ${C.border}`, borderRadius: 6, color: C.text,
+  fontSize: 10, fontFamily: C.mono, outline: 'none', boxSizing: 'border-box' as any,
+};
+
+const inputStyle = {
   width: '100%', padding: '8px 10px', background: 'rgba(0,0,0,0.5)',
   border: `1px solid ${C.border}`, borderRadius: 6, color: C.text,
   fontSize: 10, fontFamily: C.mono, outline: 'none', boxSizing: 'border-box' as any,

@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import {
   fetchStatus, fetchControlCenterStatus, fetchPositions, fetchMarket,
   fetchHistory, fetchPendingOrders, fetchLogs, fetchBrain,
-  sendCopilotChat,
+  sendCopilotChat, createOrder,
   updateAiAutoLoop, fetchSettings,
   type Candle, type Position, type TradeHistory,
   type ChatMsg, type ControlCenterStatus, type PendingOrder,
@@ -286,19 +286,34 @@ export default function DashboardPage() {
   const aiBias = aiSignal?.action === 'BUY' ? 'BULLISH' : aiSignal?.action === 'SELL' ? 'BEARISH' : 'NEUTRAL';
 
   const realSentiment = (() => {
+    const isSell = aiSignal?.action === 'SELL' || aiBias === 'BEARISH';
+    const confluenceScore = market?.markup?.confluence?.score;
+    if (typeof confluenceScore === 'number' && confluenceScore > 0) {
+      const score = Math.round(Math.min(100, Math.max(0, confluenceScore * 100)));
+      return isSell ? 100 - score : score;
+    }
+    const brainConf = aiSignal?.confidence ?? 0;
+    if (brainConf > 0) {
+      const conf = Math.round(Math.min(100, Math.max(0, brainConf > 1 ? brainConf : brainConf * 100)));
+      return isSell ? 100 - conf : conf;
+    }
+    const wr = brain?.strategies?.[0]?.win_rate;
+    if (typeof wr === 'number') return isSell ? 100 - Math.round(wr) : Math.round(wr);
+    return 50;
+  })();
+
+  const aiConfidence = (() => {
     const confluenceScore = market?.markup?.confluence?.score;
     if (typeof confluenceScore === 'number' && confluenceScore > 0) {
       return Math.round(Math.min(100, Math.max(0, confluenceScore * 100)));
     }
     const brainConf = aiSignal?.confidence ?? 0;
     if (brainConf > 0) {
-      const conf = brainConf > 1 ? brainConf : brainConf * 100;
-      return Math.round(Math.min(100, Math.max(0, conf)));
+      return Math.round(Math.min(100, Math.max(0, brainConf > 1 ? brainConf : brainConf * 100)));
     }
-    const wr = brain?.strategies?.[0]?.win_rate;
-    if (typeof wr === 'number') return Math.round(wr);
     return 50;
   })();
+
 
   const handleCancelOrder = async (ticket?: number) => {
     if (!ticket) return;
@@ -308,7 +323,27 @@ export default function DashboardPage() {
       addNotif('Order cancelled', 'success');
     } catch { addNotif('Failed to cancel', 'error'); }
   };
-  const handleQuickTrade = (order: any) => { addNotif(`Order ${order.type} sent`, 'success'); };
+  const handleQuickTrade = async (order: any) => {
+    try {
+      const res = await createOrder({
+        symbol: order.symbol || selectedSymbol,
+        direction: order.type,
+        quantity: order.volume || 0.1,
+        stop_loss: order.sl,
+        take_profit: order.tp,
+        price: order.price,
+      });
+      if (res && res.status === 'SUCCESS') {
+        addNotif(`Order ${order.type} queued for execution!`, 'success');
+        const ps = await fetchPositions();
+        setPositions(ps);
+      } else {
+        addNotif(`Failed to place ${order.type} order`, 'error');
+      }
+    } catch {
+      addNotif(`Order ${order.type} error`, 'error');
+    }
+  };
 
   const handleSymbolChange = useCallback((sym: string) => {
     setSelectedSymbol(sym);
@@ -425,6 +460,9 @@ export default function DashboardPage() {
 
         <button onClick={() => setShowChart(v => !v)} style={{ padding: '6px 10px', background: showChart ? C.goldDim : 'transparent', border: `1px solid ${showChart ? C.gold : C.border}`, borderRadius: 6, color: showChart ? C.gold : C.muted, fontSize: 9, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>CHART</button>
         <button onClick={() => setShowCompact(v => !v)} style={{ padding: '6px 10px', background: showCompact ? C.goldDim : 'transparent', border: `1px solid ${showCompact ? C.gold : C.border}`, borderRadius: 6, color: showCompact ? C.gold : C.muted, fontSize: 9, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>{showCompact ? 'EXPAND' : 'COMPACT'}</button>
+        <button onClick={() => setCopilotTab(prev => prev === 'log' ? 'chat' : 'log')} style={{ padding: '6px 10px', background: copilotTab === 'log' ? C.goldDim : 'transparent', border: `1px solid ${copilotTab === 'log' ? C.gold : C.border}`, borderRadius: 6, color: copilotTab === 'log' ? C.gold : C.muted, fontSize: 9, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>
+          SHOW LOG {copilotEvents.length > 0 && <span style={{ color: C.green }}>({copilotEvents.length})</span>}
+        </button>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <StatusBadge status={ccStatus?.account?.mt5_connected ? 'online' : 'offline'} label="MT5" />
@@ -447,8 +485,10 @@ export default function DashboardPage() {
         background: `radial-gradient(ellipse at 0% 0%, rgba(212,175,55,0.04) 0%, transparent 50%), radial-gradient(ellipse at 100% 100%, rgba(34,211,160,0.03) 0%, transparent 50%), ${C.bgMain}`,
       }}>
         {/* LEFT COLUMN */}
-        <div style={{ minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <Panel live style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+        <div style={{ minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <Panel live style={{ flex: '0 0 auto', display: 'flex', flexDirection: 'column' }}>
+
+
             <div style={{
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               padding: '10px 14px', borderBottom: `1px solid ${C.border}`,
@@ -498,14 +538,10 @@ export default function DashboardPage() {
           {showChart && (
             <div style={{ flex: showCompact ? 1 : '0 1 auto', minHeight: 0 }}>
               <Panel title={`${selectedSymbol} ${chartTf}`} live style={{ height: '100%', position: 'relative' }}>
-                <div style={{ position: 'absolute', top: 8, right: 80, zIndex: 10, display: 'flex', gap: 4 }}>
-                  {['M1', 'M5', 'M15', 'H1', 'H4', 'D1'].map(tf => (
-                    <button key={tf} onClick={() => setChartTf(tf)} style={{ padding: '4px 8px', background: chartTf === tf ? C.goldDim : 'rgba(0,0,0,0.5)', border: `1px solid ${chartTf === tf ? C.gold : C.border}`, borderRadius: 4, color: chartTf === tf ? C.gold : C.muted, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>{tf}</button>
-                  ))}
-                </div>
                 <TradingChart symbol={selectedSymbol} timeframe={chartTf} candles={market?.candles} markup={market?.markup} positions={positions as any} />
               </Panel>
             </div>
+
           )}
 
           {!showCompact && (
@@ -565,15 +601,16 @@ export default function DashboardPage() {
         </div>
 
         {/* RIGHT COLUMN */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0, overflow: 'hidden' }}>
-          <div style={{ flexShrink: 0, maxHeight: showCompact ? 200 : 220 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0, overflow: showCompact ? 'auto' : 'hidden' }}>
+          <div style={{ flexShrink: 0, maxHeight: showCompact ? 160 : 220 }}>
             <Panel title="Watchlist" live style={{ height: '100%' }}>
               <Watchlist onSymbolSelect={handleSymbolChange} selectedSymbol={selectedSymbol} />
             </Panel>
           </div>
 
-          <div style={{ flex: showCompact ? 1 : 1, minHeight: 0, overflow: 'hidden' }}>
-            <Panel title="AI Brain" live style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: showCompact ? '0 0 auto' : 1, minHeight: 0, overflow: 'hidden' }}>
+            <Panel title="AI Brain" live style={{ height: showCompact ? 'auto' : '100%', display: 'flex', flexDirection: 'column' }}>
+
               <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
                 <SentimentGauge bullishPercent={realSentiment} label="MARKET SENTIMENT" />
 
@@ -588,8 +625,9 @@ export default function DashboardPage() {
                   </div>
                   <div style={{ padding: '8px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: `1px solid ${C.border}`, textAlign: 'center' }}>
                     <div style={{ fontSize: 7, color: C.muted, marginBottom: 2 }}>CONFIDENCE</div>
-                    <div style={{ fontSize: 10, fontWeight: 800, color: C.cyan }}>{realSentiment}%</div>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: C.cyan }}>{aiConfidence}%</div>
                   </div>
+
                 </div>
 
                 {aiSignal && (
@@ -619,8 +657,9 @@ export default function DashboardPage() {
           )}
 
           {!showCompact && (
-            <div style={{ flexShrink: 0, height: 260, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ flexShrink: 0, minHeight: copilotTab === 'log' ? (copilotEvents.length <= 2 ? 80 : 160) : 220, maxHeight: 260, display: 'flex', flexDirection: 'column' }}>
               <Panel style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', borderBottom: `1px solid ${C.border}` }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <div style={{ width: 6, height: 6, borderRadius: '50%', background: C.cyan, boxShadow: `0 0 8px ${C.cyan}`, animation: 'pulse 2s infinite' }} />
@@ -629,7 +668,8 @@ export default function DashboardPage() {
                   <div style={{ display: 'flex', gap: 2 }}>
                     <button onClick={() => setCopilotTab('chat')} style={{ padding: '3px 8px', background: copilotTab === 'chat' ? C.cyan + '20' : 'transparent', border: `1px solid ${copilotTab === 'chat' ? C.cyan : C.border}`, borderRadius: 3, color: copilotTab === 'chat' ? C.cyan : C.muted, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>CHAT</button>
                     <button onClick={() => setCopilotTab('log')} style={{ padding: '3px 8px', background: copilotTab === 'log' ? C.goldDim : 'transparent', border: `1px solid ${copilotTab === 'log' ? C.gold : C.border}`, borderRadius: 3, color: copilotTab === 'log' ? C.gold : C.muted, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>
-                      LOG {copilotEvents.length > 0 && <span style={{ color: C.green }}>·{copilotEvents.length}</span>}
+                      LOG {copilotEvents.length > 0 && <span style={{ color: C.green }}>({copilotEvents.length})</span>}
+
                     </button>
                   </div>
                 </div>

@@ -15,9 +15,9 @@ import type { Candle, MarkupResponse } from '@/lib/api';
 import { C } from '@/lib/design-tokens';
 import { parseCandleTime } from '@/lib/utils/time';
 
-const TIMEFRAMES = ['M1', 'M5', 'M15', 'H1', 'H4', 'D1'];
+const TIMEFRAMES = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'];
 const TIMEFRAME_CANDLES: Record<string, number> = {
-  H4: 300, H1: 1200, M30: 2400, M15: 4800, M5: 14400, M1: 72000,
+  H4: 300, H1: 1200, M30: 2400, M15: 4800, M5: 14400, M1: 72000, D1: 365,
 };
 
 interface TradingChartProps {
@@ -256,19 +256,19 @@ export default function TradingChart({
 
     const zoneTypes = new Set([
       'OB', 'BREAKER', 'MITIGATION', 'REJECTION', 'FVG', 'iFVG', 'OTE', 'ASIAN', 'PD',
-      'SUPPLY_DEMAND', 'SUPPORT', 'RESISTANCE', 'SR', 'TRENDLINE', 'UN', 'CHANNEL',
-      'RANGE', 'VOLUME_IMBALANCE', 'VOID', 'BPR', 'DEALING_RANGE', 'INDUCEMENT',
-      'CHART_PATTERN', 'JUDAS_SWING', 'UNICORN', 'PO3', 'AMD', 'SESSION_HL',
-      'PDH_PDL', 'WEEKLY_MONTHLY_HL', 'SMT_DIVERGENCE', 'SILVER_BULLET', 'TURTLE_SOUP',
-      'PIVOT', 'PDH', 'PDL', 'KILLZONE', 'EQUILIBRIUM', 'LIQUIDITY_POOL',
+      'SUPPLY_DEMAND', 'SUPPORT', 'RESISTANCE', 'SR', 'TRENDLINE', 'UN', 'CHANNEL', 'RANGE', 'VOLUME_IMBALANCE', 'VOID', 'BPR', 'DEALING_RANGE', 'INDUCEMENT', 'CHART_PATTERN', 'JUDAS_SWING', 'UNICORN', 'PO3', 'AMD', 'SESSION_HL',
+      'PDH_PDL', 'WEEKLY_MONTHLY_HL', 'SMT_DIVERGENCE', 'SILVER_BULLET', 'TURTLE_SOUP', 'PIVOT', 'PDH', 'PDL', 'KILLZONE', 'EQUILIBRIUM', 'LIQUIDITY_POOL',
     ]);
 
     const singlePriceTypes = new Set([
       'EMA', 'EMA_RIBBON', 'VWAP', 'ADX', 'MACD_LINE', 'RSI_LEVEL',
-      'SNIPER_SIGNAL', 'SNIPER_SL', 'SNIPER_TP1', 'SNIPER_TP2', 'SNIPER_TP3',
-      'SNIPER_TP4', 'SNIPER_TP5', 'SNIPER_SCORE', 'SNIPER_DASH',
+      'SNIPER_SIGNAL', 'SNIPER_SL', 'SNIPER_TP1', 'SNIPER_TP2', 'SNIPER_TP3', 'SNIPER_TP4', 'SNIPER_TP5', 'SNIPER_SCORE', 'SNIPER_DASH',
       'BSL', 'SSL', 'EQH', 'EQL', 'LIQUIDITY', 'SWING', 'BOS', 'CHoCH', 'MSS',
-      'TREND', 'PULLBACK', 'RETEST', 'BREAKOUT', 'FAKE_BREAKOUT', 'PATTERN',
+      'TREND', 'PULLBACK', 'RETEST', 'BREAKOUT', 'FAKE_BREAKOUT', 'PATTERN', 'CANDLE_PATTERN',
+    ]);
+
+    const markerTypes = new Set([
+      'BOS', 'CHoCH', 'MSS', 'SWING', 'LIQUIDITY', 'SNIPER_SIGNAL', 'CANDLE_PATTERN', 'TREND',
     ]);
 
     const getColor = (m: any) => {
@@ -291,30 +291,93 @@ export default function TradingChart({
           return isBullish ? C.green : C.red;
         case 'FVG': case 'iFVG': return isBullish ? C.blue : C.purple;
         case 'TREND': return isBullish ? C.green : C.red;
+        case 'CANDLE_PATTERN': return isBullish ? C.greenBright : C.redBright;
         case 'ASIAN': case 'OTE': case 'PD': return C.amberBright;
         default: return isBullish ? C.green : C.red;
       }
     };
 
+    // Render zone-type objects (OB, FVG, PD, etc.)
     markupData.objects.forEach((m: any) => {
       try {
         if (zoneTypes.has(m.type) && typeof m.top === 'number' && typeof m.bottom === 'number' && m.top !== m.bottom) {
           const color = getColor(m);
           const lo = Math.min(m.top, m.bottom);
           const hi = Math.max(m.top, m.bottom);
-          const topLine = series.createPriceLine({ price: hi, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `${m.label || m.type} ▲` });
-          const bottomLine = series.createPriceLine({ price: lo, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `${m.label || m.type} ▼` });
+          const topLine = series.createPriceLine({ price: hi, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `${m.label || m.type} \u25B2` });
+          const bottomLine = series.createPriceLine({ price: lo, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: `${m.label || m.type} \u25BC` });
           markupObjectsRef.current.push(topLine, bottomLine);
+
+          // Add midline for zones (OB, FVG)
+          if (['OB', 'FVG', 'iFVG', 'BREAKER', 'MITIGATION'].includes(m.type)) {
+            const mid = (hi + lo) / 2;
+            const midLine = series.createPriceLine({ price: mid, color: color + '40', lineWidth: 1, lineStyle: 3, axisLabelVisible: false, title: '' });
+            markupObjectsRef.current.push(midLine);
+          }
           return;
         }
+
+        // Render single-price type objects
         if (singlePriceTypes.has(m.type) && typeof m.price === 'number') {
           const color = getColor(m);
           let lineWidth: 1 | 2 | 3 = 1;
           let lineStyle: 0 | 1 | 2 | 3 | 4 = 0;
           if (m.type === 'SNIPER_SIGNAL') lineWidth = 3;
           if (m.type.includes('SL') || m.type.includes('TP')) lineStyle = 2;
-          const line = series.createPriceLine({ price: m.price, color, lineWidth, lineStyle, axisLabelVisible: true, title: m.label || m.type });
+
+          // Label with direction info
+          let title = m.label || m.type;
+          if (markerTypes.has(m.type) && m.direction) {
+            const dirSymbol = m.direction === 'BULLISH' ? '\u25B2' : m.direction === 'BEARISH' ? '\u25BC' : '';
+            title = `${m.type}${dirSymbol} ${m.label || ''}`;
+          }
+
+          const line = series.createPriceLine({ price: m.price, color, lineWidth, lineStyle, axisLabelVisible: true, title });
           markupObjectsRef.current.push(line);
+        }
+      } catch { /* */ }
+    });
+
+    // Render BOS/CHoCH/MSS markers with directional labels
+    markupData.objects.forEach((m: any) => {
+      try {
+        if (m.type === 'BOS' || m.type === 'CHoCH' || m.type === 'MSS') {
+          if (typeof m.price === 'number' && m.price > 0) {
+            const color = getColor(m);
+            const dirSymbol = m.direction === 'BULLISH' ? '\u25B2' : m.direction === 'BEARISH' ? '\u25BC' : '';
+            const line = series.createPriceLine({
+              price: m.price, color, lineWidth: 2, lineStyle: 0,
+              axisLabelVisible: true,
+              title: `${m.type} ${dirSymbol} ${m.label || ''}`
+            });
+            markupObjectsRef.current.push(line);
+          }
+        }
+
+        // Swing labels (HH, HL, LH, LL)
+        if (m.type === 'SWING' && m.label) {
+          if (typeof m.price === 'number' && m.price > 0) {
+            const color = m.label.includes('H') ? C.purple : C.amberBright;
+            const line = series.createPriceLine({
+              price: m.price, color, lineWidth: 1, lineStyle: 1,
+              axisLabelVisible: true,
+              title: `${m.label}`
+            });
+            markupObjectsRef.current.push(line);
+          }
+        }
+
+        // Candle pattern markers (Pin Bar, Engulfing, etc.)
+        if (m.type === 'CANDLE_PATTERN' && m.label) {
+          if (typeof m.price === 'number' && m.price > 0) {
+            const color = getColor(m);
+            const line = series.createPriceLine({
+              price: m.price, color, lineWidth: 3, lineStyle: 0,
+              axisLabelVisible: true,
+              title: `\u2605 ${m.label}`
+            });
+            markupObjectsRef.current.push(line);
+          }
         }
       } catch { /* */ }
     });

@@ -135,6 +135,10 @@ export async function registerEASymbol(payload: { symbol: string; company?: stri
 
 
 
+export async function createOrder(order: { symbol: string; direction: 'BUY' | 'SELL'; quantity: number; stop_loss?: number; take_profit?: number; price?: number }) {
+  return postJson<{ status: string; command_id?: string; direction?: string; entry?: number }>(`${API_BASE}/api/order/create`, order);
+}
+
 // FIX LỖI 4: Subscribe to symbol registration events from WebSocket/backend
 export function subscribeToSymbolRegistration(callback: (data: { symbol: string; company: string; broker: string }) => void) {
   // This will be called when the EA registers a symbol
@@ -146,3 +150,4 @@ export function subscribeToSymbolRegistration(callback: (data: { symbol: string;
     }) as EventListener);
   }
 }
+
