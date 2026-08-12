@@ -177,11 +177,12 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                 <Row label="Timeframe" value={cfg.timeframe || 'M15'} />
                 {!acc.ea_connected && (
                   <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(244,63,94,0.06)', border: `1px solid rgba(244,63,94,0.25)`, borderRadius: 6, fontSize: 8, fontFamily: C.mono, color: C.dim, lineHeight: '15px' }}>
-                    ⚠ EA CHƯA GỬI TELEMETRY — MT5 không thể hiện trên web.
-                    <br />• Backend đang chạy? <b>python dashboard/server.py</b> (cổng 8005)
-                    <br />• EA (MetaEditor) — InpApiUrl = <b>http://{'<IP-LAN>'}:8005/api/v1/</b> (KHÔNG localhost — MT5 chặn)
-                    <br />• MT5: Tools → Options → Expert Advisors → Allow WebRequest → thêm <b>http://{'<IP-LAN>'}</b>
-                    <br />• Bật Algo Trading; log MT5 phải có <b>TELEMETRY_OK</b>
+                    ⚠ EA CHƯA GỬI TELEMETRY — MT5 không hiện trên web.
+                    <br />• Nguyên nhân #1: EA gửi telemetry về BACKEND A nhưng web này đang đọc BACKEND B (Docker cloudlocal vs python native 8005). Chỉ được chạy <b>MỘT backend</b>.
+                    <br />• Nếu dùng Docker/cloud: EA InpApiUrl = <b>https://autonomous-trading-engine.vercel.app/api/v1/</b> (Vercel → nginx 8848 → Docker backend). Mở dashboard ở <b>http://localhost:8848</b> (hoặc http://localhost cổng 80 / URL vercel.app) — KHÔNG phải localhost:3000 (cổng 3000 không mở ra ngoài trong Docker). KHÔNG chạy thêm python dashboard/server.py.
+                    <br />• Nếu dùng native: EA InpApiUrl = <b>http://{'<IP-LAN>'}:8005/api/v1/</b>; MT5 allowlist thêm <b>http://{'<IP-LAN>'}:8005</b>; chạy <b>python dashboard/server.py</b>; mở dashboard ở localhost:3000 (next dev).
+                    <br />• MT5 allowlist nên thêm nguyên hostname (KHÔNG kèm đường dẫn): <b>https://autonomous-trading-engine.vercel.app</b> hoặc <b>http://{'<IP-LAN>'}:8005</b> — nếu không các endpoint /api/* khác (calendar, markup...) sẽ bị chặn.
+                    <br />• Bật Algo Trading; log MT5 phải có <b>TELEMETRY_OK</b> hoặc <b>CANDLES_PUSH_OK</b>
                   </div>
                 )}
               </Card>

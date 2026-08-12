@@ -16,8 +16,13 @@ import type { NextConfig } from 'next';
  *   ATE_BACKEND_URL=http://127.0.0.1:8005 (dashboard server)
  */
 
-const ATE_BACKEND_URL = process.env.ATE_BACKEND_URL || 'https://autonomous-trading-engine.vercel.app/backend';
-const ATE_MT5_API    = process.env.ATE_MT5_API    || 'https://autonomous-trading-engine.vercel.app/api/v1';
+// BUG FIX: fallback cũ = 'https://...vercel.app/backend' — nếu chạy LOCAL mà env
+// ATE_BACKEND_URL không được set (web/.env thiếu) thì web âm thầm proxy lên cloud
+// → dashboard đọc backend SAI (không có telemetry EA) dù EA gửi đúng. Cũng tạo
+// vòng lặp tự tham chiếu khi deploy Vercel thiếu env. Đổi fallback về LOCAL 8005
+// (khớp api-config.ts + web/.env). Vercel production luôn set env qua vercel.json.
+const ATE_BACKEND_URL = process.env.ATE_BACKEND_URL || 'http://localhost:8005';
+const ATE_MT5_API    = process.env.ATE_MT5_API    || 'http://localhost:8005/api/v1';
 
 const nextConfig: NextConfig = {
   output: process.env.VERCEL ? undefined : 'standalone',

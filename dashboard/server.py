@@ -699,13 +699,16 @@ def detect_liquidity_sweep(df: pd.DataFrame) -> Optional[str]:
     last_high = float(df["high"].iloc[-1])
     last_low = float(df["low"].iloc[-1])
 
-    # Sweep above recent highs followed by rejection
+    # BUG FIX (direction): stop-hunt ABOVE recent highs (Buy-Side Liquidity taken)
+    # closing back below = BEARISH reversal signal; stop-hunt BELOW recent lows
+    # (Sell-Side Liquidity taken) closing back above = BULLISH reversal signal.
+    # Trước đây bị ĐẢO NGƯỢC — làm lệch điểm SMC trong analyze_smc/ULTRA_CONFLUENCE
+    # (khớp semantics với detectors.detect_liquidity_sweep + method_overlays SFP).
     if last_high > max_high and last_close < max_high:
-        return "BULLISH_SWEEP"
-
-    # Sweep below recent lows followed by rejection
-    if last_low < min_low and last_close > min_low:
         return "BEARISH_SWEEP"
+
+    if last_low < min_low and last_close > min_low:
+        return "BULLISH_SWEEP"
 
     return None
 

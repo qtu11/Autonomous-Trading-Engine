@@ -16,6 +16,42 @@ sys.path.insert(0, os.path.dirname(__file__))
 import server  # noqa: E402
 
 
+# ── Regression: server.detect_liquidity_sweep direction ──────────────────────
+def _sweep_df(highs, lows, closes):
+    """Build a small OHLC DataFrame (high/low/close) for sweep detection."""
+    n = len(highs)
+    return pd.DataFrame({
+        "open": [c for c in closes],
+        "high": list(highs),
+        "low": list(lows),
+        "close": list(closes),
+        "tick_volume": [100] * n,
+        "timestamp": pd.date_range("2026-08-12", periods=n, freq="1min"),
+    })
+
+
+def test_sweep_above_highs_is_bearish_not_bullish():
+    """Stop-hunt ABOVE previous highs đóng cửa dưới = BEARISH (không đảo ngược).
+    BUG FIX: trước đây trả BULLISH_SWEEP — làm lệch điểm SMC/ULTRA_CONFLUENCE."""
+    # 10 nến quanh 100; nến cuối spike lên 102 rồi đóng về 99.5 (< max_high 101)
+    highs = [101] * 9 + [102]
+    lows = [99] * 9 + [99.5]   # low không thủng min_low → chỉ nhánh bearish kích hoạt
+    closes = [100] * 9 + [99.5]
+    res = server.detect_liquidity_sweep(_sweep_df(highs, lows, closes))
+    assert res == "BEARISH_SWEEP"
+
+
+def test_sweep_below_lows_is_bullish_not_bearish():
+    """Stop-hunt BELOW previous lows đóng cửa trên = BULLISH (không đảo ngược)."""
+    # 10 nến quanh 100; nến cuối spike xuống 98 (thủng min_low 99) rồi đóng
+    # về 101.5 — TRÊN CẢ min_low lẫn max_high → chỉ nhánh bullish kích hoạt
+    highs = [101] * 9 + [102]
+    lows = [99] * 9 + [98]
+    closes = [100] * 9 + [101.5]
+    res = server.detect_liquidity_sweep(_sweep_df(highs, lows, closes))
+    assert res == "BULLISH_SWEEP"
+
+
 def _candle(ts: str, close: float = 4428.0) -> dict:
     return {"t": ts[11:16], "ts": ts, "o": close, "h": close + 1, "l": close - 1, "c": close, "v": 100.0}
 
