@@ -73,16 +73,17 @@ class Candle:
 
 def df_to_candles(df: pd.DataFrame) -> list[Candle]:
     candles: list[Candle] = []
+    time_col = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
     for i, row in df.iterrows():
         candles.append(
             Candle(
                 index=i,
-                time=pd.to_datetime(row["time"]),
+                time=pd.to_datetime(row[time_col]),
                 open=float(row["open"]),
                 high=float(row["high"]),
                 low=float(row["low"]),
                 close=float(row["close"]),
-                volume=float(row.get("tick_volume", row.get("real_volume", 0.0))),
+                volume=float(row.get("tick_volume", row.get("real_volume", row.get("volume", 0.0)))),
             )
         )
     return candles
@@ -152,8 +153,9 @@ def find_swing_points(df: pd.DataFrame, window: int = 2) -> pd.DataFrame:
 
 
 def get_last_swing_points(df: pd.DataFrame, n: int = 5) -> dict[str, list[dict[str, Any]]]:
-    swing_highs = df[df["swing_high"]].tail(n)[["time", "high"]].to_dict("records")
-    swing_lows = df[df["swing_low"]].tail(n)[["time", "low"]].to_dict("records")
+    time_col = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
+    swing_highs = df[df["swing_high"]].tail(n)[[time_col, "high"]].to_dict("records")
+    swing_lows = df[df["swing_low"]].tail(n)[[time_col, "low"]].to_dict("records")
     return {"swing_highs": swing_highs, "swing_lows": swing_lows}
 
 
@@ -510,7 +512,8 @@ def get_killzone_status(candle_time: pd.Timestamp, broker_utc_offset_hours: floa
 
 def get_asian_range(df_m15: pd.DataFrame, broker_utc_offset_hours: float = 2.0) -> dict[str, float | None]:
     df = df_m15.copy()
-    df["vn_time"] = df["time"] - pd.Timedelta(hours=broker_utc_offset_hours) + pd.Timedelta(hours=7)
+    time_col = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
+    df["vn_time"] = df[time_col] - pd.Timedelta(hours=broker_utc_offset_hours) + pd.Timedelta(hours=7)
     df["vn_date"] = df["vn_time"].dt.date
     df["vn_hour_float"] = df["vn_time"].dt.hour + df["vn_time"].dt.minute / 60.0
 

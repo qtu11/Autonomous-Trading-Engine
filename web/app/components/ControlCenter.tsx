@@ -205,11 +205,13 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
             return (
               <button key={method} onClick={async () => { 
                 try { 
-                  await updateTradingMethod(method); 
-                  await loadAIConfig();
-                  await loadStatus();
-                  onMethodChange?.(method);
-                } catch { /* silent */ } 
+                  const result = await updateTradingMethod(method); 
+                  if (result && result.status === 'SUCCESS') {
+                    await loadAIConfig();
+                    await loadStatus();
+                    onMethodChange?.(method);
+                  }
+                } catch (e) { console.error('Method change failed:', e); } 
               }}
 
                 style={{

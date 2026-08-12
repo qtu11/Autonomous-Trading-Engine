@@ -148,6 +148,7 @@ def build_chart_markup(
         return {"symbol": symbol, "method": method_upper, "generated_at": datetime.now(timezone.utc).isoformat(), "objects": []}
 
     m15 = m15.copy()
+    time_col = 'time' if 'time' in m15.columns else 'timestamp' if 'timestamp' in m15.columns else 'time'
     m15_candles = df_to_candles(m15)
     m15_swings = find_swing_points(m15, window=2)
     last_candle = m15_candles[-1]
@@ -161,7 +162,7 @@ def build_chart_markup(
             "label": entry["label"],
             "price": round(float(entry["price"]), 2),
             "index": int(entry["index"]),
-            "time_start": _dt(m15.iloc[entry["index"]]["time"]),
+            "time_start": _dt(m15.iloc[entry["index"]][time_col]),
             "top": 0.0,
             "bottom": 0.0,
         })
@@ -226,7 +227,7 @@ def build_chart_markup(
             "label": f"{bos_choch['kind']}_{bos_choch['direction']}",
             "price": round(float(bos_choch["break_price"]), 2),
             "index": int(bos_choch["index"]),
-            "time_start": _dt(m15.iloc[bos_choch["index"]]["time"]),
+            "time_start": _dt(m15.iloc[bos_choch["index"]][time_col]),
             "top": 0.0,
             "bottom": 0.0,
         })
@@ -279,16 +280,16 @@ def build_chart_markup(
             swing_h, swing_l = max(m5_highs), min(m5_lows)
             ote_buy = calculate_ote_zone(float(swing_l), float(swing_h), "BUY")
             ote_sell = calculate_ote_zone(float(swing_l), float(swing_h), "SELL")
-            objects.append(_zone("OTE", "BULLISH", ote_buy["zone_top"], ote_buy["zone_bottom"], m15.iloc[-1]["time"], len(m15_candles) - 1))
-            objects.append(_zone("OTE", "BEARISH", ote_sell["zone_top"], ote_sell["zone_bottom"], m15.iloc[-1]["time"], len(m15_candles) - 1))
+            objects.append(_zone("OTE", "BULLISH", ote_buy["zone_top"], ote_buy["zone_bottom"], m15.iloc[-1][time_col], len(m15_candles) - 1))
+            objects.append(_zone("OTE", "BEARISH", ote_sell["zone_top"], ote_sell["zone_bottom"], m15.iloc[-1][time_col], len(m15_candles) - 1))
 
     # 9. Asian Range (ICT)
     asian = get_asian_range(m15, broker_utc_offset_hours)
     if asian["asian_high"] is not None and asian["asian_low"] is not None:
-        objects.append(_zone("ASIAN", "NEUTRAL", asian["asian_high"], asian["asian_low"], m15.iloc[-1]["time"], len(m15_candles) - 1))
+        objects.append(_zone("ASIAN", "NEUTRAL", asian["asian_high"], asian["asian_low"], m15.iloc[-1][time_col], len(m15_candles) - 1))
 
     # 10. Killzone status (ICT)
-    kz = get_killzone_status(m15.iloc[-1]["time"], broker_utc_offset_hours)
+    kz = get_killzone_status(m15.iloc[-1][time_col], broker_utc_offset_hours)
     objects.append({
         "type": "KILLZONE",
         "direction": "NEUTRAL",
@@ -296,7 +297,7 @@ def build_chart_markup(
         "top": 0.0,
         "bottom": 0.0,
         "index": 0,
-        "time_start": _dt(m15.iloc[-1]["time"]),
+        "time_start": _dt(m15.iloc[-1][time_col]),
         "is_london": bool(kz["is_london_kz"]),
         "is_ny": bool(kz["is_ny_kz"]),
         "is_asian": bool(kz["is_asian_range"]),

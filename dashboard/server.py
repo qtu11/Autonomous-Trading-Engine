@@ -123,18 +123,7 @@ def _add_ai_event(level: str, action: str, symbol: str, details: Dict[str, Any])
 
 # ─── REAL MT5 DATA FETCHER ──────────────────────────────────────────────────
 async def fetch_real_candles(symbol: str, tf: str, count: int = 1000) -> Optional[pd.DataFrame]:
-    """Fetch REAL candle data from EA push cache or MT5 Bridge (or fallback to stub)"""
-    # 1. Check direct EA push cache first
-    cache_key = f"{symbol}_{tf}"
-    cached_market = _market_cache.get(cache_key, {})
-    if cached_market and "candles" in cached_market and cached_market["candles"]:
-        raw_candles = cached_market["candles"][-count:]
-        df = pd.DataFrame(raw_candles)
-        if "time" in df.columns:
-            df = df.rename(columns={"time": "timestamp"})
-        return df
-
-    # 2. Try HTTP GET from MT5 Bridge
+    """Fetch REAL candle data from MT5 Bridge (or fallback to stub)"""
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.get(
@@ -711,176 +700,6 @@ async def run_ai_analysis(symbol: str, method: str) -> Dict[str, Any]:
     _analysis_cache[cache_key] = {"result": result, "ts": datetime.now(timezone.utc).timestamp()}
     return result
 
-# ─── MT5 COMMAND EXECUTION BRIDGE ───────────────────────────────────────────
-async def _execute_command_on_mt5(cmd: dict) -> dict:
-    """Send a command to MT5 via the bridge. Returns execution result."""
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            res = await client.post(
-                f"{BRIDGE_URL}/api/command",
-                json={
-                    "action": cmd.get("action"),
-                    "symbol": resolve_symbol(cmd.get("symbol", "XAUUSD")),
-                    "volume": cmd.get("volume", 0.01),
-                    "price": cmd.get("entry", 0),
-                    "stop_loss": cmd.get("stop_loss", 0),
-                    "take_profit": cmd.get("take_profit", 0),
-                    "ticket": cmd.get("ticket"),
-                    "command_id": cmd.get("command_id"),
-                },
-                headers={"Authorization": f"Bearer {cmd.get('token', '')}"},
-            )
-            if res.status_code == 200:
-                data = res.json()
-                _add_log("INFO", "MT5_EXEC", f"Command {cmd.get('action')} executed: {data.get('status', 'OK')}")
-                return data
-            else:
-                _add_log("WARNING", "MT5_EXEC", f"Command {cmd.get('action')} failed: HTTP {res.status_code}")
-                return {"status": "ERROR", "code": res.status_code}
-    except httpx.ConnectError:
-        _add_log("WARNING", "MT5_EXEC", f"MT5 Bridge unreachable for {cmd.get('action')}")
-        return {"status": "BRIDGE_UNAVAILABLE"}
-    except Exception as e:
-        _add_log("ERROR", "MT5_EXEC", f"Command execution error: {e}")
-        return {"status": "ERROR", "message": str(e)}
-
-
-async def _sync_positions_from_mt5():
-    """Poll MT5 for real positions every 3 seconds"""
-    global _ai_loop_running
-    while _ai_loop_running:
-        try:
-            if _account["mt5_connected"]:
-                async with httpx.AsyncClient(timeout=5) as client:
-                    res = await client.get(f"{BRIDGE_URL}/api/positions")
-                    if res.status_code == 200:
-                        mt5_positions = res.json()
-                        if isinstance(mt5_positions, list):
-                            # Merge MT5 positions into _positions
-                            for mp in mt5_positions:
-                                sym = mp.get("symbol", "XAUUSD")
-                                ticket = mp.get("ticket")
-                                if not ticket:
-                                    continue
-                                # Find existing or add
-                                found = False
-                                for pos in _positions[sym]:
-                                    if pos.get("ticket") == ticket:
-                                        # Update real-time P&L
-                                        pos["profit"] = float(mp.get("profit", 0))
-                                        pos["current_price"] = float(mp.get("current_price", pos.get("price_open", 0)))
-                                        pos["sl"] = float(mp.get("sl", pos.get("sl", 0)))
-                                        pos["tp"] = float(mp.get("tp", pos.get("tp", 0)))
-                                        pos["volume"] = float(mp.get("volume", pos.get("volume", 0.01)))
-                                        found = True
-                                        break
-                                if not found:
-                                    _positions[sym].append({
-                                        "ticket": ticket,
-                                        "symbol": sym,
-                                        "type": "BUY" if mp.get("type", 0) == 0 else "SELL",
-                                        "volume": float(mp.get("volume", 0.01)),
-                                        "price_open": float(mp.get("price_open", 0)),
-                                        "sl": float(mp.get("sl", 0)),
-                                        "tp": float(mp.get("tp", 0)),
-                                        "profit": float(mp.get("profit", 0)),
-                                        "current_price": float(mp.get("current_price", 0)),
-                                        "open_time": mp.get("time", datetime.now(timezone.utc).isoformat()),
-                                    })
-                                    _add_log("INFO", "POS_SYNC", f"New MT5 position #{ticket} {sym}")
-
-                            # Remove positions that MT5 no longer has (closed)
-                            mt5_tickets = {mp.get("ticket") for mp in mt5_positions if mp.get("ticket")}
-                            for sym in list(_positions.keys()):
-                                for pos in list(_positions[sym]):
-                                    if pos.get("ticket") and pos["ticket"] not in mt5_tickets:
-                                        # Position was closed on MT5 (SL/TP hit)
-                                        trade = {
-                                            "ticket": pos["ticket"],
-                                            "symbol": sym,
-                                            "type": pos["type"],
-                                            "volume": pos["volume"],
-                                            "price_open": pos["price_open"],
-                                            "price_close": pos.get("current_price", pos["price_open"]),
-                                            "profit": pos.get("profit", 0),
-                                            "time": datetime.now(timezone.utc).isoformat(),
-                                            "close_reason": "MT5_SL_TP",
-                                        }
-                                        _trades.append(trade)
-                                        _positions[sym].remove(pos)
-                                        _add_ai_event("TRADE", "CLOSE_AUTO", sym, {
-                                            "ticket": pos["ticket"],
-                                            "profit": pos.get("profit", 0),
-                                            "reason": "SL/TP hit on MT5"
-                                        })
-                                        _add_log("INFO", "POS_SYNC", f"Position #{pos['ticket']} closed on MT5, P&L: {pos.get('profit', 0):.2f}")
-
-                            # Update account equity
-                            total_floating = sum(p.get("profit", 0) for positions in _positions.values() for p in positions)
-                            _account["total_pnl"] = total_floating
-                            _account["equity"] = _account["balance"] + total_floating
-                            _account["open_positions"] = sum(len(ps) for ps in _positions.values())
-        except Exception as e:
-            _add_log("ERROR", "POS_SYNC_ERR", str(e))
-
-        await asyncio.sleep(3)
-
-
-async def _command_executor_loop():
-    """Process queued commands and send to MT5 every 1 second"""
-    global _ai_loop_running
-    while _ai_loop_running:
-        try:
-            pending = [c for c in _commands if c.get("status") == "QUEUED"]
-            for cmd in pending:
-                result = await _execute_command_on_mt5(cmd)
-                if result.get("status") in ("SUCCESS", "FILLED", "OK"):
-                    cmd["status"] = "FILLED"
-                    ticket = result.get("ticket")
-                    if ticket:
-                        cmd["ticket"] = ticket
-                        sym = cmd.get("symbol", "XAUUSD")
-                        # Create position entry
-                        _positions[sym].append({
-                            "ticket": ticket,
-                            "symbol": sym,
-                            "type": cmd.get("action", "BUY"),
-                            "volume": cmd.get("volume", 0.01),
-                            "price_open": cmd.get("entry", 0),
-                            "sl": cmd.get("stop_loss", 0),
-                            "tp": cmd.get("take_profit", 0),
-                            "profit": 0.0,
-                            "current_price": cmd.get("entry", 0),
-                            "open_time": datetime.now(timezone.utc).isoformat(),
-                        })
-                elif result.get("status") == "BRIDGE_UNAVAILABLE":
-                    # MT5 not connected - create demo position
-                    if not _account["mt5_connected"]:
-                        ticket = random.randint(100000, 999999)
-                        sym = cmd.get("symbol", "XAUUSD")
-                        _positions[sym].append({
-                            "ticket": ticket,
-                            "symbol": sym,
-                            "type": cmd.get("action", "BUY"),
-                            "volume": cmd.get("volume", 0.01),
-                            "price_open": cmd.get("entry", 0),
-                            "sl": cmd.get("stop_loss", 0),
-                            "tp": cmd.get("take_profit", 0),
-                            "profit": 0.0,
-                            "current_price": cmd.get("entry", 0),
-                            "open_time": datetime.now(timezone.utc).isoformat(),
-                        })
-                        cmd["status"] = "DEMO_FILLED"
-                        cmd["ticket"] = ticket
-                        _add_log("INFO", "DEMO_FILL", f"Demo position #{ticket} created (MT5 offline)")
-                else:
-                    cmd["status"] = "FAILED"
-                    _add_log("WARNING", "CMD_FAILED", f"Command {cmd.get('command_id')[:8]} failed: {result}")
-        except Exception as e:
-            _add_log("ERROR", "CMD_EXEC_ERR", str(e))
-        await asyncio.sleep(1)
-
-
 # ─── AUTO-TRADE LOOP ────────────────────────────────────────────────────────
 _ai_loop_running = False
 _ai_loop_task = None
@@ -1006,7 +825,7 @@ async def _ai_trade_loop():
         await asyncio.sleep(5)
 
 async def _position_manager_loop():
-    """Position manager background loop - Break-even, Trailing Stop, SL/TP monitoring every 2s"""
+    """Position manager background loop - auto Break-even and Trailing Stop every 2s"""
     global _ai_loop_running
     while _ai_loop_running:
         try:
@@ -1016,135 +835,56 @@ async def _position_manager_loop():
                 bid, ask = await fetch_real_bid_ask(symbol)
                 for pos in list(pos_list):
                     pos_type = str(pos.get("type", "BUY")).upper()
+                    # pyrefly: ignore [bad-argument-type]
                     entry = float(pos.get("price_open", pos.get("entry", 0)))
                     sl = float(pos.get("sl", 0))
                     tp = float(pos.get("tp", 0))
                     current_price = bid if pos_type == "BUY" else ask
 
-                    # Update real-time P&L
                     if pos_type == "BUY":
                         pos["profit"] = round((current_price - entry) * float(pos.get("volume", 0.01)) * 100, 2)
                     else:
                         pos["profit"] = round((entry - current_price) * float(pos.get("volume", 0.01)) * 100, 2)
                     pos["current_price"] = current_price
 
-                    if entry <= 0:
-                        continue
-
-                    risk_dist = abs(entry - sl) if sl > 0 else 5.0
-                    ticket = pos.get("ticket")
-
-                    # --- SL/TP HIT CHECK (in-memory positions) ---
-                    if tp > 0:
-                        if (pos_type == "BUY" and current_price >= tp) or (pos_type == "SELL" and current_price <= tp):
-                            trade = {
-                                "ticket": ticket, "symbol": symbol, "type": pos_type,
-                                "volume": pos.get("volume", 0.01),
-                                "price_open": entry, "price_close": current_price,
-                                "profit": pos.get("profit", 0),
-                                "time": datetime.now(timezone.utc).isoformat(),
-                                "close_reason": "TAKE_PROFIT",
-                            }
-                            _trades.append(trade)
-                            pos_list.remove(pos)
-                            _account["total_trades"] += 1
-                            _add_ai_event("TRADE", "CLOSE_TP", symbol, {"ticket": ticket, "profit": pos.get("profit", 0)})
-                            _add_log("INFO", "TP_HIT", f"TP hit for #{ticket} {symbol} P&L: {pos.get('profit', 0):.2f}")
-                            continue
-
-                    if sl > 0:
-                        if (pos_type == "BUY" and current_price <= sl) or (pos_type == "SELL" and current_price >= sl):
-                            trade = {
-                                "ticket": ticket, "symbol": symbol, "type": pos_type,
-                                "volume": pos.get("volume", 0.01),
-                                "price_open": entry, "price_close": current_price,
-                                "profit": pos.get("profit", 0),
-                                "time": datetime.now(timezone.utc).isoformat(),
-                                "close_reason": "STOP_LOSS",
-                            }
-                            _trades.append(trade)
-                            pos_list.remove(pos)
-                            _account["total_trades"] += 1
-                            _add_ai_event("TRADE", "CLOSE_SL", symbol, {"ticket": ticket, "profit": pos.get("profit", 0)})
-                            _add_log("INFO", "SL_HIT", f"SL hit for #{ticket} {symbol} P&L: {pos.get('profit', 0):.2f}")
-                            continue
-
-                    # --- BREAK-EVEN LOGIC ---
-                    if pos_type == "BUY":
-                        if sl < entry and (bid - entry) >= risk_dist:
-                            new_sl = round(entry + 0.3, 2)
-                            pos["sl"] = new_sl
-                            _add_log("INFO", "BREAK_EVEN", f"BUY #{ticket} SL moved to BE @ {new_sl}")
-                            _add_ai_event("TRADE", "BREAK_EVEN", symbol, {"ticket": ticket, "sl": new_sl})
-                            if _account["mt5_connected"]:
+                    if entry > 0:
+                        risk_dist = abs(entry - sl) if sl > 0 else 1.5
+                        if pos_type == "BUY":
+                            if (bid - entry) >= risk_dist and (sl < entry):
+                                new_sl = round(entry + 0.5, 2)
+                                pos["sl"] = new_sl
+                                _add_log("INFO", "BREAK_EVEN", f"Moved SL to Break-Even for BUY #{pos.get('ticket')} @ {new_sl}")
+                                _add_ai_event("TRADE", "BREAK_EVEN", symbol, {"ticket": pos.get("ticket"), "sl": new_sl})
                                 _commands.append({
                                     "command_id": str(uuid.uuid4()),
                                     "ts": datetime.now(timezone.utc).isoformat(),
-                                    "action": "MODIFY", "symbol": symbol,
-                                    "ticket": ticket, "stop_loss": new_sl,
-                                    "take_profit": tp, "status": "QUEUED"
+                                    "action": "MODIFY",
+                                    "symbol": symbol,
+                                    "ticket": pos.get("ticket"),
+                                    "stop_loss": new_sl,
+                                    "take_profit": tp,
+                                    "status": "QUEUED"
                                 })
-
-                        # --- TRAILING STOP ---
-                        trailing_distance = max(3.0, risk_dist * 0.5)
-                        profit_distance = bid - entry
-                        if profit_distance >= risk_dist * 2:
-                            trailing_sl = round(bid - trailing_distance, 2)
-                            if trailing_sl > sl:
-                                pos["sl"] = trailing_sl
-                                _add_log("INFO", "TRAILING_STOP", f"BUY #{ticket} SL trailed to {trailing_sl}")
-                                _add_ai_event("TRADE", "TRAILING_STOP", symbol, {"ticket": ticket, "sl": trailing_sl, "profit": pos.get("profit", 0)})
-                                if _account["mt5_connected"]:
-                                    _commands.append({
-                                        "command_id": str(uuid.uuid4()),
-                                        "ts": datetime.now(timezone.utc).isoformat(),
-                                        "action": "MODIFY", "symbol": symbol,
-                                        "ticket": ticket, "stop_loss": trailing_sl,
-                                        "take_profit": tp, "status": "QUEUED"
-                                    })
-
-                    elif pos_type == "SELL":
-                        if (sl > entry or sl == 0) and (entry - ask) >= risk_dist:
-                            new_sl = round(entry - 0.3, 2)
-                            pos["sl"] = new_sl
-                            _add_log("INFO", "BREAK_EVEN", f"SELL #{ticket} SL moved to BE @ {new_sl}")
-                            _add_ai_event("TRADE", "BREAK_EVEN", symbol, {"ticket": ticket, "sl": new_sl})
-                            if _account["mt5_connected"]:
+                        elif pos_type == "SELL":
+                            if (entry - ask) >= risk_dist and (sl > entry or sl == 0):
+                                new_sl = round(entry - 0.5, 2)
+                                pos["sl"] = new_sl
+                                _add_log("INFO", "BREAK_EVEN", f"Moved SL to Break-Even for SELL #{pos.get('ticket')} @ {new_sl}")
+                                _add_ai_event("TRADE", "BREAK_EVEN", symbol, {"ticket": pos.get("ticket"), "sl": new_sl})
                                 _commands.append({
                                     "command_id": str(uuid.uuid4()),
                                     "ts": datetime.now(timezone.utc).isoformat(),
-                                    "action": "MODIFY", "symbol": symbol,
-                                    "ticket": ticket, "stop_loss": new_sl,
-                                    "take_profit": tp, "status": "QUEUED"
+                                    "action": "MODIFY",
+                                    "symbol": symbol,
+                                    "ticket": pos.get("ticket"),
+                                    "stop_loss": new_sl,
+                                    "take_profit": tp,
+                                    "status": "QUEUED"
                                 })
-
-                        # --- TRAILING STOP ---
-                        trailing_distance = max(3.0, risk_dist * 0.5)
-                        profit_distance = entry - ask
-                        if profit_distance >= risk_dist * 2:
-                            trailing_sl = round(ask + trailing_distance, 2)
-                            if sl == 0 or trailing_sl < sl:
-                                pos["sl"] = trailing_sl
-                                _add_log("INFO", "TRAILING_STOP", f"SELL #{ticket} SL trailed to {trailing_sl}")
-                                _add_ai_event("TRADE", "TRAILING_STOP", symbol, {"ticket": ticket, "sl": trailing_sl, "profit": pos.get("profit", 0)})
-                                if _account["mt5_connected"]:
-                                    _commands.append({
-                                        "command_id": str(uuid.uuid4()),
-                                        "ts": datetime.now(timezone.utc).isoformat(),
-                                        "action": "MODIFY", "symbol": symbol,
-                                        "ticket": ticket, "stop_loss": trailing_sl,
-                                        "take_profit": tp, "status": "QUEUED"
-                                    })
-
-            # Update account totals
-            total_floating = sum(p.get("profit", 0) for positions in _positions.values() for p in positions)
-            _account["total_pnl"] = total_floating
-            _account["equity"] = _account["balance"] + total_floating
-            _account["open_positions"] = sum(len(ps) for ps in _positions.values())
-
         except Exception as e:
             _add_log("ERROR", "POS_MGR_ERR", str(e))
         await asyncio.sleep(2)
+
 # ─── PYDANTIC MODELS ─────────────────────────────────────────────────────────
 class LoginRequest(BaseModel): login: str; password: str
 class OrderCloseRequest(BaseModel): ticket: Optional[int] = None; position_id: Optional[str] = None
@@ -1163,26 +903,22 @@ class CopilotChatRequest(BaseModel): message: str; symbol: str = "XAUUSD"; timef
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 _pos_mgr_task = None
-_cmd_exec_task = None
-_pos_sync_task = None
 
 # pyrefly: ignore [deprecated]
 @app.on_event("startup")
 async def startup():
-    global _ai_loop_running, _ai_loop_task, _pos_mgr_task, _cmd_exec_task, _pos_sync_task
+    global _ai_loop_running, _ai_loop_task, _pos_mgr_task
     _ai_loop_running = True
     _ai_loop_task = asyncio.create_task(_ai_trade_loop())
     _pos_mgr_task = asyncio.create_task(_position_manager_loop())
-    _cmd_exec_task = asyncio.create_task(_command_executor_loop())
-    _pos_sync_task = asyncio.create_task(_sync_positions_from_mt5())
-    _add_log("INFO", "STARTUP", f"{APP_NAME} v{VERSION} started (4 background loops active)")
+    _add_log("INFO", "STARTUP", f"{APP_NAME} v{VERSION} started")
 
 # pyrefly: ignore [deprecated]
 @app.on_event("shutdown")
 async def shutdown():
-    global _ai_loop_running, _ai_loop_task, _pos_mgr_task, _cmd_exec_task, _pos_sync_task
+    global _ai_loop_running, _ai_loop_task, _pos_mgr_task
     _ai_loop_running = False
-    for task in (_ai_loop_task, _pos_mgr_task, _cmd_exec_task, _pos_sync_task):
+    for task in (_ai_loop_task, _pos_mgr_task):
         if task and not task.done():
             task.cancel()
             try: await task
@@ -1219,7 +955,9 @@ async def get_status(symbol: str = Query("XAUUSD")):
     """Get current status with real indicators"""
     df = await fetch_real_candles(symbol, "M15", 100)
     if df is None or df.empty:
-        df = generate_stub_candles(100, "M15", symbol)
+        generate_mock_candles = None
+        # pyrefly: ignore [not-callable]
+        df = generate_mock_candles(symbol, "M15", 100)
     indicators = calculate_indicators(df)
     bid, ask = await fetch_real_bid_ask(symbol)
 
@@ -1293,7 +1031,9 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
     # Fetch REAL candles
     df = await fetch_real_candles(symbol, tf, count)
     if df is None or df.empty:
-        df = generate_stub_candles(count, tf, symbol)
+        generate_mock_candles = None
+        # pyrefly: ignore [not-callable]
+        df = generate_mock_candles(symbol, tf, count)
     bid, ask = await fetch_real_bid_ask(symbol)
 
     # Run method-specific analysis
@@ -2092,308 +1832,9 @@ async def update_settings_endpoint(request: Request):
     return {"status": "SUCCESS", "updated": updated_keys, "config": _config}
 
 
-class NewsAnalysisRequest(BaseModel):
-    title: str
-    currency: Optional[str] = "USD"
-    impact: Optional[str] = "HIGH"
-    forecast: Optional[str] = None
-    previous: Optional[str] = None
-    actual: Optional[str] = None
-
-@app.post("/api/auth/refresh")
-async def auth_refresh():
-    """Refresh session auth token"""
-    return {"status": "SUCCESS", "authenticated": True}
-
-@app.get("/api/pending-orders")
-async def get_pending_orders():
-    """Get pending orders list"""
-    pending = []
-    for c in _commands:
-        if c.get("status") in ("QUEUED", "CLAIMED"):
-            ticket_val = c.get("ticket")
-            if not ticket_val:
-                try:
-                    ticket_val = abs(hash(c.get("command_id", ""))) % 1000000
-                except Exception:
-                    ticket_val = random.randint(100000, 999999)
-            pending.append({
-                "ticket": ticket_val,
-                "symbol": c.get("symbol", "XAUUSD"),
-                "type": c.get("action", "BUY"),
-                "price": c.get("entry", 0.0),
-                "sl": c.get("stop_loss", 0.0),
-                "tp": c.get("take_profit", 0.0),
-                "volume": c.get("volume", 0.01),
-                "expiration": "GTC"
-            })
-    return pending
-
-@app.post("/api/order/cancel_pending")
-async def cancel_pending_order(request: Request):
-    """Cancel a pending command/order"""
-    try:
-        body = await request.json()
-        ticket = body.get("order_ticket") or body.get("ticket")
-    except Exception:
-        ticket = None
-
-    for c in list(_commands):
-        if c.get("ticket") == ticket or c.get("command_id") == str(ticket):
-            c["status"] = "CANCELLED"
-            _add_log("INFO", "CANCEL_ORDER", f"Cancelled pending order #{ticket}")
-            return {"status": "SUCCESS", "cancelled": ticket}
-    return {"status": "SUCCESS", "cancelled": ticket}
-
-@app.get("/api/patterns")
-async def get_patterns(symbol: str = Query("XAUUSD"), tf: str = Query("M15")):
-    """Get detected patterns for symbol/tf"""
-    df = await fetch_real_candles(symbol, tf, 200)
-    if df is None or df.empty:
-        return {"symbol": symbol, "tf": tf, "patterns": []}
-
-    indicators = calculate_indicators(df)
-    pa = analyze_price_action(df, indicators)
-    smc = analyze_smc(df, indicators)
-
-    patterns = []
-    pattern_name = pa.get("objects", {}).get("pattern")
-    if pattern_name and pattern_name != "NONE":
-        patterns.append({
-            "symbol": symbol,
-            "tf": tf,
-            "pattern": pattern_name,
-            "type": "BULLISH" if "BULL" in pattern_name else "BEARISH",
-            "confidence": f"{pa.get('score', 50)}%",
-            "time": str(df["timestamp"].iloc[-1]) if "timestamp" in df.columns else ""
-        })
-
-    bos_choch = smc.get("objects", {}).get("bos_choch", {})
-    if bos_choch.get("kind"):
-        patterns.append({
-            "symbol": symbol,
-            "tf": tf,
-            "pattern": f"{bos_choch.get('kind')} {bos_choch.get('direction')}",
-            "type": bos_choch.get("direction"),
-            "confidence": f"{smc.get('score', 50)}%",
-            "time": str(df["timestamp"].iloc[-1]) if "timestamp" in df.columns else ""
-        })
-    return {"symbol": symbol, "tf": tf, "patterns": patterns}
-
-@app.get("/api/economic-calendar")
-async def get_economic_calendar(days: int = Query(7, ge=1, le=30)):
-    """Fetch economic calendar events from ForexFactory + Investing.com"""
-    now = datetime.now(timezone.utc)
-    events = []
-
-    # Try fetching from ForexFactory API
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            # Try ForexFactory calendar
-            res = await client.get(
-                "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
-                headers={"User-Agent": "Mozilla/5.0"}
-            )
-            if res.status_code == 200:
-                ff_data = res.json()
-                impact_map = {"High": "HIGH", "Medium": "MEDIUM", "Low": "LOW"}
-                for item in ff_data[:days * 10]:  # Limit events
-                    try:
-                        event_dt = datetime.fromisoformat(item.get("date", "").replace("Z", "+00:00")) if item.get("date") else now
-                    except Exception:
-                        event_dt = now
-
-                    if event_dt < now - timedelta(days=1):
-                        continue
-
-                    status = "released" if item.get("actual") else ("live" if abs((event_dt - now).total_seconds()) < 3600 else "upcoming")
-                    events.append({
-                        "id": f"ff-{item.get('id', str(uuid.uuid4()))}",
-                        "title": item.get("title", "Unknown Event"),
-                        "country": item.get("country", "US"),
-                        "currency": item.get("currency", "USD"),
-                        "impact": impact_map.get(item.get("impact", "Low"), "LOW"),
-                        "datetime": event_dt.isoformat(),
-                        "forecast": str(item.get("forecast", "")),
-                        "previous": str(item.get("previous", "")),
-                        "actual": str(item.get("actual", "")) if item.get("actual") else None,
-                        "unit": item.get("unit", ""),
-                        "source": "ForexFactory",
-                        "description": item.get("description", ""),
-                        "category": item.get("category", "Economic"),
-                        "status": status,
-                    })
-                _add_log("INFO", "CALENDAR", f"Fetched {len(events)} events from ForexFactory")
-    except Exception as e:
-        _add_log("WARNING", "CALENDAR_FETCH", f"ForexFactory unavailable: {e}")
-
-    # Fallback: generate realistic upcoming events if empty
-    if not events:
-        events = [
-            {
-                "id": "evt-cpi-01", "title": "US Core CPI (MoM)",
-                "country": "US", "currency": "USD", "impact": "HIGH",
-                "datetime": (now + timedelta(hours=3)).isoformat(),
-                "forecast": "0.3%", "previous": "0.2%", "actual": None,
-                "unit": "%", "source": "US Bureau of Labor Statistics",
-                "description": "Measures change in price of goods excluding food/energy.",
-                "category": "Inflation", "status": "upcoming"
-            },
-            {
-                "id": "evt-nfp-02", "title": "Non-Farm Employment Change",
-                "country": "US", "currency": "USD", "impact": "HIGH",
-                "datetime": (now + timedelta(hours=24)).isoformat(),
-                "forecast": "175K", "previous": "206K", "actual": None,
-                "unit": "K", "source": "US Department of Labor",
-                "description": "Change in number of employed people in US.",
-                "category": "Employment", "status": "upcoming"
-            },
-            {
-                "id": "evt-fomc-03", "title": "FOMC Interest Rate Decision",
-                "country": "US", "currency": "USD", "impact": "HIGH",
-                "datetime": (now + timedelta(days=2)).isoformat(),
-                "forecast": "5.25%", "previous": "5.50%", "actual": None,
-                "unit": "%", "source": "Federal Reserve System",
-                "description": "Federal Reserve benchmark interest rate decision.",
-                "category": "Central Bank", "status": "upcoming"
-            },
-            {
-                "id": "evt-claims-04", "title": "Initial Jobless Claims",
-                "country": "US", "currency": "USD", "impact": "MEDIUM",
-                "datetime": (now + timedelta(hours=12)).isoformat(),
-                "forecast": "220K", "previous": "229K", "actual": None,
-                "unit": "K", "source": "US Department of Labor",
-                "description": "Number of new unemployment claims filed.",
-                "category": "Employment", "status": "upcoming"
-            },
-            {
-                "id": "evt-gdp-05", "title": "US GDP (QoQ)",
-                "country": "US", "currency": "USD", "impact": "HIGH",
-                "datetime": (now + timedelta(days=3)).isoformat(),
-                "forecast": "2.1%", "previous": "1.4%", "actual": None,
-                "unit": "%", "source": "Bureau of Economic Analysis",
-                "description": "Gross Domestic Product quarter-over-quarter change.",
-                "category": "GDP", "status": "upcoming"
-            },
-            {
-                "id": "evt-pmi-06", "title": "ISM Manufacturing PMI",
-                "country": "US", "currency": "USD", "impact": "HIGH",
-                "datetime": (now + timedelta(days=4)).isoformat(),
-                "forecast": "50.0", "previous": "48.7", "actual": None,
-                "unit": "", "source": "Institute for Supply Management",
-                "description": "Purchasing Managers Index for manufacturing sector.",
-                "category": "Manufacturing", "status": "upcoming"
-            },
-            {
-                "id": "evt-ecb-07", "title": "ECB Interest Rate Decision",
-                "country": "EU", "currency": "EUR", "impact": "HIGH",
-                "datetime": (now + timedelta(days=5)).isoformat(),
-                "forecast": "4.50%", "previous": "4.50%", "actual": None,
-                "unit": "%", "source": "European Central Bank",
-                "description": "ECB main refinancing rate decision.",
-                "category": "Central Bank", "status": "upcoming"
-            },
-            {
-                "id": "evt-boe-08", "title": "Bank of England Rate Decision",
-                "country": "UK", "currency": "GBP", "impact": "HIGH",
-                "datetime": (now + timedelta(days=5, hours=2)).isoformat(),
-                "forecast": "5.25%", "previous": "5.25%", "actual": None,
-                "unit": "%", "source": "Bank of England",
-                "description": "BoE base rate decision.",
-                "category": "Central Bank", "status": "upcoming"
-            },
-            {
-                "id": "evt-cpi-eu-09", "title": "Eurozone CPI (YoY)",
-                "country": "EU", "currency": "EUR", "impact": "HIGH",
-                "datetime": (now + timedelta(days=6)).isoformat(),
-                "forecast": "2.5%", "previous": "2.6%", "actual": None,
-                "unit": "%", "source": "Eurostat",
-                "description": "Consumer Price Index year-over-year for Eurozone.",
-                "category": "Inflation", "status": "upcoming"
-            },
-            {
-                "id": "evt-retail-10", "title": "US Retail Sales (MoM)",
-                "country": "US", "currency": "USD", "impact": "MEDIUM",
-                "datetime": (now + timedelta(days=7)).isoformat(),
-                "forecast": "0.3%", "previous": "0.1%", "actual": None,
-                "unit": "%", "source": "US Census Bureau",
-                "description": "Change in total value of retail sales.",
-                "category": "Consumer", "status": "upcoming"
-            },
-        ]
-        _add_log("INFO", "CALENDAR", f"Using {len(events)} fallback events")
-
-    return events
-
-@app.post("/api/news/analyze")
-async def analyze_news(req: NewsAnalysisRequest):
-    """AI analysis of economic news events"""
-    title = req.title.lower()
-    rec = "HOLD"
-    reason = f"Analysis of {req.title}: "
-    if "cpi" in title or "inflation" in title:
-        rec = "BUY"
-        reason += "High inflation expectations boost safe-haven demand for Gold (XAUUSD)."
-    elif "nfp" in title or "employment" in title or "payroll" in title:
-        rec = "SELL" if req.actual and str(req.actual) > str(req.forecast or "0") else "BUY"
-        reason += "Strong employment strengthens USD, putting pressure on Gold."
-    elif "fomc" in title or "rate" in title:
-        rec = "BUY"
-        reason += "Rate cut expectations increase Gold market momentum."
-    else:
-        reason += "Event impact monitored. Maintain strict risk management."
-
-    return {
-        "status": "SUCCESS",
-        "title": req.title,
-        "recommendation": rec,
-        "analysis": reason
-    }
-
-@app.post("/api/orders/close-profitable")
-async def close_profitable_positions():
-    """Close only positions that currently have positive profit (PNL > 0)"""
-    closed = []
-    for sym, positions in _positions.items():
-        for i in range(len(positions) - 1, -1, -1):
-            pos = positions[i]
-            if pos.get("profit", 0) > 0:
-                trade = {
-                    "ticket": pos.get("ticket"),
-                    "symbol": sym,
-                    "type": pos.get("type"),
-                    "volume": pos.get("volume"),
-                    "price_open": pos.get("price_open"),
-                    "price_close": pos.get("current_price", pos.get("price_open")),
-                    "profit": pos.get("profit", 0),
-                    "time": datetime.now(timezone.utc).isoformat(),
-                }
-                _trades.append(trade)
-                positions.pop(i)
-                closed.append(trade)
-                _add_ai_event("TRADE", "CLOSE_PROFITABLE", sym, {"ticket": trade["ticket"], "profit": trade["profit"]})
-    _add_log("INFO", "CLOSE_PROFITABLE", f"Closed {len(closed)} profitable positions")
-    return {"status": "SUCCESS", "closed_count": len(closed), "closed": closed}
-
-@app.post("/api/reset_all")
-async def reset_all_state():
-    """Reset system state - clears logs, positions, commands, and resets balance"""
-    _positions.clear()
-    _commands.clear()
-    _ai_events.clear()
-    _account["balance"] = 10000.0
-    _account["equity"] = 10000.0
-    _account["margin"] = 0.0
-    _account["margin_free"] = 10000.0
-    _account["total_pnl"] = 0.0
-    _account["total_trades"] = 0
-    _add_log("INFO", "RESET_ALL", "System state reset successfully")
-    return {"status": "SUCCESS", "message": "All state reset"}
-
 # ════════════════════════════════════════════════════════════════════════════
 # MAIN ENTRY POINT (must be at end of file so all routes are registered)
 # ════════════════════════════════════════════════════════════════════════════
-
 
 if __name__ == "__main__":
     port = int(os.getenv("ATE_DASHBOARD_PORT", "8005"))

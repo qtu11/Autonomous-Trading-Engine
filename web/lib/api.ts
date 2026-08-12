@@ -36,9 +36,13 @@ async function getJson<T>(url: string): Promise<T | null> {
       headers: { ...adminHeaders() },
       credentials: 'same-origin',
     });
+    // Only redirect on 401 for auth-specific endpoints, not polling APIs
     if (res.status === 401 && typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-      localStorage.removeItem('quantai_auth_token');
-      window.location.href = '/login';
+      const isAuthEndpoint = url.includes('/auth/');
+      if (isAuthEndpoint) {
+        localStorage.removeItem('quantai_auth_token');
+        window.location.href = '/login';
+      }
       return null;
     }
     if (!res.ok) return null;
@@ -54,9 +58,13 @@ async function postJson<T>(url: string, body?: Record<string, unknown>): Promise
       credentials: 'same-origin',
       body: body ? JSON.stringify(body) : undefined,
     });
+    // Only redirect on 401 for auth-specific endpoints
     if (res.status === 401 && typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-      localStorage.removeItem('quantai_auth_token');
-      window.location.href = '/login';
+      const isAuthEndpoint = url.includes('/auth/');
+      if (isAuthEndpoint) {
+        localStorage.removeItem('quantai_auth_token');
+        window.location.href = '/login';
+      }
       return null;
     }
     if (!res.ok) return null;

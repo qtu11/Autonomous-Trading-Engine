@@ -186,6 +186,7 @@ def compute_sniper_overlay(
     if df is None or df.empty or len(df) < max(EMA_SLOW, MACD_SLOW) + 5:
         return objects
 
+    time_col = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
     close = df["close"]
     ema9 = _ema(close, EMA_FAST)
     ema21 = _ema(close, EMA_SLOW)
@@ -196,7 +197,7 @@ def compute_sniper_overlay(
     atr = _atr(df)
     vol_ma = df["volume"].rolling(VOL_MA_PERIOD).mean()
     last = df.iloc[-1]
-    last_time = last["time"]
+    last_time = last[time_col]
 
     # EMA ribbon (two endpoint lines + colored band)
     objects.append({
@@ -302,6 +303,7 @@ def compute_sniper_overlay(
 
     objects.append({
         "type": "SNIPER_SCORE", "direction": "NEUTRAL", "label": "SNIPER_SCORE",
+        # pyrefly: ignore [unnecessary-type-conversion]
         "top": float(bull_pct), "bottom": float(bear_pct),
         "price": float(close.iloc[-1]),
         "index": 0, "time_start": _dt(last_time),
@@ -374,6 +376,7 @@ def _find_swings(series: pd.Series, window: int) -> list[tuple[int, float]]:
             swings.append((i, float(series.iloc[i]), "HIGH"))
         elif series.iloc[i] == window_vals.min():
             swings.append((i, float(series.iloc[i]), "LOW"))
+    # pyrefly: ignore [bad-return]
     return swings
 
 
@@ -386,11 +389,12 @@ def compute_smc_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
     if df is None or df.empty or len(df) < 10:
         return objects
 
+    time_col = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
     high = df["high"]
     low = df["low"]
     close = df["close"]
     last = df.iloc[-1]
-    last_time = last["time"]
+    last_time = last[time_col]
 
     # ---- Swings + market structure labels ----
     swing_highs: list[tuple[int, float]] = []
@@ -411,8 +415,9 @@ def compute_smc_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
         trend = "BULLISH" if label == "HH" else trend
         objects.append({
             "type": "SWING", "direction": "BULLISH" if label == "HH" else "BEARISH",
+            # pyrefly: ignore [unnecessary-type-conversion]
             "label": label, "price": round(h, 2), "index": int(i),
-            "time_start": _dt(df.iloc[i]["time"]),
+            "time_start": _dt(df.iloc[i][time_col]),
             "top": h, "bottom": h,
         })
         prev_h = h
@@ -422,8 +427,9 @@ def compute_smc_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
         label = "HL" if l > prev_l else "LL"
         objects.append({
             "type": "SWING", "direction": "BULLISH" if label == "HL" else "BEARISH",
+            # pyrefly: ignore [unnecessary-type-conversion]
             "label": label, "price": round(l, 2), "index": int(i),
-            "time_start": _dt(df.iloc[i]["time"]),
+            "time_start": _dt(df.iloc[i][time_col]),
             "top": l, "bottom": l,
         })
         prev_l = l
@@ -453,8 +459,10 @@ def compute_smc_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
             if abs(h - h2) <= max(h, h2) * PIVOT_TOLERANCE:
                 objects.append({
                     "type": "EQH", "direction": "BEARISH", "label": "EQH",
+                    # pyrefly: ignore [unnecessary-type-conversion]
                     "top": float(h), "bottom": float(h), "price": float(h),
-                    "index": int(idx_h), "time_start": _dt(df.iloc[idx_h]["time"]),
+                    # pyrefly: ignore [unnecessary-type-conversion]
+                    "index": int(idx_h), "time_start": _dt(df.iloc[idx_h][time_col]),
                 })
                 break
     for i, (idx_l, l) in enumerate(swing_lows[-6:]):
@@ -463,8 +471,10 @@ def compute_smc_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
             if abs(l - l2) <= max(l, l2) * PIVOT_TOLERANCE:
                 objects.append({
                     "type": "EQL", "direction": "BULLISH", "label": "EQL",
+                    # pyrefly: ignore [unnecessary-type-conversion]
                     "top": float(l), "bottom": float(l), "price": float(l),
-                    "index": int(idx_l), "time_start": _dt(df.iloc[idx_l]["time"]),
+                    # pyrefly: ignore [unnecessary-type-conversion]
+                    "index": int(idx_l), "time_start": _dt(df.iloc[idx_l][time_col]),
                 })
                 break
 
@@ -477,13 +487,15 @@ def compute_smc_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
             objects.append({
                 "type": "BOS", "direction": "BULLISH", "label": "BOS_BULLISH",
                 "top": last_sh[1], "bottom": last_sh[1], "price": last_sh[1],
-                "index": int(last_sh[0]), "time_start": _dt(df.iloc[last_sh[0]]["time"]),
+                # pyrefly: ignore [unnecessary-type-conversion]
+                "index": int(last_sh[0]), "time_start": _dt(df.iloc[last_sh[0]][time_col]),
             })
         elif close.iloc[-1] < last_sl[1] and close.iloc[-2] >= last_sl[1]:
             objects.append({
                 "type": "BOS", "direction": "BEARISH", "label": "BOS_BEARISH",
                 "top": last_sl[1], "bottom": last_sl[1], "price": last_sl[1],
-                "index": int(last_sl[0]), "time_start": _dt(df.iloc[last_sl[0]]["time"]),
+                # pyrefly: ignore [unnecessary-type-conversion]
+                "index": int(last_sl[0]), "time_start": _dt(df.iloc[last_sl[0]][time_col]),
             })
 
         # CHoCH: trend change. We need swing trend: if recent higher-highs dominant -> CHoCH bearish = LH breaks HL
@@ -536,12 +548,13 @@ def compute_ict_overlay(
     if df is None or df.empty or len(df) < 20:
         return objects
 
+    time_col = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
     last = df.iloc[-1]
-    last_time = last["time"]
+    last_time = last[time_col]
     last_idx = len(df) - 1
 
     # ---- Asian range (00:00 - 08:00 broker local) ----
-    hours = pd.to_datetime(df["time"]).dt.hour
+    hours = pd.to_datetime(df[time_col]).dt.hour
     asian_mask = (hours >= 0) & (hours < 8)
     if asian_mask.any():
         asian_high = float(df.loc[asian_mask, "high"].max())
@@ -549,6 +562,7 @@ def compute_ict_overlay(
         objects.append({
             "type": "ASIAN", "direction": "NEUTRAL", "label": "ASIAN_RANGE",
             "top": asian_high, "bottom": asian_low,
+            # pyrefly: ignore [unnecessary-type-conversion]
             "price": asian_high, "index": int(last_idx),
             "time_start": _dt(last_time),
         })
@@ -573,11 +587,13 @@ def compute_ict_overlay(
         objects.append({
             "type": "PD", "direction": "NEUTRAL", "label": "PREMIUM",
             "top": sh, "bottom": eq, "price": eq,
+            # pyrefly: ignore [unnecessary-type-conversion]
             "index": int(last_idx), "time_start": _dt(last_time),
         })
         objects.append({
             "type": "PD", "direction": "NEUTRAL", "label": "DISCOUNT",
             "top": eq, "bottom": sl, "price": eq,
+            # pyrefly: ignore [unnecessary-type-conversion]
             "index": int(last_idx), "time_start": _dt(last_time),
         })
 
@@ -588,6 +604,7 @@ def compute_ict_overlay(
         objects.append({
             "type": "OTE", "direction": "BULLISH", "label": "OTE_BUY",
             "top": ote_top, "bottom": ote_bottom,
+            # pyrefly: ignore [unnecessary-type-conversion]
             "price": ote_top, "index": int(last_idx),
             "time_start": _dt(last_time),
         })
@@ -600,6 +617,7 @@ def compute_ict_overlay(
     objects.append({
         "type": "KILLZONE", "direction": "NEUTRAL", "label": "KILLZONE",
         "top": 0.0, "bottom": 0.0, "price": 0.0,
+        # pyrefly: ignore [unnecessary-type-conversion]
         "index": int(last_idx), "time_start": _dt(last_time),
         "is_london": is_london, "is_ny": is_ny, "is_asian": is_asian,
     })
@@ -616,6 +634,7 @@ def compute_ict_overlay(
                 "top": float(first_london["high"].max()),
                 "bottom": float(first_london["low"].min()),
                 "price": float(first_london["close"].iloc[-1]),
+                # pyrefly: ignore [unnecessary-type-conversion]
                 "index": int(last_idx), "time_start": _dt(last_time),
             })
         elif first_london["high"].iloc[0] > sh and first_london["close"].iloc[-1] < sh:
@@ -624,6 +643,7 @@ def compute_ict_overlay(
                 "top": float(first_london["high"].max()),
                 "bottom": float(first_london["low"].min()),
                 "price": float(first_london["close"].iloc[-1]),
+                # pyrefly: ignore [unnecessary-type-conversion]
                 "index": int(last_idx), "time_start": _dt(last_time),
             })
 
@@ -637,6 +657,7 @@ def compute_ict_overlay(
             objects.append({
                 "type": "PO3", "direction": "BULLISH", "label": "PO3_BULL",
                 "top": c2["high"], "bottom": c2["low"],
+                # pyrefly: ignore [unnecessary-type-conversion]
                 "price": c2["close"], "index": int(last_idx),
                 "time_start": _dt(last_time),
             })
@@ -645,6 +666,7 @@ def compute_ict_overlay(
             objects.append({
                 "type": "PO3", "direction": "BEARISH", "label": "PO3_BEAR",
                 "top": c2["high"], "bottom": c2["low"],
+                # pyrefly: ignore [unnecessary-type-conversion]
                 "price": c2["close"], "index": int(last_idx),
                 "time_start": _dt(last_time),
             })
@@ -654,6 +676,7 @@ def compute_ict_overlay(
         objects.append({
             "type": "SILVER_BULLET", "direction": "NEUTRAL", "label": "SILVER_BULLET",
             "top": 0.0, "bottom": 0.0, "price": 0.0,
+            # pyrefly: ignore [unnecessary-type-conversion]
             "index": int(last_idx), "time_start": _dt(last_time),
         })
 
@@ -668,6 +691,7 @@ def compute_ict_overlay(
             objects.append({
                 "type": "UNICORN", "direction": "BULLISH", "label": "UNICORN_BULL",
                 "top": c2["high"], "bottom": c2["low"],
+                # pyrefly: ignore [unnecessary-type-conversion]
                 "price": c2["close"], "index": int(last_idx),
                 "time_start": _dt(last_time),
             })
@@ -677,6 +701,7 @@ def compute_ict_overlay(
         "type": "NYMO", "direction": "NEUTRAL", "label": "NYMO",
         "top": float(df.iloc[-1]["open"]), "bottom": float(df.iloc[-1]["open"]),
         "price": float(df.iloc[-1]["open"]),
+        # pyrefly: ignore [unnecessary-type-conversion]
         "index": int(last_idx), "time_start": _dt(last_time),
     })
 
@@ -691,11 +716,12 @@ def compute_pa_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
     triangle, wedge, channel, flag, pennant), trendline, trend (HH/HL/LH/LL).
     """
     objects: list[dict[str, Any]] = []
+    time_col = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
     if df is None or df.empty or len(df) < 5:
         return objects
 
     last = df.iloc[-1]
-    last_time = last["time"]
+    last_time = last[time_col]
     last_idx = len(df) - 1
     candles = [_candle_row(df.iloc[i].to_dict()) for i in range(len(df))]
 
@@ -721,7 +747,8 @@ def compute_pa_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
             objects.append({
                 "type": "CANDLE_PATTERN", "direction": direction, "label": label,
                 "top": c["high"], "bottom": c["low"], "price": c["close"],
-                "index": int(i), "time_start": _dt(df.iloc[i]["time"]),
+                # pyrefly: ignore [unnecessary-type-conversion]
+                "index": int(i), "time_start": _dt(df.iloc[i][time_col]),
             })
 
     # Engulfing (last 2 candles)
@@ -836,6 +863,7 @@ def compute_pa_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
             "type": label, "direction": direction, "label": label,
             "top": price, "bottom": price, "price": price,
             "index": last_idx, "time_start": _dt(last_time),
+            # pyrefly: ignore [unnecessary-type-conversion]
             "touches": int(count),
         })
 
