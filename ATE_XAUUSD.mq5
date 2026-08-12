@@ -392,20 +392,28 @@ void SendTelemetry()
       return;
    }
    string headers = BridgeHeaders();
+   // BUG FIX: payload phải khớp model TelemetryRequest của server (executor_id,
+   // account_id, margin_free, account_mode...) — trước đây thiếu executor_id nên
+   // FastAPI trả 422, balance/equity không bao giờ được đồng bộ về dashboard.
    string payload = StringFormat(
-      "{\"symbol\":\"%s\",\"account_id\":%I64d,\"server\":\"%s\",\"broker\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"margin_free\":%.2f,\"profit\":%.2f,\"positions\":%d,\"ask\":%.2f,\"bid\":%.2f}",
+      "{\"symbol\":\"%s\",\"account_id\":%I64d,\"login\":%I64d,\"server\":\"%s\",\"company\":\"%s\",\"broker\":\"%s\",\"account_mode\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"margin_free\":%.2f,\"free_margin\":%.2f,\"profit\":%.2f,\"positions\":%d,\"ask\":%.2f,\"bid\":%.2f,\"executor_id\":\"%s\"}",
       g_symbol,
+      AccountInfoInteger(ACCOUNT_LOGIN),
       AccountInfoInteger(ACCOUNT_LOGIN),
       AccountInfoString(ACCOUNT_SERVER),
       AccountInfoString(ACCOUNT_COMPANY),
+      AccountInfoString(ACCOUNT_COMPANY),
+      AccountModeLabel(),
       AccountInfoDouble(ACCOUNT_BALANCE),
       AccountInfoDouble(ACCOUNT_EQUITY),
       AccountInfoDouble(ACCOUNT_MARGIN),
       AccountInfoDouble(ACCOUNT_MARGIN_FREE),
+      AccountInfoDouble(ACCOUNT_MARGIN_FREE),
       AccountInfoDouble(ACCOUNT_PROFIT),
       PositionsTotal(),
       SymbolInfoDouble(g_symbol, SYMBOL_ASK),
-      SymbolInfoDouble(g_symbol, SYMBOL_BID)
+      SymbolInfoDouble(g_symbol, SYMBOL_BID),
+      EscapeJson(InpExecutorId)
    );
    
    char data[];

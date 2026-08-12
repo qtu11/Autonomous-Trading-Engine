@@ -101,70 +101,87 @@ function PieChart({ wins = 0, losses = 0 }: { wins?: number; losses?: number }) 
 }
 
 // Drawdown Chart Component
-function DrawdownChart({ maxDD = 12.3, currentDD = 3.2 }: { maxDD?: number; currentDD?: number }) {
+// BUG FIX: trước đây tự sinh đường drawdown giả bằng Math.random() — đồ thị không
+// liên quan dữ liệu thật. Giờ vẽ đường determinist từ maxDD thật; khi không có dữ
+// liệu thì hiện NO DATA thay vì đường ngẫu nhiên.
+function DrawdownChart({ maxDD = 0, currentDD = 0 }: { maxDD?: number; currentDD?: number }) {
+  const absMax = Math.abs(Number(maxDD) || 0);
   const ddPoints = useMemo(() => {
-    const points: number[] = [];
-    let dd = 0;
+    if (absMax <= 0) return [] as number[];
+    const pts: number[] = [];
+    // Đường cong determinist tới độ sâu maxDD (không dùng Math.random)
     for (let i = 0; i < 30; i++) {
-      dd = Math.min(dd - Math.random() * 2, -0.5);
-      if (Math.random() > 0.7) dd = Math.min(dd + Math.random() * 3, 0);
-      points.push(dd);
+      const depth = absMax * (0.3 + 0.7 * Math.abs(Math.sin((i / 29) * Math.PI * 0.85 + 0.5)));
+      pts.push(-Math.min(depth, absMax));
     }
-    return points;
-  }, []);
+    return pts;
+  }, [absMax]);
 
-  const minDD = Math.min(...ddPoints);
+  const minDD = ddPoints.length ? Math.min(...ddPoints) : -1;
 
   return (
     <div style={{ marginTop: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-        <span style={{ fontSize: 8, fontFamily: C.mono, color: C.muted }}>DRAWDOWN</span>
-        <span style={{ fontSize: 8, fontFamily: C.mono, color: C.red }}>Max: -{maxDD?.toFixed(1)}%</span>
+        <span style={{ fontSize: 8, fontFamily: C.mono, color: C.muted }}>MAX DRAWDOWN</span>
+        <span style={{ fontSize: 8, fontFamily: C.mono, color: C.red }}>{absMax > 0 ? `$${absMax.toFixed(1)}` : 'NO DATA'}</span>
       </div>
       <div style={{ height: 60, background: 'rgba(0,0,0,0.3)', borderRadius: 4, border: `1px solid ${C.border}`, position: 'relative', overflow: 'hidden' }}>
         {/* Zero line */}
         <div style={{ position: 'absolute', top: '60%', left: 0, right: 0, height: 1, background: 'rgba(255,255,255,0.1)' }} />
-        {/* Area */}
-        <svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 100 60">
-          <defs>
-            <linearGradient id="ddGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={C.red} stopOpacity="0.5" />
-              <stop offset="100%" stopColor={C.red} stopOpacity="0" />
-            </linearGradient>
-          </defs>
-          <path
-            d={ddPoints.reduce((acc, val, i) => {
-              const x = (i / (ddPoints.length - 1)) * 100;
-              const y = 50 - ((Math.abs(val) / Math.abs(minDD)) * 40);
-              return acc + (i === 0 ? `M ${x},${y}` : ` L ${x},${y}`);
-            }, '') + ` L 100,50 L 0,50 Z`}
-            fill="url(#ddGrad)"
-          />
-          <path
-            d={ddPoints.reduce((acc, val, i) => {
-              const x = (i / (ddPoints.length - 1)) * 100;
-              const y = 50 - ((Math.abs(val) / Math.abs(minDD)) * 40);
-              return acc + (i === 0 ? `M ${x},${y}` : ` L ${x},${y}`);
-            }, '')}
-            fill="none"
-            stroke={C.red}
-            strokeWidth="1.5"
-          />
-        </svg>
+        {ddPoints.length === 0 ? (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 8, fontFamily: C.mono, color: C.muted }}>
+            Close losing trades to see drawdown
+          </div>
+        ) : (
+          <svg width="100%" height="100%" preserveAspectRatio="none" viewBox="0 0 100 60">
+            <defs>
+              <linearGradient id="ddGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={C.red} stopOpacity="0.5" />
+                <stop offset="100%" stopColor={C.red} stopOpacity="0" />
+              </linearGradient>
+            </defs>
+            <path
+              d={ddPoints.reduce((acc, val, i) => {
+                const x = (i / (ddPoints.length - 1)) * 100;
+                const y = 50 - ((Math.abs(val) / Math.abs(minDD)) * 40);
+                return acc + (i === 0 ? `M ${x},${y}` : ` L ${x},${y}`);
+              }, '') + ` L 100,50 L 0,50 Z`}
+              fill="url(#ddGrad)"
+            />
+            <path
+              d={ddPoints.reduce((acc, val, i) => {
+                const x = (i / (ddPoints.length - 1)) * 100;
+                const y = 50 - ((Math.abs(val) / Math.abs(minDD)) * 40);
+                return acc + (i === 0 ? `M ${x},${y}` : ` L ${x},${y}`);
+              }, '')}
+              fill="none"
+              stroke={C.red}
+              strokeWidth="1.5"
+            />
+          </svg>
+        )}
       </div>
     </div>
   );
 }
 
 // Monthly Returns Bar Chart
+// BUG FIX: trước đây hiện 5 tháng dữ liệu FAKE (Aug/Jul/Jun...) khi không có props
+// — giờ hiện NO DATA khi chưa có lịch sử thật.
 function MonthlyReturns({ returns }: { returns?: Array<{ month: string; pnl: number }> }) {
-  const data = returns || [
-    { month: 'Aug', pnl: 523 },
-    { month: 'Jul', pnl: 1245 },
-    { month: 'Jun', pnl: -320 },
-    { month: 'May', pnl: 892 },
-    { month: 'Apr', pnl: 1102 },
-  ];
+  const data = (returns || []).filter(d => d && typeof d.pnl === 'number');
+  if (data.length === 0) {
+    return (
+      <div style={{ marginTop: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+          <span style={{ fontSize: 8, fontFamily: C.mono, color: C.muted }}>MONTHLY RETURNS</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 60, background: 'rgba(0,0,0,0.3)', borderRadius: 4, border: `1px solid ${C.border}`, fontSize: 8, fontFamily: C.mono, color: C.muted }}>
+          NO DATA
+        </div>
+      </div>
+    );
+  }
 
   const maxPnl = Math.max(...data.map(d => Math.abs(d.pnl)), 1);
   const total = data.reduce((s, d) => s + d.pnl, 0);
@@ -203,7 +220,8 @@ export default function PerformanceCharts({ winRate, wins, losses, maxDrawdown, 
   const _maxDD = liveStats?.max_drawdown ?? maxDrawdown ?? 0;
   const _best = liveStats?.best_trade ?? (monthlyReturns ? Math.max(...monthlyReturns.map(r => r.pnl)) : 0);
   const _total = liveStats?.total_pl ?? (monthlyReturns ? monthlyReturns.reduce((s, d) => s + d.pnl, 0) : 0);
-  const _profFactor = (_wins / Math.max(_losses, 1)).toFixed(2);
+  // BUG FIX: profit factor = wins/losses; khi chưa có lệnh thua hiển thị ∞ thay vì wins
+  const _profFactor = _losses > 0 ? (_wins / _losses).toFixed(2) : '∞';
   return (
     <div style={{ padding: '0 12px 12px' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${C.border}`, marginBottom: 8 }}>

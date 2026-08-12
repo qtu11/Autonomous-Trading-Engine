@@ -2,13 +2,18 @@
 // This proxies to the FastAPI backend which generates real-time AI auto-trade events
 
 import { NextRequest } from 'next/server';
+import { BACKEND_URL } from '@/lib/api-config';
 
 export const runtime = 'nodejs';
 
 export async function GET(request: NextRequest) {
   const encoder = new TextEncoder();
   
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000';
+  // BUG FIX: trước đây dùng NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
+  // — cổng 8000 sai (backend là 8005) và không đọc ATE_BACKEND_URL nên trên
+  // Vercel/Docker route này không bao giờ nối được backend. Giờ dùng chung
+  // BACKEND_URL (env ATE_BACKEND_URL) như mọi serverless proxy khác.
+  const backendUrl = BACKEND_URL;
   
   const stream = new ReadableStream({
     async start(controller) {

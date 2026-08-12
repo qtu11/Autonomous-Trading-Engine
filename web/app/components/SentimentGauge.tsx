@@ -30,13 +30,6 @@ export default function SentimentGauge({ bullishPercent = 50, bearishPercent, la
   const bullPct = Math.min(100, Math.max(0, Number(bullishPercent) || 50));
   const bearPct = Math.min(100, Math.max(0, Number(bearishPercent) || (100 - bullPct)));
 
-  // FIX: Correct needle angle calculation
-  // 0% = -90 degrees (left, bearish)
-  // 50% = 0 degrees (center, neutral)
-  // 100% = +90 degrees (right, bullish)
-  // Angle = (bullishPercent / 100) * 180 - 90
-  const angle = (bullPct / 100) * 180 - 90;
-
   // Color based on sentiment
   const getSentimentColor = (pct: number) => {
     if (pct >= 70) return C.green;
@@ -49,34 +42,39 @@ export default function SentimentGauge({ bullishPercent = 50, bearishPercent, la
   const sentimentColor = getSentimentColor(bullPct);
   const sentimentLabel = bullPct >= 70 ? 'VERY BULLISH' : bullPct >= 55 ? 'BULLISH' : bullPct >= 45 ? 'NEUTRAL' : bullPct >= 30 ? 'BEARISH' : 'VERY BEARISH';
 
-  // SVG arc parameters
+  // BUG FIX: Gauge geometry hoàn toàn sai trước đây:
+  //  - Arc cũ vẽ nửa bên PHẢI (top->right->bottom) nhưng nhãn BEAR/BULL giả định
+  //    nửa TRÁI->TRÊN->PHẢI (speedometer chuẩn).
+  //  - Needle cũ: needleRad = bull% * PI đo từ hướng PHẢI -> bull%=35 (BEARISH)
+  //    mà kim chỉ sang phía BULL (kim ngược), và sin dương -> kim chỉ xuống dưới.
+  //  - Segment màu cũ: xanh (bull) vẽ từ đầu path (phía BEAR).
+  //
+  // Geometry đúng: cung từ TRÁI (BEAR, 180°) qua TRÊN (90°) tới PHẢI (BULL, 0°).
+  // f=0 -> kim trái, f=0.5 -> kim trên, f=1 -> kim phải.
   const radius = 50;
   const cx = 60;
   const cy = 55;
-  const startAngle = -90;
-  const endAngle = 90;
-  const startRad = (startAngle * Math.PI) / 180;
-  const endRad = (endAngle * Math.PI) / 180;
+  const bullFrac = bullPct / 100;
+  const pathLen = Math.PI * radius; // độ dài nửa cung
+  const bullLen = bullFrac * pathLen;
+  // bearLen dùng để vẽ hình học khớp khít (bull + bear = full arc), độc lập với
+  // bearishPercent chỉ dùng cho nhãn ▲/▼ — tránh hở/đè khi caller truyền cả hai.
+  const bearLen = pathLen - bullLen;
 
-  // Arc path
-  const x1 = cx + radius * Math.cos(startRad);
-  const y1 = cy + radius * Math.sin(startRad);
-  const x2 = cx + radius * Math.cos(endRad);
-  const y2 = cy + radius * Math.sin(endRad);
-  const largeArc = 1; // > 180 degrees
+  // Semicircle: M (cx-r, cy) -> A -> (cx+r, cy); sweep=1 = clockwise qua đỉnh
+  const arcPath = `M ${cx - radius} ${cy} A ${radius} ${radius} 0 1 1 ${cx + radius} ${cy}`;
 
-  const arcPath = `M ${x1} ${y1} A ${radius} ${radius} 0 ${largeArc} 1 ${x2} ${y2}`;
-
-  // Needle calculation
-  const needleRad = ((angle + 90) * Math.PI) / 180;
+  // Needle: θ = π - f·π  (π=trái, π/2=trên, 0=phải); y screen lật dấu sin
+  const needleRad = Math.PI * (1 - bullFrac);
   const needleLength = radius - 12;
   const needleX = cx + needleLength * Math.cos(needleRad);
-  const needleY = cy + needleLength * Math.sin(needleRad);
+  const needleY = cy - needleLength * Math.sin(needleRad);
 
-  // Color segments calculation
-  const bullLength = (bullPct / 100) * Math.PI;
-  const bullArc = bullPct > 0 ? `M ${cx} ${cy} L ${cx + radius * Math.cos(startRad)} ${cy + radius * Math.sin(startRad)} A ${radius} ${radius} 0 ${bullPct > 50 ? 1 : 0} 1 ${cx + radius * Math.cos(startRad + bullLength)} ${cy + radius * Math.sin(startRad + bullLength)} Z` : '';
-
+  // Segments: bear = phần path đầu (trái), bull = phần cuối path (phải)
+  // dashoffset dương = dash bắt đầu tại vị trí đó trên path
+  const bearDash = `${bearLen} ${pathLen * 2}`;
+  const bullDash = `${bullLen} ${pathLen * 2}`;
+  const bullDashOffset = bearLen;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: 8 }}>
       {label && (
@@ -90,18 +88,18 @@ export default function SentimentGauge({ bullishPercent = 50, bearishPercent, la
         {/* Background arc */}
         <path d={arcPath} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="8" strokeLinecap="round" />
 
-        {/* Red (bearish) segment - left side */}
+        {/* Red (bearish) segment - left side (phần path đầu = phía BEAR) */}
         <path d={arcPath} fill="none" stroke={C.red} strokeWidth="8" strokeLinecap="round"
           opacity="0.5"
-          strokeDasharray={`${(bearPct / 100) * Math.PI * radius * 1.1} ${Math.PI * radius * 2}`}
-          strokeDashoffset={`${(bullPct / 100) * Math.PI * radius * 1.1}`}
+          strokeDasharray={bearDash}
+          strokeDashoffset="0"
         />
 
-        {/* Green (bullish) segment - right side */}
+        {/* Green (bullish) segment - right side (phần cuối path = phía BULL) */}
         <path d={arcPath} fill="none" stroke={C.green} strokeWidth="8" strokeLinecap="round"
           opacity="0.7"
-          strokeDasharray={`${(bullPct / 100) * Math.PI * radius * 1.1} ${Math.PI * radius * 2}`}
-          strokeDashoffset="0"
+          strokeDasharray={bullDash}
+          strokeDashoffset={bullDashOffset}
         />
 
         {/* Needle */}
@@ -121,7 +119,7 @@ export default function SentimentGauge({ bullishPercent = 50, bearishPercent, la
         <text x={cx + 22} y={cy + 20} fill={C.muted} fontSize="7" fontFamily="JetBrains Mono" fontWeight="600">BULL</text>
 
         {/* Center percentage */}
-        <text x={cx} y={cy - 8} textAnchor="middle" fill={sentimentColor} fontSize="13" fontFamily="JetBrains Mono" fontWeight="800">
+        <text x={cx} y={cy - 10} textAnchor="middle" fill={sentimentColor} fontSize="13" fontFamily="JetBrains Mono" fontWeight="800">
           {bullPct}%
         </text>
       </svg>

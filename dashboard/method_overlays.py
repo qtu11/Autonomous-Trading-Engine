@@ -1054,6 +1054,7 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
             elif t == "CHART_PATTERN":
                 structure_votes += 15 if d == "BULLISH" else -15
         sniper_diff = float(sniper_score_obj.get("bull_pct", 0)) - float(sniper_score_obj.get("bear_pct", 0))
+        # pyrefly: ignore [unnecessary-type-conversion]
         score = int(round(0.5 * sniper_diff + 0.5 * structure_votes))
         factors.append({"reason": f"ULTRA blend sniper={sniper_diff:.0f} structure={structure_votes}",
                         "direction": "BULLISH" if score > 0 else "BEARISH", "weight": abs(score)})

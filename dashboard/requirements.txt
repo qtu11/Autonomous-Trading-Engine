@@ -11,6 +11,8 @@ python-jose[cryptography]>=3.3.0
 httpx>=0.25.0
 aiofiles>=23.0.0
 websockets>=11.0.0
-MetaTrader5>=5.0.60
+# BUG FIX: MetaTrader5 CHỈ chạy trên Windows — thêm platform marker để pip
+# không cố cài trên Linux (Docker) -> build không fail.
+MetaTrader5>=5.0.60; platform_system == "Windows"
 psycopg2-binary>=2.9.0
 redis>=4.5.0

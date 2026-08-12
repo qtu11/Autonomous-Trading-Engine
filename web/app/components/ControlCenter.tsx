@@ -199,6 +199,10 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
 
       {/* FIX LỖI 5: Trading Method buttons */}
       <Section title="Trading Method">
+        <div style={{ fontSize: 8, fontFamily: C.mono, color: aiLoop ? C.green : C.muted, marginBottom: 6 }}>
+          ACTIVE: <span style={{ color: C.gold, fontWeight: 800 }}>{currentMethod}</span>
+          {aiLoop ? ' · AI trading with this method' : ' · Enable AI Auto Trade to trade'}
+        </div>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
           {methods.map(method => {
             const isActive = currentMethod === method;
@@ -251,7 +255,9 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
           {[
             { label: 'Backend', ok: !!status },
             { label: 'Bridge', ok: status?.bridge?.mt5_connected },
-            { label: 'AI', ok: !!aiConfig },
+            // BUG FIX: "AI" trước đây sáng khi fetchAIConfig thành công — gây hiểu
+            // lầm là bot đang chạy. Giờ phản ánh đúng AI Auto Trade loop.
+            { label: 'AI Auto', ok: aiLoop },
             { label: 'MT5', ok: isConnected },
           ].map(item => (
             <div key={item.label} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 8px', background: 'rgba(0,0,0,0.3)', borderRadius: 4, border: `1px solid ${C.border}` }}>

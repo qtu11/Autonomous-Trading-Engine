@@ -1,4 +1,25 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ATE / TradeAI — Docker Compose (local / VNPT home server)
+#
+# Kiến trúc dữ liệu THẬT:
+#   MT5 (Windows) — EA đẩy nến + telemetry → backend (FastAPI 8005)
+#   backend → python-bridge (8007, chạy NATIVE trên Windows để nối MT5) → MT5
+#   frontend (Next.js 3000) → backend qua rewrites (ATE_BACKEND_URL=http://backend:8005)
+#
+# Lưu ý: python-bridge (MetaTrader5) CHỈ nối được MT5 khi chạy trên Windows có
+# cài MT5 — không chạy trong container Linux. EA trong MT5 là nguồn dữ liệu
+# thật chính (đã fix: /api/v1/bridge/candles nhận nến EA, /api/v1/market/candles
+# trên bridge native phục vụ các khung giờ khác).
+# ─────────────────────────────────────────────────────────────────────────────
+
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: ate_redis
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    restart: always
+    networks: [ate]
+
   backend:
     build:
       context: .
@@ -6,14 +27,21 @@ services:
     container_name: ate_backend
     ports:
       - "8005:8005"
-    volumes:
-      - ./ate_brain.sqlite3:/app/ate_brain.sqlite3
-      - ./user_control_config.json:/app/user_control_config.json
     environment:
-      - PORT=8005
-      - HOST=0.0.0.0
+      - ATE_DASHBOARD_PORT=8005
+      - BRIDGE_URL=http://host.docker.internal:8007
+      - REDIS_HOST=redis
+      - ADMIN_LOGIN=${ADMIN_LOGIN:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
+      - ATE_EXECUTION_MODE=${ATE_EXECUTION_MODE:-DEMO}
       - TRADING_METHOD=ULTRA_CONFLUENCE
+      - QUANTAI_BRIDGE_TOKEN=${QUANTAI_BRIDGE_TOKEN:-20022007@Tu}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - redis
     restart: always
+    networks: [ate]
 
   frontend:
     build:
@@ -23,7 +51,15 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_ATE_API_ORIGIN=http://localhost:8005
+      # BUG FIX: code đọc ATE_BACKEND_URL (không phải NEXT_PUBLIC_ATE_API_ORIGIN)
+      # — trước đây set sai biến nên frontend không gọi được backend trong Docker.
+      - ATE_BACKEND_URL=http://backend:8005
+      - NEXT_PUBLIC_ATE_API_ORIGIN=
     depends_on:
       - backend
     restart: always
+    networks: [ate]
+
+networks:
+  ate:
+    driver: bridge

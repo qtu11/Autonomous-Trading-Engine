@@ -17,23 +17,46 @@ const C = {
   mono: '"JetBrains Mono", monospace',
 };
 
-// Generate sample equity curve data
-function generateEquityCurve(period: '1D' | '1W' | '1M' | '3M' | 'ALL') {
-  const points: Array<{ time: string; value: number }> = [];
-  let value = 10000;
+// BUG FIX: Trước đây EquityCurve TỰ SINH dữ liệu giả bằng Math.random() — đường
+// equity không liên quan gì tới tài khoản thật. Giờ vẽ từ lịch sử trade thật
+// (history) cộng dồn P&L trên nền số dư thật (initialBalance) và kết thúc tại
+// equity hiện tại.
+const PERIOD_DAYS: Record<string, number> = { '1D': 1, '1W': 7, '1M': 30, '3M': 90, 'ALL': 365 };
+
+function buildEquityPoints(
+  history: Array<{ time?: string; pl?: number }>,
+  period: '1D' | '1W' | '1M' | '3M' | 'ALL',
+  initialBalance: number,
+  currentEquity: number
+): Array<{ time: string; value: number }> {
   const now = new Date();
-  
-  let days = period === '1D' ? 1 : period === '1W' ? 7 : period === '1M' ? 30 : period === '3M' ? 90 : 365;
-  
-  for (let i = days; i >= 0; i--) {
-    const date = new Date(now);
-    date.setDate(date.getDate() - i);
-    value += (Math.random() - 0.45) * 100;
-    value = Math.max(value, 9000);
-    points.push({
-      time: date.toISOString().split('T')[0],
-      value: Math.round(value * 100) / 100,
-    });
+  const days = PERIOD_DAYS[period] || 30;
+  const cutoff = new Date(now.getTime() - days * 86400000);
+  const fmt = (d: Date) => d.toISOString().split('T')[0];
+
+  const trades = (history || [])
+    .filter(t => typeof t.pl === 'number' && isFinite(t.pl))
+    .sort((a, b) => String(a.time || '').localeCompare(String(b.time || '')));
+
+  if (trades.length === 0) {
+    // Không có trade: chỉ cần 2 điểm (đầu kỳ = balance, cuối = equity hiện tại)
+    return [
+      { time: fmt(cutoff), value: initialBalance },
+      { time: fmt(now), value: currentEquity },
+    ];
+  }
+
+  const points: Array<{ time: string; value: number }> = [{ time: fmt(cutoff), value: initialBalance }];
+  let value = initialBalance;
+  for (const t of trades) {
+    const tTime = t.time ? new Date(t.time) : null;
+    if (tTime && !isNaN(tTime.getTime()) && tTime.getTime() < cutoff.getTime()) continue;
+    value += t.pl!;
+    points.push({ time: t.time ? String(t.time).slice(0, 10) : fmt(now), value: Math.round(value * 100) / 100 });
+  }
+  // Điểm cuối khớp với equity thật (bao gồm P&L floating)
+  if (points.length > 1) {
+    points[points.length - 1] = { ...points[points.length - 1], value: currentEquity };
   }
   return points;
 }
@@ -41,15 +64,19 @@ function generateEquityCurve(period: '1D' | '1W' | '1M' | '3M' | 'ALL') {
 interface EquityCurveProps {
   initialBalance?: number;
   currentEquity?: number;
+  history?: Array<{ time?: string; pl?: number }>;
   period?: '1D' | '1W' | '1M' | '3M' | 'ALL';
   onPeriodChange?: (period: '1D' | '1W' | '1M' | '3M' | 'ALL') => void;
 }
 
-export default function EquityCurve({ initialBalance = 10000, currentEquity = 10500, period = '1M', onPeriodChange }: EquityCurveProps) {
+export default function EquityCurve({ initialBalance = 10000, currentEquity = 10500, history = [], period = '1M', onPeriodChange }: EquityCurveProps) {
   const [selectedPeriod, setSelectedPeriod] = useState<'1D' | '1W' | '1M' | '3M' | 'ALL'>(period);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const data = useMemo(() => generateEquityCurve(selectedPeriod), [selectedPeriod]);
+  const data = useMemo(
+    () => buildEquityPoints(history, selectedPeriod, initialBalance, currentEquity),
+    [history, selectedPeriod, initialBalance, currentEquity]
+  );
 
   const handlePeriodChange = (p: '1D' | '1W' | '1M' | '3M' | 'ALL') => {
     setSelectedPeriod(p);

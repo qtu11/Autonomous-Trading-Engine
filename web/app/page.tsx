@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   fetchStatus, fetchControlCenterStatus, fetchPositions, fetchMarket,
@@ -276,24 +276,54 @@ export default function DashboardPage() {
   const realizedPnl = status?.today_performance?.realized_pl || 0;
   const totalPnl = openPnl + realizedPnl;
   const balance = status?.balance || 10000;
-  const equity = balance + totalPnl;
+  // BUG FIX: ưu tiên equity THẬT từ telemetry MT5 (status.equity); chỉ fallback
+  // sang balance+floating khi chưa có dữ liệu tài khoản thật.
+  const equity = (typeof status?.equity === 'number' && status.equity > 0)
+    ? status.equity
+    : (balance + totalPnl);
   const marginUsed = positions.reduce((s, p) => s + ((p as any).margin || 0), 0);
   const marginLevel = equity > 0 && marginUsed > 0 ? (equity / marginUsed) * 100 : 999;
   const todayPerf = status?.today_performance;
-  const winRate = todayPerf?.trades_today ? ((todayPerf.wins / todayPerf.trades_today) * 100).toFixed(0) : '65';
+
+  // Monthly returns thật từ lịch sử (trước đây PerformanceCharts hiện dữ liệu fake)
+  const monthlyReturns = useMemo(() => {
+    const byMonth: Record<string, number> = {};
+    (history || []).forEach(h => {
+      if (typeof h.pl !== 'number' || !h.time) return;
+      const m = String(h.time).slice(0, 7); // YYYY-MM
+      byMonth[m] = (byMonth[m] || 0) + h.pl;
+    });
+    return Object.entries(byMonth)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([m, pnl]) => ({ month: m.slice(5) + '/' + m.slice(2, 4), pnl: Math.round(pnl) }));
+  }, [history]);
+  // Win rate từ lịch sử trade thật (không hardcode 65%)
+  const histWins = history.filter(h => (h.pl || 0) > 0).length;
+  const histLosses = history.filter(h => (h.pl || 0) < 0).length;
+  const winRate = (histWins + histLosses) > 0
+    ? ((histWins / (histWins + histLosses)) * 100).toFixed(0)
+    : (todayPerf?.trades_today ? ((todayPerf.wins / todayPerf.trades_today) * 100).toFixed(0) : '—');
 
   const aiSignal = brain?.recent_decisions?.[0];
-  const aiBias = aiSignal?.action === 'BUY' ? 'BULLISH' : aiSignal?.action === 'SELL' ? 'BEARISH' : 'NEUTRAL';
+  // Tín hiệu & bias lấy từ markup confluence (engine đọc chart thật) làm nguồn
+  // chính; chỉ fallback sang brain signal khi không có confluence.
+  const cf = market?.markup?.confluence;
+  const cfSignal = cf?.signal && cf.signal !== 'WAIT' ? cf.signal : undefined;
+  const displaySignal = cfSignal
+    ? { action: cfSignal, entry: cf?.entry, stop_loss: cf?.sl, take_profit: cf?.tp, confidence: cf ? 50 + (cf.score || 0) / 2 : null }
+    : aiSignal;
+  const aiBias = displaySignal?.action === 'BUY' ? 'BULLISH' : displaySignal?.action === 'SELL' ? 'BEARISH' : 'NEUTRAL';
 
   const realSentiment = (() => {
-    const isSell = aiSignal?.action === 'SELL' || aiBias === 'BEARISH';
-    const confluenceScore = market?.markup?.confluence?.score;
-    // Markup confluence score is -100..100 (not 0..1). Map it to a 0-100
-    // bullish percent: 50 + score/2.
-    if (typeof confluenceScore === 'number') {
-      const score = Math.round(Math.min(100, Math.max(0, 50 + confluenceScore / 2)));
-      return isSell ? 100 - score : score;
+    const confluenceScore = cf?.score;
+    // Markup confluence score là -100..100 (đã có hướng: âm=bearish, dương=bullish).
+    // bullish% = 50 + score/2. KHÔNG flip thêm theo aiSignal — trước đây flip hai
+    // lần (score âm + aiSignal SELL) làm "dữ liệu sai" và kim chỉ ngược hẳn bias.
+    if (typeof confluenceScore === 'number' && isFinite(confluenceScore)) {
+      return Math.round(Math.min(100, Math.max(0, 50 + confluenceScore / 2)));
     }
+    const isSell = aiSignal?.action === 'SELL';
     const brainConf = aiSignal?.confidence ?? 0;
     if (brainConf > 0) {
       const conf = Math.round(Math.min(100, Math.max(0, brainConf > 1 ? brainConf : brainConf * 100)));
@@ -530,7 +560,7 @@ export default function DashboardPage() {
 
           {!showCompact && (
             <div style={{ height: 160, flexShrink: 0 }}>
-              <EquityCurve currentEquity={equity} initialBalance={balance} />
+              <EquityCurve currentEquity={equity} initialBalance={balance} history={history} />
             </div>
           )}
         </div>
@@ -623,7 +653,7 @@ export default function DashboardPage() {
                   </div>
                   <div style={{ padding: '8px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: `1px solid ${C.border}`, textAlign: 'center' }}>
                     <div style={{ fontSize: 7, color: C.muted, marginBottom: 2 }}>SIGNAL</div>
-                    <div style={{ fontSize: 10, fontWeight: 800, color: aiSignal?.action === 'BUY' ? C.green : aiSignal?.action === 'SELL' ? C.red : C.muted }}>{aiSignal?.action || 'NONE'}</div>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: displaySignal?.action === 'BUY' ? C.green : displaySignal?.action === 'SELL' ? C.red : C.muted }}>{displaySignal?.action || 'NONE'}</div>
                   </div>
                   <div style={{ padding: '8px', background: 'rgba(0,0,0,0.3)', borderRadius: 6, border: `1px solid ${C.border}`, textAlign: 'center' }}>
                     <div style={{ fontSize: 7, color: C.muted, marginBottom: 2 }}>CONFIDENCE</div>
@@ -632,20 +662,24 @@ export default function DashboardPage() {
 
                 </div>
 
-                {aiSignal && (
+                {displaySignal?.action && displaySignal.action !== 'WAIT' && (
                   <div style={{ background: 'linear-gradient(135deg, rgba(34,211,160,0.1) 0%, rgba(0,0,0,0.3) 100%)', border: `1px solid ${C.green}`, borderRadius: 8, padding: 10, marginBottom: 8 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                       <span style={{ fontSize: 8, color: C.muted }}>ACTIVE SIGNAL</span>
-                      <span style={{ fontSize: 10, fontWeight: 800, color: aiSignal.action === 'BUY' ? C.green : C.red }}>{aiSignal.action} @ {aiSignal.entry?.toFixed(2) || 'Pending'}</span>
+                      <span style={{ fontSize: 10, fontWeight: 800, color: displaySignal.action === 'BUY' ? C.green : C.red }}>{displaySignal.action} @ {typeof displaySignal.entry === 'number' ? displaySignal.entry.toFixed(2) : 'Pending'}</span>
                     </div>
                     <div style={{ display: 'flex', gap: 12, fontSize: 8, fontFamily: C.mono }}>
-                      <span>SL: <span style={{ color: C.red }}>{aiSignal.stop_loss?.toFixed(2) || '-'}</span></span>
-                      <span>TP: <span style={{ color: C.green }}>{aiSignal.take_profit?.toFixed(2) || '-'}</span></span>
+                      <span>SL: <span style={{ color: C.red }}>{typeof displaySignal.stop_loss === 'number' ? displaySignal.stop_loss.toFixed(2) : '-'}</span></span>
+                      <span>TP: <span style={{ color: C.green }}>{typeof displaySignal.take_profit === 'number' ? displaySignal.take_profit.toFixed(2) : '-'}</span></span>
                     </div>
                   </div>
                 )}
 
-                <PerformanceCharts liveStats={history ? (() => { const wins = history.filter(h => (h.pl || 0) > 0).length; const losses = history.filter(h => (h.pl || 0) < 0).length; const total_pl = history.reduce((s, h) => s + (h.pl || 0), 0); const best = Math.max(0, ...history.map(h => h.pl || 0)); const worst = Math.min(0, ...history.map(h => h.pl || 0)); return { wins, losses, total_pl, best_trade: best, max_drawdown: worst }; })() : null} />
+                <PerformanceCharts liveStats={history ? (() => { const wins = history.filter(h => (h.pl || 0) > 0).length; const losses = history.filter(h => (h.pl || 0) < 0).length; const total_pl = history.reduce((s, h) => s + (h.pl || 0), 0); const best = Math.max(0, ...history.map(h => h.pl || 0)); // Max drawdown thật: đỉnh thấp nhất từ peak của đường P&L cộng dồn
+                  let cum = 0, peak = 0, maxDD = 0;
+                  history.slice().sort((a, b) => String(a.time || '').localeCompare(String(b.time || ''))).forEach(h => { cum += (h.pl || 0); peak = Math.max(peak, cum); maxDD = Math.max(maxDD, peak - cum); });
+                  return { wins, losses, total_pl, best_trade: best, max_drawdown: maxDD }; })() : null}
+                  monthlyReturns={monthlyReturns} />
               </div>
             </Panel>
           </div>
@@ -758,7 +792,7 @@ export default function DashboardPage() {
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#000" strokeWidth="2.5"><path d="M12 5v14M5 12h14" /></svg>
       </button>
 
-      <QuickTradePanel isOpen={showQuickTrade} onClose={() => setShowQuickTrade(false)} onExecute={handleQuickTrade} currentPrice={market?.candles?.[market.candles.length - 1]?.c || 2845} />
+      <QuickTradePanel isOpen={showQuickTrade} onClose={() => setShowQuickTrade(false)} onExecute={handleQuickTrade} currentPrice={market?.candles?.[market.candles.length - 1]?.c || status?.current_bid || 0} />
 
       <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} onUpdated={() => {
         // Force refetch

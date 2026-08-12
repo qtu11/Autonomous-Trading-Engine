@@ -22,7 +22,7 @@ import hashlib
 import asyncio
 import httpx
 from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict, deque
 
 import pandas as pd
@@ -63,7 +63,7 @@ _ANALYSIS_TTL = 5  # seconds
 
 _account = {
     "balance": 10000.0, "equity": 10000.0, "margin": 0.0, "margin_free": 10000.0,
-    "open_positions": 0, "total_pnl": 0.0, "win_rate": 0.0, "total_trades": 0,
+    "open_positions": 0, "total_pnl": 0.0, "realized_pnl": 0.0, "win_rate": 0.0, "total_trades": 0,
     "mt5_connected": False, "login": 0, "server": "",
 }
 
@@ -122,25 +122,117 @@ def _add_ai_event(level: str, action: str, symbol: str, details: Dict[str, Any])
     # deque with maxlen handles rotation automatically
 
 # ─── REAL MT5 DATA FETCHER ──────────────────────────────────────────────────
+# BUG FIX: theo dõi nguồn dữ liệu thật (bridge/EA) hay stub — trước đây status
+# luôn báo "LIVE" dù đang dùng dữ liệu giả khi bridge offline.
+_bridge_data_real = False
+_DATA_TTL = 120.0  # seconds: EA-pushed candles coi là tươi trong 120s
+
+# EA (ATE_XAUUSD.mq5) đẩy nến thật qua POST /api/v1/bridge/candles với cột
+# {t, ts, o, h, l, c, v}; python-bridge trả {time, open, high, low, close, volume}.
+# Chuẩn hoá về {timestamp, open, high, low, close, volume}.
+def _normalize_candle_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    rename = {}
+    for col in df.columns:
+        # pyrefly: ignore [unnecessary-type-conversion]
+        c = str(col).strip()
+        if c in ("ts", "time"):
+            rename[col] = "timestamp"
+        elif c == "t":
+            rename[col] = "time_only"
+        elif c in ("o",):
+            rename[col] = "open"
+        elif c in ("h",):
+            rename[col] = "high"
+        elif c in ("l",):
+            rename[col] = "low"
+        elif c in ("c",):
+            rename[col] = "close"
+        elif c in ("v", "tick_volume"):
+            rename[col] = "volume"
+    if rename:
+        df = df.rename(columns=rename)
+    # EA cột t = "HH:MM" chỉ — không dùng làm thời gian, bỏ đi
+    if "time_only" in df.columns:
+        df = df.drop(columns=["time_only"])
+    if "timestamp" in df.columns:
+        # pd.to_datetime linh hoạt: "2026-08-12T09:30:00" hoặc epoch
+        try:
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        except Exception:
+            pass
+    for col in ("open", "high", "low", "close", "volume"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    # Thứ tự cột chuẩn: timestamp, open, high, low, close, volume
+    ordered = [c for c in ("timestamp", "open", "high", "low", "close", "volume") if c in df.columns]
+    if ordered:
+        df = df[ordered]
+    return df
+
+
+def _cached_candles(symbol: str, tf: str) -> Optional[pd.DataFrame]:
+    """Đọc nến THẬT do EA đẩy lên (tươi trong _DATA_TTL)."""
+    key = f"{resolve_symbol(symbol)}_{tf}"
+    entry = _market_cache.get(key)
+    if not entry or not entry.get("candles"):
+        return None
+    try:
+        updated = datetime.fromisoformat((entry.get("candles_updated") or "").replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if (datetime.now(timezone.utc) - updated).total_seconds() > _DATA_TTL:
+        return None
+    df = _normalize_candle_df(pd.DataFrame(entry["candles"]))
+    if df is None or df.empty or "close" not in df.columns:
+        return None
+    return df
+
+
 async def fetch_real_candles(symbol: str, tf: str, count: int = 1000) -> Optional[pd.DataFrame]:
-    """Fetch REAL candle data from MT5 Bridge (or fallback to stub)"""
+    """Lấy nến thật theo 3 tầng, không bao giờ im lặng trả dữ liệu giả:
+    1) Nến EA đẩy (POST /api/v1/bridge/candles) — tươi nhất, đúng chart MT5
+    2) python-bridge /api/v1/market/candles — copy_rates thật từ MT5
+    3) generate_stub_candles — CHỈ khi cả 2 tầng chết, đánh dấu _bridge_data_real=False
+    BUG FIX: trước đây gọi {BRIDGE_URL}/api/candles (không tồn tại) -> luôn 404 ->
+    toàn bộ dashboard chạy trên dữ liệu giả mà vẫn báo LIVE."""
+    global _bridge_data_real
+
+    cached = _cached_candles(symbol, tf)
+    if cached is not None and len(cached) >= count:
+        # EA push đã đủ số nến yêu cầu — dùng luôn (nhanh, không gọi bridge)
+        _bridge_data_real = True
+        _add_log("DEBUG", "DATA_SRC", f"EA-push candles {symbol} {tf} ({len(cached)})")
+        return cached.tail(count).reset_index(drop=True)
+
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             res = await client.get(
-                f"{BRIDGE_URL}/api/candles",
+                f"{BRIDGE_URL}/api/v1/market/candles",
                 params={"symbol": resolve_symbol(symbol), "tf": tf, "count": count}
             )
             if res.status_code == 200:
                 data = res.json()
                 if "candles" in data and data["candles"]:
-                    df = pd.DataFrame(data["candles"])
-                    if "time" in df.columns:
-                        df = df.rename(columns={"time": "timestamp"})
-                    return df
+                    df = _normalize_candle_df(pd.DataFrame(data["candles"]))
+                    if df is not None and not df.empty and "close" in df.columns:
+                        # Bridge trả đầy đủ history — tốt hơn cache 100 nến của EA
+                        _bridge_data_real = True
+                        _add_log("DEBUG", "DATA_SRC", f"bridge candles {symbol} {tf} ({len(df)})")
+                        return df
     except Exception as e:
-        _add_log("WARN", "BRIDGE_FETCH", f"MT5 bridge unavailable: {e}, using stub data")
+        _add_log("WARN", "BRIDGE_FETCH", f"MT5 bridge unavailable: {e}")
 
-    # Fallback: Generate stub data (for development without MT5)
+    # EA cache có nhưng ít nến hơn yêu cầu (bridge down) — vẫn dùng nến thật
+    if cached is not None and len(cached) > 0:
+        _bridge_data_real = True
+        _add_log("DEBUG", "DATA_SRC", f"EA-push candles (partial) {symbol} {tf} ({len(cached)}/{count})")
+        return cached.tail(count).reset_index(drop=True)
+
+    # Fallback: chỉ dùng stub khi KHÔNG có nguồn thật nào, và đánh dấu STUB
+    _bridge_data_real = False
+    _add_log("WARN", "DATA_STUB", f"No real MT5 data for {symbol} {tf} -> STUB (bridge down / EA not connected)")
     return generate_stub_candles(count, tf, symbol)
 
 def generate_stub_candles(count: int, tf: str, symbol: str) -> pd.DataFrame:
@@ -207,50 +299,65 @@ _CTX_TTL = 60.0  # seconds
 
 async def _fetch_context_candles(symbol: str, tf: str, count: int = 600) -> Optional[pd.DataFrame]:
     """Best-effort fetch of an HTF context frame (M15/H1/D1...) with a short
-    TTL cache so the markup engine gets multi-timeframe data on every request
-    without hammering the MT5 bridge every 2 seconds."""
+    TTL cache. Nguồn: nến EA đẩy -> python-bridge -> None (không dùng stub cho
+    context frame; chỉ primary frame được phép rơi vào stub và đánh dấu STUB)."""
     key = f"{symbol}:{tf}"
     now = datetime.now(timezone.utc).timestamp()
     cached = _ctx_cache.get(key)
     if cached and (now - cached["ts"]) < _CTX_TTL:
         return cached["df"]
-    try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            res = await client.get(
-                f"{BRIDGE_URL}/api/candles",
-                params={"symbol": resolve_symbol(symbol), "tf": tf, "count": count}
-            )
-            if res.status_code == 200:
-                data = res.json()
-                if "candles" in data and data["candles"]:
-                    df = pd.DataFrame(data["candles"])
-                    if "time" in df.columns:
-                        df = df.rename(columns={"time": "timestamp"})
-                    _ctx_cache[key] = {"df": df, "ts": now}
-                    return df
-    except Exception:
-        pass
-    _ctx_cache[key] = {"df": None, "ts": now}
+
+    df = _cached_candles(symbol, tf)
+    if df is None:
+        try:
+            async with httpx.AsyncClient(timeout=5) as client:
+                res = await client.get(
+                    f"{BRIDGE_URL}/api/v1/market/candles",
+                    params={"symbol": resolve_symbol(symbol), "tf": tf, "count": count}
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    if "candles" in data and data["candles"]:
+                        df = _normalize_candle_df(pd.DataFrame(data["candles"]))
+        except Exception:
+            df = None
+    if df is not None and not df.empty:
+        _ctx_cache[key] = {"df": df, "ts": now}
+    else:
+        _ctx_cache[key] = {"df": None, "ts": now}
     # Keep the context cache bounded (one small entry per symbol:tf).
     if len(_ctx_cache) > 64:
         for stale_key in [k for k in _ctx_cache if k != key]:
             _ctx_cache.pop(stale_key, None)
             if len(_ctx_cache) <= 64:
                 break
-    return None
+    return df
 
 async def fetch_real_bid_ask(symbol: str) -> tuple[float, float]:
-    """Fetch REAL bid/ask from MT5 Bridge"""
+    """Lấy bid/ask THẬT: 1) tick EA gửi trong telemetry 2) python-bridge
+    /api/v1/market/tick 3) stub (chỉ để không crash)."""
+    key = f"{resolve_symbol(symbol)}_tick"
+    tick = _market_cache.get(key)
+    if tick and tick.get("bid") and tick.get("ask"):
+        try:
+            updated = datetime.fromisoformat((tick.get("ts") or "").replace("Z", "+00:00"))
+            if (datetime.now(timezone.utc) - updated).total_seconds() < _DATA_TTL:
+                return float(tick["bid"]), float(tick["ask"])
+        except Exception:
+            pass
     try:
         async with httpx.AsyncClient(timeout=5) as client:
-            res = await client.get(f"{BRIDGE_URL}/api/tick", params={"symbol": resolve_symbol(symbol)})
+            res = await client.get(f"{BRIDGE_URL}/api/v1/market/tick", params={"symbol": resolve_symbol(symbol)})
             if res.status_code == 200:
                 data = res.json()
-                return float(data.get("bid", 0)), float(data.get("ask", 0))
+                bid, ask = float(data.get("bid", 0)), float(data.get("ask", 0))
+                if bid > 0 and ask > 0:
+                    # Không set _bridge_data_real ở đây: tick OK không chứng minh nến thật
+                    return bid, ask
     except Exception:
         pass
 
-    # Fallback
+    # Fallback stub
     df = generate_stub_candles(5, "M1", symbol)
     price = float(df["close"].iloc[-1])
     spread = 0.5 if "XAU" in symbol else 2.0
@@ -380,46 +487,56 @@ def detect_order_blocks(df: pd.DataFrame) -> List[Dict[str, Any]]:
     return blocks[-10:]  # Keep last 10
 
 def detect_bos_choch(df: pd.DataFrame) -> Dict[str, Any]:
-    """Detect Break of Structure (BOS) and Change of Character (CHoCH)"""
-    if len(df) < 20:
+    """Detect Break of Structure (BOS) and Change of Character (CHoCH).
+    BUG FIX (2 lỗi logic):
+    1) Swing cũ dùng window min/max 5 nến với low[i] < low[i-1] — trong uptrend,
+       các swing low tăng dần nên window luôn chứa low thấp hơn TRƯỚC đó → không
+       bao giờ tìm được >= 2 swing lows → CHoCH không bao giờ xuất hiện. Dùng
+       fractal: nến có low thấp hơn 2 nến mỗi bên (cực trị địa phương).
+    2) Trend cũ đoán bằng cách so sánh prev_high vs prev_low (2 swing khác loại)
+       — sai. Trend đúng: uptrend = swing low sau cao hơn swing low trước (HH/HL),
+       downtrend = swing high sau thấp hơn swing high trước (LH/LL).
+    """
+    if len(df) < 8:
+        return {}
+    highs = df["high"].to_numpy(dtype=float)
+    lows = df["low"].to_numpy(dtype=float)
+    closes = df["close"].to_numpy(dtype=float)
+    n = len(df)
+    swing_highs: List[Tuple[int, float]] = []
+    swing_lows: List[Tuple[int, float]] = []
+    for i in range(2, n - 2):
+        if highs[i] == max(highs[i-2:i+3]) and highs[i] > highs[i-1] and highs[i] > highs[i+1]:
+            swing_highs.append((i, float(highs[i])))
+        if lows[i] == min(lows[i-2:i+3]) and lows[i] < lows[i-1] and lows[i] < lows[i+1]:
+            swing_lows.append((i, float(lows[i])))
+    if not swing_highs or not swing_lows:
         return {}
 
-    # Find swing highs/lows
-    swing_highs = []
-    swing_lows = []
+    # pyrefly: ignore [unnecessary-type-conversion]
+    last_high_price = float(swing_highs[-1][1])
+    # pyrefly: ignore [unnecessary-type-conversion]
+    prev_high_price = float(swing_highs[-2][1]) if len(swing_highs) >= 2 else last_high_price
+    # pyrefly: ignore [unnecessary-type-conversion]
+    last_low_price = float(swing_lows[-1][1])
+    # pyrefly: ignore [unnecessary-type-conversion]
+    prev_low_price = float(swing_lows[-2][1]) if len(swing_lows) >= 2 else last_low_price
+    close = float(closes[-1])
 
-    for i in range(5, len(df) - 5):
-        window_high = df["high"].iloc[i-5:i+6].max()
-        window_low = df["low"].iloc[i-5:i+6].min()
-
-        if df["high"].iloc[i] == window_high and df["high"].iloc[i] > df["high"].iloc[i-1]:
-            swing_highs.append((i, float(df["high"].iloc[i])))
-        if df["low"].iloc[i] == window_low and df["low"].iloc[i] < df["low"].iloc[i-1]:
-            swing_lows.append((i, float(df["low"].iloc[i])))
-
-    if len(swing_highs) < 2 or len(swing_lows) < 2:
-        return {}
-
-    last_high_idx, last_high_price = swing_highs[-1]
-    prev_high_idx, prev_high_price = swing_highs[-2]
-    last_low_idx, last_low_price = swing_lows[-1]
-    prev_low_idx, prev_low_price = swing_lows[-2]
-
-    # Bullish BOS: price breaks above previous swing high
-    if df["close"].iloc[-1] > prev_high_price and last_high_idx > prev_high_idx:
+    # Bullish BOS: price closes above previous swing high
+    if close > prev_high_price:
         return {"kind": "BOS", "direction": "BULLISH", "break_price": prev_high_price}
-
-    # Bearish BOS: price breaks below previous swing low
-    if df["close"].iloc[-1] < prev_low_price and last_low_idx > prev_low_idx:
+    # Bearish BOS: price closes below previous swing low
+    if close < prev_low_price:
         return {"kind": "BOS", "direction": "BEARISH", "break_price": prev_low_price}
 
-    # CHoCH: previous structure broken
-    if prev_high_price > prev_low_price:  # Uptrend
-        if df["close"].iloc[-1] < last_low_price:
-            return {"kind": "CHoCH", "direction": "BEARISH", "break_price": last_low_price}
-    else:  # Downtrend
-        if df["close"].iloc[-1] > last_high_price:
-            return {"kind": "CHoCH", "direction": "BULLISH", "break_price": last_high_price}
+    # Trend + CHoCH (phá swing gần nhất NGƯỢC hướng trend)
+    uptrend = last_low_price > prev_low_price
+    downtrend = last_high_price < prev_high_price
+    if uptrend and close < last_low_price:
+        return {"kind": "CHoCH", "direction": "BEARISH", "break_price": last_low_price}
+    if downtrend and close > last_high_price:
+        return {"kind": "CHoCH", "direction": "BULLISH", "break_price": last_high_price}
 
     return {}
 
@@ -684,16 +801,19 @@ def analyze_sniper(df: pd.DataFrame, indicators: Dict[str, Any]) -> Dict[str, An
     }
 
 # ─── MAIN AI ANALYSIS ──────────────────────────────────────────────────────────
-async def run_ai_analysis(symbol: str, method: str) -> Dict[str, Any]:
+async def run_ai_analysis(symbol: str, method: str, tf: Optional[str] = None) -> Dict[str, Any]:
     """Run AI analysis based on selected trading method.
-    PHASE 3: 5-second cache prevents duplicate computation on parallel requests."""
-    cache_key = f"{symbol}:{method}:{_config['timeframe']}"
+    PHASE 3: 5-second cache prevents duplicate computation on parallel requests.
+    BUG FIX: nhận tham số tf — trước đây luôn phân tích M15 dù người dùng đang
+    xem M5, và cache key thiếu tf nên các khung giờ khác nhau đụng cache nhau."""
+    tf = tf or _config.get("timeframe", "M15")
+    cache_key = f"{symbol}:{method}:{tf}"
     now = datetime.now(timezone.utc).timestamp()
     cached = _analysis_cache.get(cache_key)
     if cached and (now - cached["ts"]) < _ANALYSIS_TTL:
         return cached["result"]
     
-    df = await fetch_real_candles(symbol, _config["timeframe"], 500)
+    df = await fetch_real_candles(symbol, tf, 500)
     if df is None or df.empty:
         empty = {"score": 50, "signal": "WAIT", "factors": ["No data available"]}
         _analysis_cache[cache_key] = {"result": empty, "ts": now}
@@ -738,6 +858,72 @@ async def run_ai_analysis(symbol: str, method: str) -> Dict[str, Any]:
     _analysis_cache[cache_key] = {"result": result, "ts": datetime.now(timezone.utc).timestamp()}
     return result
 
+# ─── TRADE BOOKKEEPING HELPERS ──────────────────────────────────────────────
+def _is_demo_mode() -> bool:
+    """Chế độ DEMO: server tự giả lập fill/đóng lệnh, tự cập nhật số dư.
+    Chế độ LIVE: fail-closed — KHÔNG bao giờ giả lập, mọi lệnh phải đi qua EA thật."""
+    # pyrefly: ignore [unnecessary-type-conversion]
+    return str(_config.get("execution_mode", "DEMO")).upper() != "LIVE"
+
+
+def _record_closed_trade(sym: str, pos: Dict[str, Any], price_close: float, reason: str = "CLOSE") -> Dict[str, Any]:
+    """Ghi nhận lệnh đã đóng vào lịch sử + cập nhật số liệu tài khoản.
+    BUG FIX: trước đây close_position/close_all không cập nhật realized P&L,
+    total_trades, win_rate, balance → today_performance & equity curve không bao
+    giờ thay đổi dù có đóng lệnh."""
+    pos_type = str(pos.get("type", "BUY")).upper()
+    # pyrefly: ignore [bad-argument-type]
+    entry = float(pos.get("price_open", pos.get("entry", 0)))
+    volume = float(pos.get("volume", 0.01))
+    if pos_type == "BUY":
+        profit = round((price_close - entry) * volume * 100, 2)
+    else:
+        profit = round((entry - price_close) * volume * 100, 2)
+    trade = {
+        "ticket": pos.get("ticket"),
+        "symbol": sym,
+        "type": pos_type,
+        "volume": volume,
+        "price_open": round(entry, 2),
+        "price_close": round(price_close, 2),
+        "profit": profit,
+        "time": datetime.now(timezone.utc).isoformat(),
+        "reason": reason,
+    }
+    _trades.append(trade)
+    _account["realized_pnl"] = round(_account.get("realized_pnl", 0.0) + profit, 2)
+    _account["total_trades"] = _account.get("total_trades", 0) + 1
+    wins = sum(1 for t in _trades if t.get("profit", 0) > 0)
+    losses = sum(1 for t in _trades if t.get("profit", 0) < 0)
+    if wins + losses > 0:
+        _account["win_rate"] = round(wins / (wins + losses) * 100, 1)
+    # Chỉ chế độ DEMO (không EA) mới tự cập nhật số dư; LIVE -> telemetry EA là thật
+    if not _account.get("mt5_connected") and _is_demo_mode():
+        _account["balance"] = round(_account.get("balance", 10000.0) + profit, 2)
+        _account["equity"] = round(_account.get("equity", 10000.0) + profit, 2)
+    return trade
+
+
+def _queue_modify(symbol: str, pos: Dict[str, Any], new_sl: float, tp: float):
+    """Queue lệnh MODIFY SL/TP cho EA (chỉ dùng khi MT5 connected).
+    BUG FIX: EA chỉ hiểu action MODIFY_SLTP với ticket nhúng trong reason
+    ("ticket=N") — trước đây gửi action "MODIFY" bị EA từ chối UNSUPPORTED_ACTION,
+    BE/trailing không bao giờ áp dụng lên vị thế MT5 thật."""
+    ticket = pos.get("ticket")
+    _commands.append({
+        "command_id": str(uuid.uuid4()),
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "action": "MODIFY_SLTP",
+        "symbol": resolve_symbol(symbol),
+        "magic": _config.get("magic", 888999),
+        "ticket": ticket,
+        "stop_loss": round(new_sl, 2),
+        "take_profit": tp,
+        "reason": f"ticket={ticket}",
+        "status": "QUEUED"
+    })
+
+
 # ─── AUTO-TRADE LOOP ────────────────────────────────────────────────────────
 _ai_loop_running = False
 _ai_loop_task = None
@@ -764,6 +950,19 @@ async def _ai_trade_loop():
             if df is None or df.empty:
                 await asyncio.sleep(5)
                 continue
+            # BUG FIX (FAIL-CLOSED): ở chế độ LIVE, KHÔNG BAO GIỜ phân tích/trade
+            # trên dữ liệu giả (stub) — nếu EA/bridge chết, dừng auto-trade thay vì
+            # mở lệnh THẬT dựa trên nến random-walk. Chỉ DEMO (paper) được phép
+            # chạy trên stub để phát triển/kiểm thử.
+            if not _bridge_data_real and not _is_demo_mode():
+                _add_ai_event("WARNING", "NO_REAL_DATA", symbol, {
+                    "reason": "LIVE mode has no real MT5 data (EA/bridge down) - auto-trade paused (fail-closed)",
+                    "data_status": "STUB"
+                })
+                _add_log("WARNING", "NO_REAL_DATA",
+                    "LIVE mode: no real MT5 data - auto-trade paused (fail-closed)")
+                await asyncio.sleep(5)
+                continue
             mtf_data: Dict[str, pd.DataFrame] = {tf: df}
             for ctx_tf in ("M15", "H1", "D1"):
                 if ctx_tf == tf:
@@ -781,6 +980,7 @@ async def _ai_trade_loop():
             sl = cf.get("sl")
             tp = cf.get("tp")
             rrr = cf.get("rrr")
+            # pyrefly: ignore [unnecessary-type-conversion]
             atr = float((df["high"] - df["low"]).tail(14).mean()) if len(df) >= 14 else 15.0
             reasons = [f.get("reason") for f in (cf.get("factors") or []) if f.get("reason")][:3]
 
@@ -790,7 +990,7 @@ async def _ai_trade_loop():
                 "score": score,
                 "signal": signal,
                 "objects": len(markup.get("objects", [])),
-                "open_positions": len(_positions.get(symbol, [])),
+                "open_positions": len(_positions.get(resolve_symbol(symbol), [])),
                 "max_positions": max_pos
             })
 
@@ -804,7 +1004,7 @@ async def _ai_trade_loop():
             )
             if trade_ok:
 
-                current_positions = _positions.get(symbol, [])
+                current_positions = _positions.get(resolve_symbol(symbol), [])
 
                 # Check if we already have a position in this direction
                 has_same_direction = any(
@@ -816,7 +1016,8 @@ async def _ai_trade_loop():
                     recent = [
                         c for c in _commands
                         if c.get("action") == signal
-                        and c.get("symbol") == symbol
+                        # pyrefly: ignore [bad-argument-type]
+                        and resolve_symbol(c.get("symbol")) == resolve_symbol(symbol)
                         and (datetime.now(timezone.utc) - datetime.fromisoformat(c["ts"].replace("Z", "+00:00"))).total_seconds() < 60
                     ]
 
@@ -864,7 +1065,8 @@ async def _ai_trade_loop():
                             "command_id": cmd_id,
                             "ts": datetime.now(timezone.utc).isoformat(),
                             "action": signal,
-                            "symbol": symbol,
+                            "symbol": resolve_symbol(symbol),
+                            "magic": _config.get("magic", 888999),
                             "volume": 0.01,
                             "stop_loss": round(sl, 2),
                             "take_profit": round(tp, 2),
@@ -873,6 +1075,33 @@ async def _ai_trade_loop():
                             "status": "QUEUED"
                         }
                         _commands.append(cmd)
+
+                        # BUG FIX: Khi EA chưa kết nối ở chế độ DEMO (paper), lệnh
+                        # QUEUED không bao giờ được thực thi -> giả lập fill để
+                        # auto-trade hoạt động thấy được. Ở chế độ LIVE thì
+                        # FAIL-CLOSED: không giả lập, giữ QUEUED chờ EA claim.
+                        if not _account.get("mt5_connected") and _is_demo_mode():
+                            ticket = random.randint(100000, 999999)
+                            rkey = resolve_symbol(symbol)
+                            if rkey not in _positions:
+                                _positions[rkey] = []
+                            _positions[rkey].append({
+                                "ticket": ticket,
+                                "symbol": rkey,
+                                "type": signal,
+                                "volume": 0.01,
+                                "price_open": round(entry, 2),
+                                "sl": round(sl, 2),
+                                "orig_sl": round(sl, 2),
+                                "tp": round(tp, 2),
+                                "be_applied": False,
+                                "profit": 0.0,
+                                "current_price": round(entry, 2),
+                                "open_time": datetime.now(timezone.utc).isoformat(),
+                            })
+                            cmd["status"] = "FILLED"
+                            cmd["ticket"] = ticket
+                            _account["open_positions"] = len(_positions.get(resolve_symbol(symbol), []))
 
                         _add_ai_event("TRADE", signal, symbol, {
                             "method": method,
@@ -892,7 +1121,13 @@ async def _ai_trade_loop():
         await asyncio.sleep(5)
 
 async def _position_manager_loop():
-    """Position manager background loop - auto Break-even and Trailing Stop every 2s"""
+    """Position manager background loop - every 2s:
+    - Cập nhật P&L floating cho mọi lệnh
+    - DEMO mode: mô phỏng đóng lệnh khi giá chạm SL/TP (MT5 thật tự xử lý)
+    - Break-even: giá đi 1R → kéo SL về ENTRY (chính xác, không phải entry+0.5)
+    - Trailing stop: sau BE, bám giá với khoảng 0.5R, chỉ kéo SL theo hướng có lời
+    BUG FIX: trước đây BE kéo về entry+0.5, không có trailing, demo không bao giờ
+    đóng lệnh khi chạm SL/TP (lệnh tích lũy mãi, realized P&L không đổi)."""
     global _ai_loop_running
     while _ai_loop_running:
         try:
@@ -906,48 +1141,100 @@ async def _position_manager_loop():
                     entry = float(pos.get("price_open", pos.get("entry", 0)))
                     sl = float(pos.get("sl", 0))
                     tp = float(pos.get("tp", 0))
+                    volume = float(pos.get("volume", 0.01))
                     current_price = bid if pos_type == "BUY" else ask
 
+                    # Cập nhật P&L floating
                     if pos_type == "BUY":
-                        pos["profit"] = round((current_price - entry) * float(pos.get("volume", 0.01)) * 100, 2)
+                        pos["profit"] = round((current_price - entry) * volume * 100, 2)
                     else:
-                        pos["profit"] = round((entry - current_price) * float(pos.get("volume", 0.01)) * 100, 2)
+                        pos["profit"] = round((entry - current_price) * volume * 100, 2)
                     pos["current_price"] = current_price
 
-                    if entry > 0:
-                        risk_dist = abs(entry - sl) if sl > 0 else 1.5
+                    # ── DEMO MODE: mô phỏng chạm SL/TP (MT5 thật tự xử lý;
+                    #    LIVE mode KHÔNG giả lập — fail-closed) ──
+                    if not _account.get("mt5_connected") and _is_demo_mode():
+                        close_price = None
+                        reason = None
                         if pos_type == "BUY":
-                            if (bid - entry) >= risk_dist and (sl < entry):
-                                new_sl = round(entry + 0.5, 2)
-                                pos["sl"] = new_sl
-                                _add_log("INFO", "BREAK_EVEN", f"Moved SL to Break-Even for BUY #{pos.get('ticket')} @ {new_sl}")
-                                _add_ai_event("TRADE", "BREAK_EVEN", symbol, {"ticket": pos.get("ticket"), "sl": new_sl})
-                                _commands.append({
-                                    "command_id": str(uuid.uuid4()),
-                                    "ts": datetime.now(timezone.utc).isoformat(),
-                                    "action": "MODIFY",
-                                    "symbol": symbol,
-                                    "ticket": pos.get("ticket"),
-                                    "stop_loss": new_sl,
-                                    "take_profit": tp,
-                                    "status": "QUEUED"
-                                })
-                        elif pos_type == "SELL":
-                            if (entry - ask) >= risk_dist and (sl > entry or sl == 0):
-                                new_sl = round(entry - 0.5, 2)
-                                pos["sl"] = new_sl
-                                _add_log("INFO", "BREAK_EVEN", f"Moved SL to Break-Even for SELL #{pos.get('ticket')} @ {new_sl}")
-                                _add_ai_event("TRADE", "BREAK_EVEN", symbol, {"ticket": pos.get("ticket"), "sl": new_sl})
-                                _commands.append({
-                                    "command_id": str(uuid.uuid4()),
-                                    "ts": datetime.now(timezone.utc).isoformat(),
-                                    "action": "MODIFY",
-                                    "symbol": symbol,
-                                    "ticket": pos.get("ticket"),
-                                    "stop_loss": new_sl,
-                                    "take_profit": tp,
-                                    "status": "QUEUED"
-                                })
+                            if sl > 0 and bid <= sl:
+                                close_price, reason = sl, "SL"
+                            elif tp > 0 and bid >= tp:
+                                close_price, reason = tp, "TP"
+                        else:
+                            if sl > 0 and ask >= sl:
+                                close_price, reason = sl, "SL"
+                            elif tp > 0 and ask <= tp:
+                                close_price, reason = tp, "TP"
+                        if close_price is not None:
+                            # pyrefly: ignore [bad-argument-type]
+                            trade = _record_closed_trade(symbol, pos, close_price, reason)
+                            if pos in pos_list:
+                                pos_list.remove(pos)
+                            _add_ai_event("TRADE", "CLOSE", symbol, {
+                                "ticket": pos.get("ticket"), "profit": trade["profit"], "reason": reason})
+                            _add_log("INFO", "STOP_HIT", f"{symbol} #{pos.get('ticket')} {pos_type} closed at {reason} pnl={trade['profit']}")
+                            continue
+
+                    if entry <= 0:
+                        continue
+
+                    # Khoảng cách rủi ro ban đầu (orig_sl để không bị méo sau khi kéo SL)
+                    orig_sl = float(pos.get("orig_sl", 0)) or sl
+                    risk_dist = abs(entry - orig_sl) if orig_sl > 0 else 1.5
+                    if risk_dist <= 0:
+                        risk_dist = 1.5
+                    be_applied = bool(pos.get("be_applied", False))
+
+                    # ── 1) Break-even (một lần, SL về đúng entry) ──
+                    if not be_applied:
+                        hit_be = (bid - entry) >= risk_dist if pos_type == "BUY" else (entry - ask) >= risk_dist
+                        if hit_be:
+                            new_sl = round(entry, 2)
+                            pos["sl"] = new_sl
+                            pos["be_applied"] = True
+                            _add_log("INFO", "BREAK_EVEN", f"SL -> BE for {pos_type} #{pos.get('ticket')} @ {new_sl}")
+                            _add_ai_event("TRADE", "BREAK_EVEN", symbol, {"ticket": pos.get("ticket"), "sl": new_sl})
+                            if _account.get("mt5_connected"):
+                                _queue_modify(symbol, pos, new_sl, tp)
+
+                    # ── 2) Trailing stop (sau BE, khoảng 0.5R) ──
+                    # Dùng giá trị LIVE từ pos (BE vừa chạy trong cùng vòng lặp phải
+                    # được trailing áp dụng ngay, không đợi vòng sau 2s)
+                    live_sl = float(pos.get("sl", 0))
+                    if pos.get("be_applied") and live_sl > 0:
+                        trail = max(0.2, risk_dist * 0.5)
+                        if pos_type == "BUY":
+                            candidate = round(current_price - trail, 2)
+                            if candidate > live_sl + 0.01:
+                                pos["sl"] = candidate
+                                if _account.get("mt5_connected"):
+                                    _queue_modify(symbol, pos, candidate, tp)
+                        else:
+                            candidate = round(current_price + trail, 2)
+                            if live_sl == 0 or candidate < live_sl - 0.01:
+                                pos["sl"] = candidate
+                                if _account.get("mt5_connected"):
+                                    _queue_modify(symbol, pos, candidate, tp)
+
+            # Cleanup mirror có cờ closing (EA không phản hồi trong 180s)
+            for sym in list(_positions.keys()):
+                for p in list(_positions[sym]):
+                    if p.get("closing"):
+                        try:
+                            closing_at = p.get("closing_at") or ""
+                            age = (datetime.now(timezone.utc) - datetime.fromisoformat(closing_at.replace("Z", "+00:00"))).total_seconds()
+                        except Exception:
+                            age = 0
+                        if age > 180:
+                            _positions[sym].remove(p)
+                            _add_log("WARN", "CLOSE_TIMEOUT", f"#{p.get('ticket')} closing mirror cleaned (EA no reply)")
+
+            # Floating P&L tổng (demo: tổng profit các lệnh mở; LIVE: telemetry EA)
+            if not _account.get("mt5_connected") and _is_demo_mode():
+                _account["total_pnl"] = round(
+                    sum(float(p.get("profit", 0)) for lst in _positions.values() for p in lst), 2)
+                _account["open_positions"] = sum(len(lst) for lst in _positions.values())
         except Exception as e:
             _add_log("ERROR", "POS_MGR_ERR", str(e))
         await asyncio.sleep(2)
@@ -1022,16 +1309,14 @@ async def get_status(symbol: str = Query("XAUUSD")):
     """Get current status with real indicators"""
     df = await fetch_real_candles(symbol, "M15", 100)
     if df is None or df.empty:
-        generate_mock_candles = None
-        # pyrefly: ignore [not-callable]
-        df = generate_mock_candles(symbol, "M15", 100)
+        df = generate_stub_candles(100, "M15", symbol)
     indicators = calculate_indicators(df)
     bid, ask = await fetch_real_bid_ask(symbol)
 
     analysis = await run_ai_analysis(symbol, _config["trading_method"])
 
     return {
-        "data_status": "LIVE",
+        "data_status": "LIVE" if _bridge_data_real else "STUB",
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "server": APP_NAME,
         "mt5_connected": _account["mt5_connected"],
@@ -1040,7 +1325,7 @@ async def get_status(symbol: str = Query("XAUUSD")):
         "margin": _account["margin"],
         "margin_free": _account["margin_free"],
         "floating_pnl": _account["total_pnl"],
-        "open_positions": len(_positions.get(symbol, [])),
+        "open_positions": len(_positions.get(resolve_symbol(symbol), [])),
         "current_ask": ask,
         "current_bid": bid,
         "current_spread": round(ask - bid, 2),
@@ -1052,15 +1337,15 @@ async def get_status(symbol: str = Query("XAUUSD")):
         "leverage": 100,
         "broker": "MT5 Broker",
         "today_performance": {
-            "realized_pl": _account["total_pnl"],
+            "realized_pl": _account.get("realized_pnl", 0.0),
             "trades_today": _account["total_trades"],
             "wins": int(_account["total_trades"] * _account["win_rate"] / 100),
             "losses": int(_account["total_trades"] * (100 - _account["win_rate"]) / 100),
-            "best_trade_today": 100.0,
-            "worst_trade_today": -50.0
+            "best_trade_today": max([t.get("profit", 0) for t in _trades], default=0.0),
+            "worst_trade_today": min([t.get("profit", 0) for t in _trades], default=0.0)
         },
         "indicators": {
-            "data_status": "LIVE",
+            "data_status": "LIVE" if _bridge_data_real else "STUB",
             "rsi": round(indicators["rsi"], 2),
             "atr": round(indicators["atr"], 2),
             "macd": indicators["macd"],
@@ -1083,7 +1368,7 @@ async def get_status(symbol: str = Query("XAUUSD")):
             "entry_zone": f"{analysis.get('last_price', 0):.2f}",
             "method": _config["trading_method"],
             "factors": analysis.get("factors", []),
-            "data_status": "LIVE"
+            "data_status": "LIVE" if _bridge_data_real else "STUB"
         }
     }
 
@@ -1098,14 +1383,12 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
     # Fetch REAL candles
     df = await fetch_real_candles(symbol, tf, count)
     if df is None or df.empty:
-        generate_mock_candles = None
-        # pyrefly: ignore [not-callable]
-        df = generate_mock_candles(symbol, tf, count)
+        df = generate_stub_candles(count, tf, symbol)
     bid, ask = await fetch_real_bid_ask(symbol)
 
     # Run method-specific analysis (naive indicator scoring, kept as reference)
     method = _config.get("trading_method", "SMC")
-    analysis = await run_ai_analysis(symbol, method)
+    analysis = await run_ai_analysis(symbol, method, tf)
 
     raw_score = analysis.get("score") if analysis else 50
     score_num = float(raw_score) if raw_score is not None else 50.0
@@ -1154,7 +1437,8 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
             "h": float(row["high"]),
             "l": float(row["low"]),
             "c": float(row["close"]),
-            "v": float(row.get("volume", 1000))
+            # pyrefly: ignore [bad-argument-type]
+            "v": float(row.get("volume", row.get("tick_volume", row.get("real_volume", 1000))))
         })
 
 
@@ -1175,7 +1459,9 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
 @app.get("/api/positions")
 async def get_positions(symbol: str = Query("XAUUSD")):
     """Get current positions for symbol"""
-    return _positions.get(symbol, [])
+    # BUG FIX: key _positions chuẩn theo symbol đã resolve (XAUUSDm) — trước đây
+    # demo lưu "XAUUSD" còn receipt EA lưu "XAUUSDm" nên frontend không thấy lệnh.
+    return _positions.get(resolve_symbol(symbol), [])
 
 @app.post("/api/order/create")
 async def create_order(req: OrderCreateRequest):
@@ -1192,7 +1478,8 @@ async def create_order(req: OrderCreateRequest):
         "command_id": cmd_id,
         "ts": datetime.now(timezone.utc).isoformat(),
         "action": direction,
-        "symbol": req.symbol,
+        "symbol": resolve_symbol(req.symbol),
+        "magic": _config.get("magic", 888999),
         "volume": req.quantity,
         "stop_loss": req.stop_loss or 0.0,
         "take_profit": req.take_profit or 0.0,
@@ -1202,9 +1489,9 @@ async def create_order(req: OrderCreateRequest):
     }
     _commands.append(cmd)
 
-    if not _account["mt5_connected"]:
+    if not _account["mt5_connected"] and _is_demo_mode():
         ticket = random.randint(100000, 999999)
-        sym = req.symbol
+        sym = resolve_symbol(req.symbol)
         if sym not in _positions:
             _positions[sym] = []
         _positions[sym].append({
@@ -1214,7 +1501,9 @@ async def create_order(req: OrderCreateRequest):
             "volume": req.quantity,
             "price_open": entry_price,
             "sl": req.stop_loss or 0.0,
+            "orig_sl": req.stop_loss or 0.0,
             "tp": req.take_profit or 0.0,
+            "be_applied": False,
             "profit": 0.0,
             "current_price": entry_price,
             "open_time": datetime.now(timezone.utc).isoformat(),
@@ -1236,40 +1525,72 @@ async def create_order(req: OrderCreateRequest):
 
 @app.post("/api/order/close")
 async def close_position(req: OrderCloseRequest):
-    """Close a position by ticket"""
+    """Close a position by ticket.
+    BUG FIX: ở chế độ MT5 connected, lệnh đóng phải gửi tới EA (CLOSE_POSITION)
+    — trước đây chỉ xoá mirror local nên vị thế MT5 thật vẫn mở và bot có thể mở
+    lệnh trùng hướng. Mirror giữ với cờ closing (chặn trùng), EA xác nhận qua
+    receipt EXECUTED hoặc cleanup sau timeout."""
     for sym, positions in _positions.items():
         for i, pos in enumerate(positions):
             if pos.get("ticket") == req.ticket:
-                # Create close trade
-                trade = {
-                    "ticket": pos["ticket"],
-                    "symbol": sym,
-                    "type": pos["type"],
-                    "volume": pos["volume"],
-                    "price_open": pos["price_open"],
-                    "price_close": pos.get("current_price", pos["price_open"]),
-                    "profit": pos.get("profit", 0),
-                    "time": datetime.now(timezone.utc).isoformat(),
-                }
-                _trades.append(trade)
+                if _account.get("mt5_connected"):
+                    _commands.append({
+                        "command_id": str(uuid.uuid4()),
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "action": "CLOSE_POSITION",
+                        "symbol": resolve_symbol(sym),
+                        "magic": _config.get("magic", 888999),
+                        "ticket": req.ticket,
+                        "reason": f"ticket={req.ticket}",
+                        "status": "QUEUED"
+                    })
+                    pos["closing"] = True
+                    pos["closing_at"] = datetime.now(timezone.utc).isoformat()
+                    _add_log("INFO", "CLOSE_QUEUED", f"Close #{req.ticket} queued for EA ({sym})")
+                    return {"status": "SUCCESS", "ticket": req.ticket, "queued_for_ea": True}
+                # pyrefly: ignore [bad-argument-type]
+                price_close = float(pos.get("current_price", pos.get("price_open", 0)))
+                trade = _record_closed_trade(sym, pos, price_close, "MANUAL_CLOSE")
                 positions.pop(i)
                 _add_ai_event("TRADE", "CLOSE", sym, {
                     "ticket": req.ticket,
                     "profit": trade["profit"]
                 })
-                return {"status": "SUCCESS", "ticket": req.ticket}
+                _add_log("INFO", "CLOSE", f"Closed {sym} #{req.ticket} pnl={trade['profit']}")
+                return {"status": "SUCCESS", "ticket": req.ticket, "profit": trade["profit"]}
     raise HTTPException(status_code=404, detail="Position not found")
 
 @app.post("/api/order/close_all")
 async def close_all_positions():
-    """Close all positions across all symbols"""
+    """Close all positions across all symbols.
+    BUG FIX: real mode -> queue CLOSE_ALL cho EA (không xoá mirror ngay);
+    demo mode -> ghi nhận từng lệnh vào lịch sử _trades (trước đây bỏ sót)."""
     closed = []
-    for sym, positions in _positions.items():
-        for pos in positions:
-            closed.append({"symbol": sym, "ticket": pos.get("ticket")})
-            _add_ai_event("TRADE", "CLOSE_ALL", sym, {"ticket": pos.get("ticket")})
+    if _account.get("mt5_connected"):
+        _commands.append({
+            "command_id": str(uuid.uuid4()),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "action": "CLOSE_ALL",
+            "symbol": resolve_symbol(_config.get("symbol", "XAUUSD")),
+            "magic": _config.get("magic", 888999),
+            "status": "QUEUED"
+        })
+        for sym, positions in _positions.items():
+            for pos in positions:
+                pos["closing"] = True
+                pos["closing_at"] = datetime.now(timezone.utc).isoformat()
+                closed.append({"symbol": sym, "ticket": pos.get("ticket")})
+        _add_log("INFO", "CLOSE_ALL_QUEUED", f"Close all queued for EA ({len(closed)} positions)")
+        return {"status": "SUCCESS", "closed": len(closed), "queued_for_ea": True}
+    for sym, positions in list(_positions.items()):
+        for pos in list(positions):
+            # pyrefly: ignore [bad-argument-type]
+            price_close = float(pos.get("current_price", pos.get("price_open", 0)))
+            trade = _record_closed_trade(sym, pos, price_close, "CLOSE_ALL")
+            closed.append({"symbol": sym, "ticket": pos.get("ticket"), "profit": trade["profit"]})
+            _add_ai_event("TRADE", "CLOSE_ALL", sym, {"ticket": pos.get("ticket"), "profit": trade["profit"]})
         positions.clear()
-    return {"status": "SUCCESS", "closed": len(closed)}
+    return {"status": "SUCCESS", "closed": len(closed), "trades": closed}
 
 # ─── TRADING METHOD ───────────────────────────────────────────────────────────
 @app.post("/api/control-center/trading-method")
@@ -1389,7 +1710,7 @@ async def get_brain():
             {"strategy_version": f"ATE-{method}", "status": "ACTIVE",
              "wins": int(_account["total_trades"] * _account["win_rate"] / 100),
              "losses": int(_account["total_trades"] * (100 - _account["win_rate"]) / 100),
-             "win_rate": _account["win_rate"], "total_pnl": _account["total_pnl"]}
+             "win_rate": _account["win_rate"], "total_pnl": _account.get("realized_pnl", 0.0)}
         ],
         "recent_decisions": recent_signals,
         "recent_evaluations": _trades[-10:] if _trades else []
@@ -1537,6 +1858,7 @@ class ClaimRequest(BaseModel):
     executor_id: Optional[str] = None
     symbol: Optional[str] = None
     max_commands: Optional[int] = 1
+    magic: Optional[int] = None
 
 @app.post("/api/v1/bridge/commands/claim")
 async def bridge_claim(req: ClaimRequest, request: Request):
@@ -1544,6 +1866,12 @@ async def bridge_claim(req: ClaimRequest, request: Request):
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
+
+    # BUG FIX: bắt magic number thật của EA từ claim payload (EA gửi magic trong
+    # request). Command phải có magic khớp InpMagicNumber của EA (mặc định 888999)
+    # nếu không EA từ chối REJECT_INVALID_COMMAND.
+    if req.magic:
+        _config["magic"] = req.magic
     
     claimed = []
     max_n = min(req.max_commands or 1, 5)
@@ -1551,7 +1879,11 @@ async def bridge_claim(req: ClaimRequest, request: Request):
     for cmd in list(_commands):
         if cmd.get("status") != "QUEUED":
             continue
-        if req.symbol and cmd.get("symbol") != req.symbol:
+        # BUG FIX: EA claim bằng symbol chart thật (XAUUSDm) — so khớp qua
+        # resolve_symbol, trước đây so nguyên chuỗi nên command "XAUUSD" không
+        # bao giờ khớp "XAUUSDm" -> không lệnh nào được claim.
+        # pyrefly: ignore [bad-argument-type]
+        if req.symbol and resolve_symbol(cmd.get("symbol")) != resolve_symbol(req.symbol):
             continue
         if len(claimed) >= max_n:
             break
@@ -1561,27 +1893,41 @@ async def bridge_claim(req: ClaimRequest, request: Request):
         claimed.append(cmd)
         _add_log("INFO", "CMD_CLAIMED", f"Command {cmd['command_id']} claimed by {req.executor_id}")
     
-    return {
+    resp = {
         "status": "OK",
         "commands": claimed,
         "count": len(claimed),
         "server_time": datetime.now(timezone.utc).isoformat()
     }
+    # BUG FIX (CHÍ MẠNG — real trading): EA (ATE_XAUUSD.mq5) parse response bằng
+    # StringFind(response, "\"command\":") — key SỐ ÍT "command". Server chỉ trả
+    # "commands" (số nhiều) -> EA luôn return sớm, lệnh claim KHÔNG BAO GIỜ được
+    # thực thi. Phải kèm "command": <lệnh đầu tiên> để EA nhận được.
+    if claimed:
+        resp["command"] = claimed[0]
+    return resp
 
 
 class ReceiptRequest(BaseModel):
-    command_id: str
-    status: str  # FILLED, REJECTED, ERROR, BREAKEVEN
+    command_id: Optional[str] = None
+    # EA gửi status EXECUTED / REJECTED / FAILED (không phải FILLED) — model cũ
+    # chỉ nhận FILLED nên position thật từ EA không bao giờ vào dashboard.
+    status: str = "EXECUTED"
     fill_price: Optional[float] = None
     fill_volume: Optional[float] = None
     ticket: Optional[int] = None
+    order_ticket: Optional[int] = None  # EA gửi order_ticket
     error_message: Optional[str] = None
+    result_message: Optional[str] = None  # EA gửi result_message
     sl: Optional[float] = None
     tp: Optional[float] = None
 
 @app.post("/api/v1/bridge/commands/{command_id}/receipt")
 async def bridge_receipt(command_id: str, req: ReceiptRequest, request: Request):
-    """EA báo cáo kết quả thực thi lệnh."""
+    """EA báo cáo kết quả thực thi lệnh.
+    BUG FIX: EA gửi status EXECUTED + order_ticket + result_message; model cũ
+    chờ FILLED + ticket nên position thật không bao giờ được đồng bộ vào dashboard
+    và receipt CLOSE_POSITION không được xử lý."""
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
@@ -1591,57 +1937,84 @@ async def bridge_receipt(command_id: str, req: ReceiptRequest, request: Request)
             cmd["status"] = req.status
             cmd["fill_price"] = req.fill_price
             cmd["fill_volume"] = req.fill_volume
-            cmd["ticket"] = req.ticket
-            cmd["error_message"] = req.error_message
+            ticket = req.ticket or req.order_ticket
+            cmd["ticket"] = ticket
+            cmd["error_message"] = req.error_message or req.result_message
             cmd["sl"] = req.sl
             cmd["tp"] = req.tp
             cmd["receipt_at"] = datetime.now(timezone.utc).isoformat()
-            
-            # Nếu FILLED, thêm vào _positions
-            if req.status == "FILLED" and req.ticket:
-                sym = cmd.get("symbol", "XAUUSD")
-                if sym not in _positions:
-                    _positions[sym] = []
-                _positions[sym].append({
-                    "ticket": req.ticket,
-                    "symbol": sym,
-                    "type": cmd.get("action"),
-                    "volume": req.fill_volume or cmd.get("volume"),
-                    "price_open": req.fill_price or cmd.get("entry"),
-                    "sl": req.sl or cmd.get("stop_loss"),
-                    "tp": req.tp or cmd.get("take_profit"),
-                    "profit": 0,
-                    "current_price": req.fill_price or cmd.get("entry"),
-                    "open_time": datetime.now(timezone.utc).isoformat(),
-                })
-                _add_ai_event("TRADE", str(cmd.get("action") or "ORDER"), sym, {
-                    "ticket": req.ticket,
-                    "entry": req.fill_price,
-                    "sl": req.sl,
-                    "tp": req.tp,
-                    "reason": cmd.get("reason")
-                })
-            
-            _add_log("INFO", "CMD_RECEIPT", f"Command {command_id} -> {req.status} ticket={req.ticket}")
+
+            is_filled = req.status in ("EXECUTED", "FILLED", "DONE")
+            action = str(cmd.get("action") or "").upper()
+            sym = cmd.get("symbol", "XAUUSD")
+
+            if is_filled and ticket:
+                if action in ("BUY", "SELL"):
+                    # EA xác nhận mở lệnh: thêm vào mirror _positions
+                    if sym not in _positions:
+                        _positions[sym] = []
+                    _positions[sym].append({
+                        "ticket": ticket,
+                        "symbol": sym,
+                        "type": action,
+                        "volume": req.fill_volume or cmd.get("volume"),
+                        "price_open": req.fill_price or cmd.get("entry"),
+                        "sl": req.sl or cmd.get("stop_loss"),
+                        "orig_sl": req.sl or cmd.get("stop_loss"),
+                        "tp": req.tp or cmd.get("take_profit"),
+                        "be_applied": False,
+                        "profit": 0,
+                        "current_price": req.fill_price or cmd.get("entry"),
+                        "open_time": datetime.now(timezone.utc).isoformat(),
+                    })
+                    _add_ai_event("TRADE", action, sym, {
+                        "ticket": ticket,
+                        "entry": req.fill_price or cmd.get("entry"),
+                        "sl": req.sl or cmd.get("stop_loss"),
+                        "tp": req.tp or cmd.get("take_profit"),
+                        "reason": cmd.get("reason"),
+                        "source": "EA"
+                    })
+                elif action in ("CLOSE_POSITION",):
+                    # EA xác nhận đóng lệnh: ghi nhận trade & xoá mirror
+                    for p in list(_positions.get(sym, [])):
+                        if p.get("ticket") == ticket:
+                            close_px = float(req.fill_price or p.get("current_price") or p.get("price_open") or 0)
+                            trade = _record_closed_trade(sym, p, close_px, "EA_CLOSE")
+                            _positions[sym].remove(p)
+                            _add_ai_event("TRADE", "CLOSE", sym, {
+                                "ticket": ticket, "profit": trade["profit"], "source": "EA"})
+                            break
+
+            _add_log("INFO", "CMD_RECEIPT", f"Command {command_id} -> {req.status} ticket={ticket} action={action}")
             return {"status": "OK", "command_id": command_id, "new_status": req.status}
     
     raise HTTPException(status_code=404, detail=f"Command {command_id} not found")
 
 
 class TelemetryRequest(BaseModel):
-    executor_id: str
-    symbol: str
+    # BUG FIX: EA gửi {account_id, balance, equity, margin, margin_free, positions,
+    # bid, ask, symbol, server, broker} — KHÔNG gửi executor_id/account_mode/login.
+    # Model cũ yêu cầu executor_id bắt buộc -> FastAPI trả 422 -> telemetry luôn
+    # thất bại -> balance/equity không bao giờ cập nhật (equity đứng yên $10,000).
+    executor_id: Optional[str] = None
+    symbol: str = "XAUUSD"
     login: Optional[int] = None
+    account_id: Optional[int] = None
     server: Optional[str] = None
     company: Optional[str] = None
+    broker: Optional[str] = None
     account_mode: Optional[str] = None
     balance: Optional[float] = None
     equity: Optional[float] = None
     margin: Optional[float] = None
     free_margin: Optional[float] = None
+    margin_free: Optional[float] = None
+    profit: Optional[float] = None
     spread: Optional[float] = None
     bid: Optional[float] = None
     ask: Optional[float] = None
+    positions: Optional[int] = 0
     positions_count: Optional[int] = 0
     ai_loop_enabled: Optional[bool] = False
     timestamp: Optional[str] = None
@@ -1653,17 +2026,44 @@ async def bridge_telemetry(req: TelemetryRequest, request: Request):
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
     
-    # Update account snapshot nếu MT5 connected
-    if req.account_mode and req.login:
+    # Update account snapshot. EA gửi account_id (không phải login) và
+    # margin_free (không phải free_margin) — map alias để telemetry thực sự
+    # cập nhật được balance/equity từ tài khoản MT5 thật.
+    login_id = req.login or req.account_id
+    if login_id:
         _account["mt5_connected"] = True
-        _account["login"] = req.login
+        _account["login"] = login_id
         _account["server"] = req.server or ""
-        if req.balance: _account["balance"] = req.balance
-        if req.equity: _account["equity"] = req.equity
-        if req.margin is not None: _account["margin"] = req.margin
-        if req.free_margin is not None: _account["margin_free"] = req.free_margin
+        if req.balance is not None:
+            _account["balance"] = req.balance
+        if req.equity is not None:
+            _account["equity"] = req.equity
+        if req.margin is not None:
+            _account["margin"] = req.margin
+        fm = req.free_margin if req.free_margin is not None else req.margin_free
+        if fm is not None:
+            _account["margin_free"] = fm
+        if req.profit is not None:
+            _account["total_pnl"] = req.profit
+        pc = req.positions if req.positions is not None else req.positions_count
+        if pc is not None:
+            _account["open_positions"] = pc
+
+    # BUG FIX: lưu bid/ask THẬT từ telemetry EA để fetch_real_bid_ask dùng được
+    # (trước đây tick chỉ lấy từ bridge /api/tick — endpoint không tồn tại).
+    if req.bid and req.ask:
+        _market_cache[f"{resolve_symbol(req.symbol)}_tick"] = {
+            # pyrefly: ignore [unnecessary-type-conversion]
+            "bid": float(req.bid),
+            # pyrefly: ignore [unnecessary-type-conversion]
+            "ask": float(req.ask),
+            # pyrefly: ignore [unnecessary-type-conversion]
+            "spread": round(float(req.ask) - float(req.bid), 2),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "source": "EA"
+        }
     
-    _add_log("DEBUG", "EA_TELEMETRY", f"EA {req.executor_id} on {req.symbol} bid={req.bid} ask={req.ask}")
+    _add_log("DEBUG", "EA_TELEMETRY", f"EA {req.executor_id or 'unknown'} on {req.symbol} login={login_id} balance={_account['balance']} equity={_account['equity']} bid={req.bid} ask={req.ask}")
     
     return {
         "status": "OK",
@@ -1699,6 +2099,9 @@ async def bridge_markup(req: MarkupRequest, request: Request):
         df = await fetch_real_candles(symbol, tf, 1000)
         if df is None or df.empty:
             return {"status": "ERROR", "message": "no candle data", "objects": []}
+        if not _bridge_data_real and not _is_demo_mode():
+            # FAIL-CLOSED: LIVE mode không vẽ markup trên dữ liệu giả
+            return {"status": "ERROR", "message": "no real data in LIVE mode", "objects": []}
         mtf_data: Dict[str, pd.DataFrame] = {tf: df}
         for ctx_tf in ("M15", "H1", "D1"):
             if ctx_tf == tf:
@@ -1722,14 +2125,17 @@ async def bridge_markup(req: MarkupRequest, request: Request):
 
 
 class CandlePushRequest(BaseModel):
-    executor_id: str
+    # BUG FIX: EA (ATE_XAUUSD.mq5) gửi payload {"symbol", "timeframe", "candles"}
+    # — KHÔNG gửi executor_id. Model cũ yêu cầu executor_id bắt buộc -> FastAPI
+    # trả 422 -> nến THẬT từ MT5 không bao giờ được lưu -> dashboard toàn dữ liệu giả.
+    executor_id: Optional[str] = None
     symbol: str
     timeframe: str
     candles: List[Dict[str, Any]] = []
 
 @app.post("/api/v1/bridge/candles")
 async def bridge_candles(req: CandlePushRequest, request: Request):
-    """EA đẩy candle data thời gian thực."""
+    """EA đẩy candle data thời gian thực (copy_rates từ MT5 chart thật)."""
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
@@ -1738,6 +2144,9 @@ async def bridge_candles(req: CandlePushRequest, request: Request):
     _market_cache[cache_key] = _market_cache.get(cache_key, {})
     _market_cache[cache_key]["candles"] = req.candles
     _market_cache[cache_key]["candles_updated"] = datetime.now(timezone.utc).isoformat()
+    _market_cache[cache_key]["source"] = "EA"
+    if req.candles:
+        _bridge_data_real = True
     
     return {"status": "OK", "candles_received": len(req.candles)}
 
@@ -1755,6 +2164,41 @@ async def bridge_calendar(req: CalendarRequest, request: Request):
     
     _add_log("DEBUG", "EA_CALENDAR", f"EA {req.executor_id} sent {len(req.events)} events")
     return {"status": "OK", "events_received": len(req.events)}
+
+
+class AccountSyncRequest(BaseModel):
+    login: Optional[int] = None
+    server: Optional[str] = None
+    balance: Optional[float] = None
+    equity: Optional[float] = None
+    margin: Optional[float] = None
+    free_margin: Optional[float] = None
+    margin_level: Optional[float] = None
+    currency: Optional[str] = None
+    leverage: Optional[int] = None
+    timestamp: Optional[str] = None
+
+@app.post("/api/v1/bridge/account_sync")
+async def bridge_account_sync(req: AccountSyncRequest, request: Request):
+    """python-bridge đồng bộ tài khoản MT5 thật mỗi 5s (trước đây endpoint này
+    KHÔNG tồn tại -> bridge gọi 404 âm thầm -> account qua đường bridge bị mất)."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    if req.login:
+        _account["mt5_connected"] = True
+        _account["login"] = req.login
+        _account["server"] = req.server or _account.get("server", "")
+        if req.balance is not None:
+            _account["balance"] = req.balance
+        if req.equity is not None:
+            _account["equity"] = req.equity
+        if req.margin is not None:
+            _account["margin"] = req.margin
+        if req.free_margin is not None:
+            _account["margin_free"] = req.free_margin
+    _add_log("DEBUG", "ACCOUNT_SYNC", f"bridge sync login={req.login} balance={_account['balance']}")
+    return {"status": "OK"}
 
 
 @app.get("/api/v1/economic-calendar/protection")

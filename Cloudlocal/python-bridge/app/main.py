@@ -53,6 +53,19 @@ SYMBOL_MAP = {
     "GOLD": "XAUUSDm",
 }
 
+# Timeframe mapping (string -> MT5 enum)
+TIMEFRAME_MAP = {
+    "M1": mt5.TIMEFRAME_M1 if HAS_MT5 else 1,
+    "M5": mt5.TIMEFRAME_M5 if HAS_MT5 else 5,
+    "M15": mt5.TIMEFRAME_M15 if HAS_MT5 else 15,
+    "M30": mt5.TIMEFRAME_M30 if HAS_MT5 else 30,
+    "H1": mt5.TIMEFRAME_H1 if HAS_MT5 else 60,
+    "H4": mt5.TIMEFRAME_H4 if HAS_MT5 else 240,
+    "D1": mt5.TIMEFRAME_D1 if HAS_MT5 else 1440,
+    "W1": mt5.TIMEFRAME_W1 if HAS_MT5 else 10080,
+    "MN1": mt5.TIMEFRAME_MN1 if HAS_MT5 else 43200,
+}
+
 
 class OrderRequest(BaseModel):
     symbol: str = Field(default="XAUUSDm")
@@ -344,6 +357,48 @@ async def get_tick(symbol: str = "XAUUSDm"):
         time=datetime.fromtimestamp(tick.time, tz=timezone.utc).isoformat(),
         volume=tick.volume
     )
+
+
+@app.get("/api/v1/market/candles")
+async def get_candles(symbol: str = "XAUUSDm", tf: str = "M15", count: int = 1000):
+    """Get REAL MT5 candles via copy_rates_from_pos.
+    BUG FIX: endpoint này KHÔNG tồn tại trước đây — dashboard gọi
+    {BRIDGE_URL}/api/candles (404) nên luôn rơi vào dữ liệu giả."""
+    if not await ensure_mt5():
+        raise HTTPException(status_code=503, detail="MT5 not connected")
+
+    resolved = resolve_symbol(symbol)
+    tf_enum = TIMEFRAME_MAP.get(tf.upper(), mt5.TIMEFRAME_M15 if HAS_MT5 else 15)
+    count = max(1, min(int(count), 200000))
+    rates = mt5.copy_rates_from_pos(resolved, tf_enum, 0, count)
+    if rates is None or len(rates) == 0:
+        raise HTTPException(status_code=404, detail=f"No candles for {resolved} on {tf}")
+
+    candles = []
+    for r in rates:
+        candles.append({
+            "time": datetime.fromtimestamp(int(r["time"]), tz=timezone.utc).isoformat(),
+            "ts": datetime.fromtimestamp(int(r["time"]), tz=timezone.utc).isoformat(),
+            "open": float(r["open"]),
+            "high": float(r["high"]),
+            "low": float(r["low"]),
+            "close": float(r["close"]),
+            "tick_volume": int(r["tick_volume"]),
+            "volume": int(r["tick_volume"]),
+            "spread": int(r["spread"]),
+            "real_volume": int(r["real_volume"]),
+        })
+    return {"symbol": resolved, "timeframe": tf.upper(), "count": len(candles), "candles": candles}
+
+
+# Aliases cho dashboard cũ gọi {BRIDGE_URL}/api/candles & /api/tick (backward-compat)
+@app.get("/api/candles")
+async def api_candles_alias(symbol: str = "XAUUSDm", tf: str = "M15", count: int = 1000):
+    return await get_candles(symbol, tf, count)
+
+@app.get("/api/tick")
+async def api_tick_alias(symbol: str = "XAUUSDm"):
+    return await get_tick(symbol)
 
 
 @app.get("/api/v1/account", response_model=AccountResponse)
