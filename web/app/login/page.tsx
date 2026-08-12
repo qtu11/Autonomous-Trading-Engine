@@ -90,11 +90,14 @@ export default function LoginPage() {
 
       if (res.ok && data.status === 'SUCCESS') {
         setSuccessMsg('Xac thuc thanh cong. Dang truy cap...');
-        localStorage.setItem('quantai_auth_token', data.token || 'authenticated');
+        const token = data.access_token || data.token || 'authenticated';
+        localStorage.setItem('quantai_auth_token', token);
         localStorage.setItem('quantai_user_info', JSON.stringify(data.user || {}));
-        document.cookie = `quantai_auth=${data.token}; path=/; max-age=315360000; SameSite=Lax`;
+        document.cookie = `access_token=${token}; path=/; max-age=604800; SameSite=Lax`;
+        document.cookie = `quantai_auth=${token}; path=/; max-age=604800; SameSite=Lax`;
         setTimeout(() => router.push('/'), 800);
       } else {
+
         setErrorMsg(data.detail?.message || data.detail?.code || 'Xac thuc that bai');
       }
     } catch {

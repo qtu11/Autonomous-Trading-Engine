@@ -31,7 +31,16 @@ export interface AIConfig { active_model: string; trading_method?: string; avail
 // HTTP helpers
 async function getJson<T>(url: string): Promise<T | null> {
   try {
-    const res = await fetch(url, { cache: 'no-store' });
+    const res = await fetch(url, {
+      cache: 'no-store',
+      headers: { ...adminHeaders() },
+      credentials: 'same-origin',
+    });
+    if (res.status === 401 && typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      localStorage.removeItem('quantai_auth_token');
+      window.location.href = '/login';
+      return null;
+    }
     if (!res.ok) return null;
     return await res.json() as T;
   } catch { return null; }
@@ -42,12 +51,19 @@ async function postJson<T>(url: string, body?: Record<string, unknown>): Promise
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...adminHeaders() },
+      credentials: 'same-origin',
       body: body ? JSON.stringify(body) : undefined,
     });
+    if (res.status === 401 && typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      localStorage.removeItem('quantai_auth_token');
+      window.location.href = '/login';
+      return null;
+    }
     if (!res.ok) return null;
     return await res.json() as T;
   } catch { return null; }
 }
+
 
 // API Functions
 export function fetchStatus() { return getJson<any>(`${API_BASE}/api/status`); }
