@@ -179,7 +179,6 @@ notepad .env
 Bắt buộc sửa:
 ```env
 PUBLIC_IP=<IP hoặc DDNS công khai>
-MT5_LOGIN=...  MT5_PASSWORD=...  MT5_SERVER=...
 QUANTAI_BRIDGE_TOKEN=<openssl rand -hex 32>
 ADMIN_LOGIN=admin  ADMIN_PASSWORD=<mật khẩu mạnh>
 ATE_BACKEND_URL=http://${PUBLIC_IP}:80      # KHÔNG có /api/v1, KHÔNG trỏ về vercel

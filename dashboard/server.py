@@ -24,6 +24,7 @@ import httpx
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any, Tuple
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 
 import pandas as pd
 import numpy as np
@@ -42,6 +43,12 @@ class SafeJSONResponse(JSONResponse):
             ensure_ascii=False,
             allow_nan=False,
             default=str,
+            # BUG FIX: separators compact (",", ":") giống Starlette chuẩn — EA
+            # MQL5 parse response bằng StringFind khớp chính xác chuỗi như
+            # "status":"CLAIMED" / "trading_method":"SMC". Separator mặc định
+            # của Python (", ", ": ") thêm khoảng trắng sau ':' khiến mọi chuỗi
+            # khớp compact của EA thất bại (claim không bao giờ được thực thi).
+            separators=(",", ":"),
         ).encode("utf-8")
 
 
@@ -140,10 +147,34 @@ def resolve_symbol(sym: str) -> str:
             return canonical
     return s
 
+# ─── LIFESPAN (startup/shutdown) ─────────────────────────────────────────────
+# BUG FIX (BUG-003): @app.on_event('startup'/'shutdown') bị deprecate trong
+# FastAPI (thay bằng lifespan context manager). Chuyển hết logic khởi động/dọn
+# dẹp background loop vào lifespan để bỏ cảnh báo và tương thích tương lai.
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Start/stop các background loop theo vòng đời ứng dụng."""
+    global _ai_loop_running, _ai_loop_task, _pos_mgr_task
+    _ai_loop_running = True
+    _ai_loop_task = asyncio.create_task(_ai_trade_loop())
+    _pos_mgr_task = asyncio.create_task(_position_manager_loop())
+    _add_log("INFO", "STARTUP", f"{APP_NAME} v{VERSION} started")
+    yield
+    _ai_loop_running = False
+    for task in (_ai_loop_task, _pos_mgr_task):
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+    _add_log("INFO", "SHUTDOWN", f"{APP_NAME} stopped")
+
 # ─── APP CREATION ─────────────────────────────────────────────────────────────
 app = FastAPI(
     title=APP_NAME, version=VERSION, description="ATE - Autonomous Trading Engine",
     default_response_class=SafeJSONResponse,
+    lifespan=lifespan,
 )
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
@@ -1361,6 +1392,19 @@ async def _position_manager_loop():
 # ─── PYDANTIC MODELS ─────────────────────────────────────────────────────────
 class LoginRequest(BaseModel): login: str; password: str
 class OrderCloseRequest(BaseModel): ticket: Optional[int] = None; position_id: Optional[str] = None
+class CancelPendingRequest(BaseModel):
+    order_ticket: Optional[int] = None
+    command_id: Optional[str] = None
+
+class NewsAnalyzeRequest(BaseModel):
+    title: str
+    impact: Optional[str] = "MEDIUM"
+    actual: Optional[str] = ""
+    forecast: Optional[str] = ""
+    previous: Optional[str] = ""
+    date: Optional[str] = ""
+    time: Optional[str] = ""
+
 class OrderCreateRequest(BaseModel):
     symbol: str = "XAUUSD"
     direction: str = "BUY"
@@ -1376,28 +1420,6 @@ class CopilotChatRequest(BaseModel): message: str; symbol: str = "XAUUSD"; timef
 
 # ─── ENDPOINTS ────────────────────────────────────────────────────────────────
 _pos_mgr_task = None
-
-# pyrefly: ignore [deprecated]
-@app.on_event("startup")
-async def startup():
-    global _ai_loop_running, _ai_loop_task, _pos_mgr_task
-    _ai_loop_running = True
-    _ai_loop_task = asyncio.create_task(_ai_trade_loop())
-    _pos_mgr_task = asyncio.create_task(_position_manager_loop())
-    _add_log("INFO", "STARTUP", f"{APP_NAME} v{VERSION} started")
-
-# pyrefly: ignore [deprecated]
-@app.on_event("shutdown")
-async def shutdown():
-    global _ai_loop_running, _ai_loop_task, _pos_mgr_task
-    _ai_loop_running = False
-    for task in (_ai_loop_task, _pos_mgr_task):
-        if task and not task.done():
-            task.cancel()
-            try: await task
-            except (asyncio.CancelledError, Exception): pass
-    _add_log("INFO", "SHUTDOWN", f"{APP_NAME} stopped")
-
 
 @app.get("/")
 async def root():
@@ -1464,8 +1486,13 @@ async def get_status(symbol: str = Query("XAUUSD")):
         "today_performance": {
             "realized_pl": _account.get("realized_pnl", 0.0),
             "trades_today": _account["total_trades"],
-            "wins": int(_account["total_trades"] * _account["win_rate"] / 100),
-            "losses": int(_account["total_trades"] * (100 - _account["win_rate"]) / 100),
+            # BUG FIX: wins/losses tính bằng int() riêng rẽ có thể không cộng
+            # đúng bằng total_trades (ví dụ 3 lệnh, win_rate 66.7 -> wins=2,
+            # losses=0). Giờ losses = total_trades - wins cho khớp.
+            # pyrefly: ignore [unnecessary-type-conversion]
+            "wins": int(round(_account["total_trades"] * _account["win_rate"] / 100)),
+            # pyrefly: ignore [unnecessary-type-conversion]
+            "losses": max(0, _account["total_trades"] - int(round(_account["total_trades"] * _account["win_rate"] / 100))),
             "best_trade_today": max([t.get("profit", 0) for t in _trades], default=0.0),
             "worst_trade_today": min([t.get("profit", 0) for t in _trades], default=0.0)
         },
@@ -1588,6 +1615,96 @@ async def get_positions(symbol: str = Query("XAUUSD")):
     # demo lưu "XAUUSD" còn receipt EA lưu "XAUUSDm" nên frontend không thấy lệnh.
     return _positions.get(resolve_symbol(symbol), [])
 
+@app.get("/api/pending-orders")
+# pyrefly: ignore [bad-function-definition]
+async def get_pending_orders(symbol: str = Query("XAUUSD"), request: Request = None):
+    """Get pending orders (QUEUED/CLAIMED commands) for the orders tab.
+    BUG FIX: frontend (fetchPendingOrders) gọi /api/pending-orders nhưng backend
+    không có route này -> 404 -> tab ORD luôn trống dù EA có lệnh chờ."""
+    if request and not (request.headers.get("authorization", "") or "").startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    sym = resolve_symbol(symbol)
+    out = []
+    for cmd in list(_commands):
+        if cmd.get("status") not in ("QUEUED", "CLAIMED"):
+            continue
+        # pyrefly: ignore [bad-argument-type]
+        if resolve_symbol(cmd.get("symbol", "")) != sym:
+            continue
+        direction = str(cmd.get("action", "BUY")).upper()
+        out.append({
+            "ticket": cmd.get("ticket") or 0,
+            "command_id": cmd.get("command_id"),
+            "symbol": cmd.get("symbol"),
+            "type": "BUY_LIMIT" if direction == "BUY" else "SELL_LIMIT",
+            "price": cmd.get("entry") or 0,
+            "sl": cmd.get("stop_loss") or 0,
+            "tp": cmd.get("take_profit") or 0,
+            "volume": cmd.get("volume") or 0.01,
+            "status": cmd.get("status"),
+            "reason": cmd.get("reason", ""),
+        })
+    return out
+
+@app.get("/api/patterns")
+# pyrefly: ignore [bad-function-definition]
+# pyrefly: ignore [bad-function-definition]
+async def get_patterns(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), request: Request = None):
+    """Get detected patterns for the PatternAlert panel.
+    BUG FIX: frontend (PatternAlert) gọi /api/patterns nhưng backend không có
+    route -> 404 -> panel luôn hiện "No pattern alerts" dù chart có FVG/OB/..."""
+    if request and not (request.headers.get("authorization", "") or "").startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    try:
+        df = await fetch_real_candles(symbol, tf, 500)
+        if df is None or df.empty:
+            return []
+        indicators = calculate_indicators(df)
+        fvgs = detect_fvg(df)
+        obs = detect_order_blocks(df)
+        bos = detect_bos_choch(df)
+        liq = detect_liquidity_sweep(df)
+        out = []
+        idx = 0
+        for f in (fvgs or [])[-3:]:
+            idx += 1
+            out.append({
+                "id": idx, "type": f.get("type", "FVG"),
+                "direction": f.get("direction", "NEUTRAL"),
+                "symbol": symbol, "price": round(float(f.get("top", 0) or 0), 2),
+                "size": 1, "time": f.get("time", ""),
+                "pattern": "Fair Value Gap (unfilled)",
+            })
+        for b in (obs or [])[-3:]:
+            idx += 1
+            out.append({
+                "id": idx, "type": b.get("type", "OB"),
+                "direction": b.get("direction", "NEUTRAL"),
+                "symbol": symbol, "price": round(float(b.get("top", 0) or 0), 2),
+                "size": 1, "time": b.get("time", ""),
+                "pattern": "Order Block",
+            })
+        if bos:
+            idx += 1
+            out.append({
+                "id": idx, "type": bos.get("kind", "BOS"),
+                "direction": bos.get("direction", "NEUTRAL"),
+                "symbol": symbol, "price": round(float(bos.get("break_price", 0) or 0), 2),
+                "size": 1, "time": "", "pattern": f"{bos.get('kind')} confirmed",
+            })
+        if liq:
+            idx += 1
+            out.append({
+                "id": idx, "type": "LIQUIDITY_SWEEP",
+                # pyrefly: ignore [unnecessary-type-conversion]
+                "direction": "BULLISH" if "BULLISH" in str(liq) else "BEARISH",
+                "symbol": symbol, "price": round(float(df["close"].iloc[-1]), 2),
+                "size": 1, "time": "", "pattern": "Liquidity Sweep",
+            })
+        return out
+    except Exception:
+        return []
+
 @app.post("/api/order/create")
 async def create_order(req: OrderCreateRequest):
     """Create order from Web UI -> Queues command for MT5 EA to execute"""
@@ -1636,6 +1753,9 @@ async def create_order(req: OrderCreateRequest):
         cmd["status"] = "FILLED"
         cmd["ticket"] = ticket
 
+    # BUG FIX: đoạn log MANUAL_ORDER + _add_ai_event + return trước đây bị kẹt
+    # nhầm vào cuối hàm news_analyze (sau return -> dead code) nên lệnh tạo thủ
+    # công không bao giờ được ghi log và client không nhận được command_id.
     _add_log("INFO", "MANUAL_ORDER", f"Web UI created order: {direction} {req.quantity} lot on {req.symbol} @ {entry_price}")
     _add_ai_event("TRADE", direction, req.symbol, {
         "entry": entry_price,
@@ -1644,8 +1764,94 @@ async def create_order(req: OrderCreateRequest):
         "volume": req.quantity,
         "source": "WEB_UI"
     })
-
     return {"status": "SUCCESS", "command_id": cmd_id, "direction": direction, "entry": entry_price}
+
+@app.post("/api/order/cancel_pending")
+async def cancel_pending(req: CancelPendingRequest, request: Request):
+    """Cancel a pending (QUEUED) order from the web orders tab.
+    BUG FIX: page.tsx handleCancelOrder gọi /api/order/cancel_pending nhưng
+    backend không có route -> 404 -> nút cancel không hoạt động."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    removed = False
+    for cmd in list(_commands):
+        if cmd.get("status") != "QUEUED":
+            continue
+        if req.command_id and cmd.get("command_id") == req.command_id:
+            _commands.remove(cmd)
+            removed = True
+            break
+        if req.order_ticket and cmd.get("ticket") == req.order_ticket:
+            _commands.remove(cmd)
+            removed = True
+            break
+    _add_log("INFO", "CANCEL_PENDING", f"Cancelled pending order: {req.command_id or req.order_ticket} (found={removed})")
+    return {"status": "SUCCESS", "cancelled": removed}
+
+@app.post("/api/news/analyze")
+async def news_analyze(req: NewsAnalyzeRequest, request: Request):
+    """Phân tích tin tức kinh tế (EconomicCalendar component).
+    BUG FIX: backend thiếu route /api/news/analyze -> click event báo lỗi."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    impact = (req.impact or "MEDIUM").upper()
+    title = req.title or ""
+    actual = req.actual or ""
+    forecast = req.forecast or ""
+
+    recommendation = "HOLD"
+    analysis = f"Event: {title} | Impact: {impact}"
+    def _num(s: str):
+        """Parse số liệu kinh tế: '3.2%' -> 3.2, '227K' -> 227000, '1.2M' -> 1200000."""
+        # pyrefly: ignore [unnecessary-type-conversion]
+        t = str(s).strip().replace("%", "").replace(",", "").replace(" ", "")
+        if not t:
+            return None
+        mult = 1.0
+        if t[-1] in ("K", "k"):
+            mult, t = 1000.0, t[:-1]
+        elif t[-1] in ("M", "m"):
+            mult, t = 1000000.0, t[:-1]
+        elif t[-1] in ("B", "b"):
+            mult, t = 1000000000.0, t[:-1]
+        try:
+            return float(t) * mult
+        except Exception:
+            return None
+
+    if actual and forecast:
+        try:
+            a, f = _num(actual), _num(forecast)
+            if a is None or f is None:
+                raise ValueError("unparseable")
+            # pyrefly: ignore [unnecessary-type-conversion]
+            a, f = float(a), float(f)
+            if "CPI" in title.upper() or "PPI" in title.upper() or "NFP" in title.upper() or "GDP" in title.upper():
+                if a > f:
+                    recommendation = "SELL"
+                    analysis += " | Actual cao hơn dự báo -> áp lực lạm phát/lãi suất -> vàng giảm"
+                elif a < f:
+                    recommendation = "BUY"
+                    analysis += " | Actual thấp hơn dự báo -> kỳ vọng nới lỏng -> vàng tăng"
+                else:
+                    analysis += " | Khớp dự báo"
+            else:
+                recommendation = "HOLD"
+                analysis += " | Tin thứ cấp, theo dõi phản ứng thị trường"
+        except Exception:
+            analysis += " | Không so sánh được giá trị"
+    elif impact == "HIGH":
+        recommendation = "HOLD"
+        analysis += " | Tin high impact — tránh vào lệnh trước/sau 15 phút"
+
+    return {
+        "status": "OK",
+        "title": title,
+        "analysis": analysis,
+        "recommendation": recommendation,
+    }
 
 
 @app.post("/api/order/close")
@@ -1717,6 +1923,98 @@ async def close_all_positions():
         positions.clear()
     return {"status": "SUCCESS", "closed": len(closed), "trades": closed}
 
+@app.post("/api/orders/close-profitable")
+async def close_profitable_positions(request: Request):
+    """Close all positions currently in profit (Control Center Quick Action).
+    BUG FIX: backend thiếu route /api/orders/close-profitable -> 404.
+    LIVE mode (EA connected): queue CLOSE_ALL cho EA, KHÔNG xóa mirror local
+    (EA xác nhận qua receipt) — fail-closed, tránh dashboard/MT5 lệch nhau."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    if _account.get("mt5_connected"):
+        _commands.append({
+            "command_id": str(uuid.uuid4()),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "action": "CLOSE_ALL",
+            "symbol": resolve_symbol(_config.get("symbol", "XAUUSD")),
+            "magic": _config.get("magic", 888999),
+            "reason": "close-profitable (all positions in profit)",
+            "status": "QUEUED"
+        })
+        _add_log("INFO", "CLOSE_PROFIT", "Queued CLOSE_ALL for EA (profitable)")
+        return {"status": "SUCCESS", "queued_for_ea": True, "closed": 0}
+    closed = []
+    for sym, positions in list(_positions.items()):
+        for pos in list(positions):
+            profit = float(pos.get("profit", 0) or 0)
+            if profit <= 0:
+                continue
+            # pyrefly: ignore [bad-argument-type]
+            price_close = float(pos.get("current_price", pos.get("price_open", 0)))
+            trade = _record_closed_trade(sym, pos, price_close, "CLOSE_PROFIT")
+            closed.append({"symbol": sym, "ticket": pos.get("ticket"), "profit": trade["profit"]})
+            if pos in positions:
+                positions.remove(pos)
+        _account["open_positions"] = sum(len(p) for p in _positions.values())
+    if closed:
+        _add_log("INFO", "CLOSE_PROFIT", f"Closed {len(closed)} profitable positions")
+    return {"status": "SUCCESS", "closed": len(closed), "trades": closed}
+
+@app.post("/api/orders/close-losing")
+async def close_losing_positions(request: Request):
+    """Close all positions currently in loss."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    if _account.get("mt5_connected"):
+        _commands.append({
+            "command_id": str(uuid.uuid4()),
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "action": "CLOSE_ALL",
+            "symbol": resolve_symbol(_config.get("symbol", "XAUUSD")),
+            "magic": _config.get("magic", 888999),
+            "reason": "close-losing (all positions in loss)",
+            "status": "QUEUED"
+        })
+        _add_log("INFO", "CLOSE_LOSS", "Queued CLOSE_ALL for EA (losing)")
+        return {"status": "SUCCESS", "queued_for_ea": True, "closed": 0}
+    closed = []
+    for sym, positions in list(_positions.items()):
+        for pos in list(positions):
+            profit = float(pos.get("profit", 0) or 0)
+            if profit >= 0:
+                continue
+            # pyrefly: ignore [bad-argument-type]
+            price_close = float(pos.get("current_price", pos.get("price_open", 0)))
+            trade = _record_closed_trade(sym, pos, price_close, "CLOSE_LOSS")
+            closed.append({"symbol": sym, "ticket": pos.get("ticket"), "profit": trade["profit"]})
+            if pos in positions:
+                positions.remove(pos)
+        _account["open_positions"] = sum(len(p) for p in _positions.values())
+    if closed:
+        _add_log("INFO", "CLOSE_LOSS", f"Closed {len(closed)} losing positions")
+    return {"status": "SUCCESS", "closed": len(closed), "trades": closed}
+
+@app.post("/api/reset_all")
+async def reset_all(request: Request):
+    """Reset all in-memory state (Control Center Reset button).
+    BUG FIX: backend thiếu route /api/reset_all -> nút Reset 404 không hoạt động.
+    LIVE mode (EA connected): chỉ xoá commands/mirror, KHÔNG ảnh hưởng vị thế MT5 thật."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    _positions.clear()
+    _commands.clear()
+    _trades.clear()
+    _signals.clear()
+    _analysis_cache.clear()
+    _market_cache.clear()
+    _account.update({"open_positions": 0, "total_pnl": 0.0, "realized_pnl": 0.0,
+                     "win_rate": 0.0, "total_trades": 0})
+    _add_log("INFO", "RESET_ALL", "All state reset")
+    return {"status": "SUCCESS"}
+
 # ─── TRADING METHOD ───────────────────────────────────────────────────────────
 @app.post("/api/control-center/trading-method")
 async def set_trading_method(req: TradingMethodRequest):
@@ -1754,6 +2052,73 @@ async def set_ai_loop(req: AiLoopRequest):
     _add_ai_event("INFO", "AI_LOOP", _config.get("symbol", "XAUUSD"), {"ai_auto_loop": req.enabled})
     return {"status": "SUCCESS", "ai_auto_loop": req.enabled}
 
+# ─── EXECUTION MODE / KILL SWITCH / DEMO ARM ──────────────────────────────────
+def _require_bearer(request: Request):
+    """Chặn request thiếu Authorization: Bearer — fail-closed."""
+    if not (request.headers.get("authorization", "") or "").startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+
+async def _require_json_object(request: Request) -> dict:
+    """Đọc body JSON và đảm bảo là object (dict) — tránh AttributeError 500
+    khi client gửi JSON array/string."""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON body phải là object")
+    return body
+
+def _as_bool(val, default: bool = False) -> bool:
+    """Coerce boolean an toàn: nhận bool, hoặc chuỗi 'true'/'1'/'yes' (không phân
+    biệt hoa thường) — tránh bool('false') == True khi client gửi chuỗi "false"."""
+    if isinstance(val, bool):
+        return val
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return str(val).strip().lower() in ("true", "1", "yes", "on")
+
+@app.post("/api/control-center/mode")
+async def set_control_mode(request: Request):
+    """Đổi execution mode (DEMO/LIVE/DISABLED).
+    BUG FIX: frontend (lib/api.ts updateControlMode) gọi /api/control-center/mode
+    nhưng backend không có route -> proxy 404. Bổ sung cho khớp API surface."""
+    _require_bearer(request)
+    body = await _require_json_object(request)
+    mode = str(body.get("mode", "DEMO")).upper().strip()
+    valid = {"DEMO", "LIVE", "DISABLED"}
+    if mode not in valid:
+        raise HTTPException(status_code=400, detail=f"mode phải là một trong {sorted(valid)}")
+    old = _config.get("execution_mode", "DEMO")
+    _config["execution_mode"] = mode
+    _add_log("WARNING", "EXECUTION_MODE", f"Execution mode changed from {old} to {mode}")
+    _add_ai_event("INFO", "EXECUTION_MODE", _config.get("symbol", "XAUUSD"), {"mode": mode})
+    return {"status": "SUCCESS", "mode": mode}
+
+@app.post("/api/control-center/kill-switch")
+async def set_kill_switch(request: Request):
+    """Bật/tắt kill switch khẩn (chặn mọi lệnh ngay lập tức).
+    BUG FIX: endpoint thiếu -> frontend gọi /api/control-center/kill-switch 404."""
+    _require_bearer(request)
+    body = await _require_json_object(request)
+    active = _as_bool(body.get("active"), False)
+    _config["kill_switch"] = active
+    _add_log("WARNING", "KILL_SWITCH", f"Kill switch {'ACTIVATED' if active else 'deactivated'}")
+    return {"status": "SUCCESS", "kill_switch_active": active}
+
+@app.post("/api/control-center/demo-arm")
+async def set_demo_arm(request: Request):
+    """Armed/disarm chế độ demo (paper) trading.
+    BUG FIX: endpoint thiếu -> frontend gọi /api/control-center/demo-arm 404."""
+    _require_bearer(request)
+    body = await _require_json_object(request)
+    armed = _as_bool(body.get("armed"), True)
+    _config["demo_armed"] = armed
+    _add_log("INFO", "DEMO_ARM", f"Demo arm set to {armed}")
+    return {"status": "SUCCESS", "demo_armed": armed}
+
 # ─── CONTROL CENTER STATUS ────────────────────────────────────────────────────
 @app.get("/api/control-center/status")
 async def get_control_center_status():
@@ -1777,6 +2142,9 @@ async def get_control_center_status():
             "mt5_connected": _account["mt5_connected"],
             "ea_connected": _ea_fresh(),
             "login": _account["login"],
+            # BUG FIX: telemetry EA gửi server (AccountInfoString(ACCOUNT_SERVER))
+            # nhưng endpoint này không trả server -> web hiển thị "---".
+            "server": _account.get("server") or "",
             "balance": _account["balance"],
             "equity": _account["equity"],
             "last_ea_telemetry_at": _account.get("last_ea_telemetry_at"),
@@ -1988,19 +2356,260 @@ async def get_brain():
         "recent_evaluations": _trades[-10:] if _trades else []
     }
 
-# ─── AI COPILOT CHAT ─────────────────────────────────────────────────────────
-@app.post("/api/copilot/chat")
-async def copilot_chat(req: CopilotChatRequest):
-    """AI Copilot chat - answers questions about the market"""
+# ─── AI COPILOT CHAT (LLM THẬT qua gateway miễn phí) ──────────────────────────
+
+# Gateway miễn phí mặc định (không cần API key) — xoay vòng failover sang các
+# model free khác nếu model chính lỗi. Có thể ghi đè qua env OPENCODE_BASE_URL.
+FREE_LLM_URL = os.getenv("OPENCODE_BASE_URL", "https://opencode.ai/zen/v1/chat/completions")
+# Gateway Freebuff2API (OpenAI-compatible proxy -> codebuff.com, dùng authToken
+# Freebuff). Trong Docker: http://freebuff2api:8080 — chạy native: 127.0.0.1:8080
+FREEBUFF_LLM_URL = os.getenv("FREEBUFF_LLM_URL", "http://127.0.0.1:8080/v1/chat/completions")
+FREEBUFF_AUTH_TOKEN = os.getenv("FREEBUFF_AUTH_TOKEN", "").strip()
+
+# BUG FIX: model deepseek reasoning trả reasoning_content (suy luận dài) + content
+# rỗng nếu max_tokens quá nhỏ. Xử lý reasoning_content khi gặp model reasoning.
+# Tôn trọng ATE_AI_MODEL nếu user cấu hình (đặt lên đầu).
+_cfg_model = os.getenv("ATE_AI_MODEL", "big-pickle").strip()
+
+# Danh sách gateway LLM — tự động xoay vòng: gateway khỏe (không cooldown) thử
+# trước, trong mỗi gateway xoay model ưu tiên -> dự phòng; khi 1 gateway bị rate
+# limit thì cooldown rồi chuyển gateway khác NGAY (không thử model vô ích).
+FREE_LLM_GATEWAYS = [
+    {
+        "name": "opencode",
+        "url": FREE_LLM_URL,
+        "models": [
+            _cfg_model,
+            "big-pickle",
+            "mimo-v2.5-free",
+            "deepseek-v4-flash-free",
+            "nemotron-3-ultra-free",
+        ],
+        "headers": {"Content-Type": "application/json", "User-Agent": "ATE-Copilot/2.4"},
+    },
+    {
+        "name": "freebuff",
+        "url": FREEBUFF_LLM_URL,
+        # BUG FIX: model KHÔNG hardcode — freebuff2api tải model ĐỘNG từ Codebuff
+        # upstream (free-agents.ts), danh sách thay đổi theo thời gian. Dòng này
+        # chỉ là fallback khi không query được /v1/models.
+        "models": ["google/gemini-2.5-flash-lite"],
+        "headers": {"Content-Type": "application/json", "Authorization": f"Bearer {FREEBUFF_AUTH_TOKEN or 'ate-copilot'}"},
+    },
+]
+
+# Cache model động của gateway freebuff — query GET /v1/models mỗi 10 phút.
+_FREEBUFF_MODELS_CACHE: Dict[str, Any] = {"ts": 0.0, "models": []}
+
+async def _fetch_freebuff_models() -> List[str]:
+    """Lấy danh sách model THỰC TẾ của freebuff2api qua GET /v1/models.
+    Registry của proxy tải động từ Codebuff upstream nên không thể hardcode.
+    Fail-soft: trả [] khi lỗi (caller dùng danh sách tĩnh fallback)."""
+    loop = asyncio.get_event_loop()
+    if loop.time() - _FREEBUFF_MODELS_CACHE["ts"] < 600:
+        return _FREEBUFF_MODELS_CACHE["models"]
+    models: List[str] = []
+    try:
+        url = FREEBUFF_LLM_URL.rstrip("/")
+        if url.endswith("/chat/completions"):
+            url = url[: -len("/chat/completions")] + "/models"
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(url)
+            if r.status_code == 200:
+                data = r.json()
+                models = [str(m["id"]) for m in (data.get("data") or []) if m.get("id")]
+    except Exception:
+        models = []
+    _FREEBUFF_MODELS_CACHE.update({"ts": loop.time(), "models": models})
+    if models:
+        _add_log("DEBUG", "FREEBUFF_MODELS", f"freebuff2api models: {models}")
+    return models
+
+# Cooldown theo gateway: tên gateway -> loop.time() hết hạn. Gateway bị rate limit
+# sẽ bị bỏ qua trong _FREE_GW_COOLDOWN_SECONDS, tự động chuyển sang gateway khỏe.
+_FREE_GW_COOLDOWN: dict = {}
+_FREE_GW_COOLDOWN_SECONDS = 60.0
+
+async def _call_free_llm(system: str, user: str, timeout: float = 25.0, total_deadline: float = 60.0) -> str:
+    """Gọi LLM thật qua nhiều gateway miễn phí, tự động xoay vòng:
+    1) Xoay model trong từng gateway (ưu tiên -> dự phòng)
+    2) Xoay GATEWAY khi 1 gateway bị rate limit/cooldown (không spam lại vô ích)
+    3) Fail-soft: trả '' nếu tất cả đều lỗi (caller giữ template heuristic)
+    BUG FIX: giới hạn tổng thời gian total_deadline để không treo hàng phút."""
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + total_deadline
+
+    now = loop.time()
+    healthy = [g for g in FREE_LLM_GATEWAYS if now >= _FREE_GW_COOLDOWN.get(g["name"], 0.0)]
+    cooling = [g for g in FREE_LLM_GATEWAYS if g not in healthy]
+    gateways = healthy + cooling  # ưu tiên gateway khỏe trước
+
+    for gw in gateways:
+        if loop.time() >= deadline:
+            _add_log("WARN", "LLM_TIMEOUT", "total deadline exceeded")
+            break
+        # Gateway freebuff: dùng model ĐỘNG từ /v1/models (registry thay đổi theo
+        # thời gian) — fallback về danh sách tĩnh nếu không query được.
+        if gw["name"] == "freebuff":
+            dynamic = await _fetch_freebuff_models()
+            models = dynamic or gw["models"]
+        else:
+            models = gw["models"]
+        for model in models:
+            if loop.time() >= deadline:
+                break
+            per_model = min(timeout, max(5.0, deadline - loop.time()))
+            try:
+                async def _one(gw=gw, model=model, per_model=per_model):
+                    payload = {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": user},
+                        ],
+                        "max_tokens": 500,
+                        "temperature": 0.3,
+                    }
+                    async with httpx.AsyncClient(timeout=per_model) as client:
+                        # pyrefly: ignore [bad-argument-type]
+                        res = await client.post(gw["url"], headers=gw["headers"], json=payload)
+                        if res.status_code != 200:
+                            return "", f"HTTP {res.status_code}: {res.text[:120]}"
+                        data = res.json()
+                        # BUG FIX: gateway trả HTTP 200 nhưng body có thể là error
+                        # JSON ({type: "error", error: {...}}) — trước đây bỏ qua nên
+                        # mỗi model "thành công" với content rỗng rồi thử model vô ích.
+                        if data.get("type") == "error":
+                            err_detail = ((data.get("error") or {}).get("message")) or (data.get("error") or {}).get("type") or "gateway error"
+                            return "", f"gateway: {err_detail}"
+                        msg = ((data.get("choices") or [{}])[0].get("message") or {})
+                        content = (msg.get("content") or "").strip()
+                        if not content and msg.get("reasoning_content"):
+                            content = (msg.get("reasoning_content") or "").strip()
+                        return content, ""
+
+                try:
+                    content, err = await asyncio.wait_for(_one(), timeout=per_model)
+                except asyncio.TimeoutError:
+                    err, content = "timeout", ""
+                if err:
+                    _add_log("WARN", "LLM_FREE", f"[{gw['name']}] model {model} {err}")
+                    low = err.lower()
+                    # Rate limit = giới hạn TOÀN gateway — cooldown gateway rồi
+                    # chuyển sang gateway khác NGAY (thử model khác cũng vô ích).
+                    if "rate limit" in low or "FreeUsageLimit" in err or "429" in low:
+                        _FREE_GW_COOLDOWN[gw["name"]] = loop.time() + _FREE_GW_COOLDOWN_SECONDS
+                        await asyncio.sleep(0.5)
+                        break
+                    # Lỗi model cụ thể (not found/invalid) -> thử model kế tiếp
+                    if "not found" in low or "invalid" in low or "does not exist" in low or "404" in low:
+                        continue
+                    # Lỗi gateway (network/5xx) -> cooldown ngắn + thử gateway khác
+                    _FREE_GW_COOLDOWN[gw["name"]] = loop.time() + 15.0
+                    break
+                if content:
+                    _add_log("INFO", "LLM_OK", f"copilot via [{gw['name']}] {model} ({len(content)} chars)")
+                    return content
+                # content rỗng mà không lỗi — thử model kế tiếp với chút delay
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                _add_log("WARN", "LLM_FREE", f"[{gw['name']}] model {model} exception: {e}")
+                await asyncio.sleep(0.5)
+    # pyrefly: ignore [parse-error]
+    return ""
+
+
+async def _build_copilot_context(req: CopilotChatRequest) -> str:
+    """Xây dựng context chart THẬT cho LLM: markup objects (OB/FVG/BOS/CHoCH/S-R...)
+    từ chính engine vẽ chart + confluence + indicators. Đây là phần 'AI đọc chart'."""
     symbol = req.symbol
     method = _config.get("trading_method", "SMC")
-    analysis = await run_ai_analysis(symbol, method)
+    tf = req.timeframe or "M15"
+    try:
+        df = _cached_candles(symbol, tf)
+        if df is None or df.empty:
+            df = _resample_from_cache(symbol, tf, 500)
+    except Exception:
+        df = None
 
+    last_close = None
+    if df is not None and not df.empty:
+        last_close = float(df["close"].iloc[-1])
+
+    try:
+        mtf_data: Dict[str, pd.DataFrame] = {}
+        if df is not None and not df.empty:
+            mtf_data[tf] = df
+        for ctx_tf in ("M15", "H1", "D1"):
+            if ctx_tf == tf:
+                continue
+            ctx_df = _resample_from_cache(symbol, ctx_tf, 300)
+            if ctx_df is not None and not ctx_df.empty:
+                mtf_data[ctx_tf] = ctx_df
+        markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
+        objects = markup.get("objects", [])[:15]
+        cf = markup.get("confluence", {})
+    except Exception:
+        objects, cf = [], {}
+
+    # Chỉ lấy indicators nhẹ — KHÔNG chạy toàn bộ run_ai_analysis (chậm vì phải
+    # fetch nến lại + chờ cache) để copilot phản hồi nhanh.
+    indicators = {}
+    try:
+        if df is not None and not df.empty and len(df) >= 50:
+            ind = calculate_indicators(df)
+            if ind:
+                indicators = {
+                    "rsi": ind.get("rsi"), "macd": ind.get("macd"), "atr": ind.get("atr"),
+                    "ema_fast": ind.get("ema_fast"), "ema_medium": ind.get("ema_medium"),
+                    "ema_slow": ind.get("ema_slow"),
+                }
+    except Exception:
+        indicators = {}
+
+    obj_lines = []
+    for o in objects:
+        obj_lines.append(f"- {o.get('type')} {o.get('direction','NEUTRAL')} {o.get('label','')} @ {o.get('price') or (o.get('top'),o.get('bottom'))}")
+
+    context = (
+        f"SYMBOL: {symbol} ({tf}) — last close: {last_close}\n"
+        f"METHOD: {method} | AI Auto: {'ON' if _config.get('ai_auto_loop') else 'OFF'}\n\n"
+        f"CHART STRUCTURE (detected):\n" + ("\n".join(obj_lines) if obj_lines else "(chưa đủ nến để phát hiện cấu trúc)") + "\n\n"
+        f"CONFLUENCE: signal={cf.get('signal','WAIT')} score={cf.get('score',0)} entry={cf.get('entry')} sl={cf.get('sl')} tp={cf.get('tp')} rrr={cf.get('rrr')}\n\n"
+        f"INDICATORS: RSI={indicators.get('rsi')} MACD={indicators.get('macd')} ATR={indicators.get('atr')} "
+        f"EMA9={indicators.get('ema_fast')} EMA21={indicators.get('ema_medium')} EMA50={indicators.get('ema_slow')}\n\n"
+        f"USER QUESTION: {req.message}\n\n"
+        f"Trả lời ngắn gọn bằng tiếng Việt, dựa trên dữ liệu chart thật bên trên."
+    )
+    return context
+
+
+@app.post("/api/copilot/chat")
+async def copilot_chat(req: CopilotChatRequest):
+    """AI Copilot chat — BUG FIX: trước đây chỉ trả template từ công thức EMA/RSI
+    (không phải AI thật). Giờ gọi LLM thật qua gateway miễn phí với context chart
+    THẬT (markup OB/FVG/BOS/CHoCH... + confluence + indicators). Nếu LLM lỗi,
+    fallback về template heuristic cũ để không bao giờ crash."""
+    try:
+        context = await _build_copilot_context(req)
+        system = (
+            "Bạn là AI trading copilot của hệ thống ATE (Autonomous Trading Engine) "
+            "phân tích XAUUSD. Dùng DỮ LIỆU CHART THẬT được cung cấp (không bịa số). "
+            "Trả lời ngắn gọn, chuyên nghiệp, nêu rõ lý do kỹ thuật."
+        )
+        llm_text = await _call_free_llm(system, context)
+        if llm_text:
+            return {"role": "ai", "text": llm_text, "time": datetime.now(timezone.utc).isoformat(), "model": "free-llm"}
+        _add_log("WARN", "LLM_FALLBACK", "free LLM unavailable — using heuristic template")
+    except Exception as e:
+        _add_log("WARN", "LLM_FALLBACK", f"copilot LLM error: {e}")
+
+    # Fallback heuristic (không crash khi LLM down)
+    analysis = await run_ai_analysis(req.symbol, _config.get("trading_method", "SMC"))
     indicators = analysis.get("indicators", {})
     confluence = analysis.get("score", 50)
-
     response = f"""
-[{method} Analysis for {symbol}]
+[{_config.get('trading_method', 'SMC')} Analysis for {req.symbol}]
 
 Signal: {analysis.get('signal', 'WAIT')}
 Confidence: {confluence:.0f}%
@@ -2018,7 +2627,7 @@ Factors:
 
 Last Price: {analysis.get('last_price', 0):.2f}
 
-Current method: {method}
+Current method: {_config.get('trading_method', 'SMC')}
 AI Auto: {'ON' if _config.get('ai_auto_loop') else 'OFF'}
 """.strip()
 
@@ -2445,6 +3054,31 @@ async def bridge_candles(req: CandlePushRequest, request: Request):
     return {"status": "OK", "candles_received": len(req.candles)}
 
 
+def _parse_event_datetime(ev: Dict[str, Any]) -> Optional[datetime]:
+    """Parse thời điểm sự kiện từ payload EA thật.
+    BUG FIX: EA gửi {date: '2026.08.12' (MQL5 TimeToString dấu chấm), time: '10:58'}
+    — KHÔNG có field datetime; impact là 'MED' chứ không phải 'MEDIUM'.
+    Trước đây server parse datetime (None) + so khớp MEDIUM (fail) nên news
+    protection và economic-calendar không bao giờ hoạt động với dữ liệu thật.
+    Hỗ trợ cả 3 dạng: datetime ISO, date+time, day+time."""
+    try:
+        dt_raw = ev.get("datetime") or ev.get("ts")
+        if dt_raw:
+            return datetime.fromisoformat(str(dt_raw).replace("Z", "+00:00"))
+        date_raw = str(ev.get("date") or ev.get("day") or "").strip()
+        time_raw = str(ev.get("time") or "").strip()
+        if date_raw:
+            iso_date = date_raw.replace(".", "-")
+            if " " in iso_date and not time_raw:
+                return datetime.fromisoformat(iso_date.replace(" ", "T") + "+00:00")
+            if time_raw and len(time_raw) == 5:
+                return datetime.fromisoformat(f"{iso_date}T{time_raw}:00+00:00")
+            return datetime.fromisoformat(f"{iso_date}T00:00:00+00:00")
+    except Exception:
+        pass
+    return None
+
+
 class CalendarRequest(BaseModel):
     executor_id: str
     events: List[Dict[str, Any]] = []
@@ -2456,8 +3090,42 @@ async def bridge_calendar(req: CalendarRequest, request: Request):
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
     
+    # BUG FIX: phải LƯU events vào cache — trước đây chỉ log rồi trả về, nên
+    # GET /api/economic-calendar luôn trả [] dù EA gửi lịch kinh tế.
+    if req.events:
+        _market_cache["economic_calendar"] = {
+            "events": req.events,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
     _add_log("DEBUG", "EA_CALENDAR", f"EA {req.executor_id} sent {len(req.events)} events")
     return {"status": "OK", "events_received": len(req.events)}
+
+@app.get("/api/economic-calendar")
+# pyrefly: ignore [bad-function-definition]
+async def get_economic_calendar(days: int = Query(7, ge=1, le=30), request: Request = None):
+    """Economic calendar cho frontend (EconomicCalendar component).
+    BUG FIX: backend thiếu route /api/economic-calendar -> component gọi 404
+    -> lịch kinh tế không bao giờ hiển thị."""
+    if request and not (request.headers.get("authorization", "") or "").startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    events = _market_cache.get("economic_calendar", {}).get("events") or []
+    try:
+        limit_ts = (datetime.now(timezone.utc) + timedelta(days=days)).timestamp()
+        out = []
+        for e in events:
+            ev_dt = _parse_event_datetime(e)
+            if ev_dt is None:
+                continue
+            if ev_dt.timestamp() <= limit_ts:
+                # BUG FIX: chuẩn hóa thành datetime ISO để frontend parse nhất quán
+                # (EA gửi date+time rời rạc — trước đây lọc ra [] vì thiếu datetime).
+                norm = dict(e)
+                norm["datetime"] = ev_dt.isoformat()
+                norm["impact"] = str(e.get("impact") or "MEDIUM").upper()
+                out.append(norm)
+        return out[-200:]
+    except Exception:
+        return events[-50:]
 
 
 class AccountSyncRequest(BaseModel):
@@ -2505,11 +3173,61 @@ async def economic_calendar_protection(request: Request):
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
     
+    # BUG FIX: trước đây hardcode protection_level="none" nên EA luôn thấy mức
+    # bảo vệ "none" -> news protection không bao giờ chặn lệnh. Giờ tính mức bảo
+    # vệ THẬT từ lịch kinh tế EA đẩy (giống evaluate_risk_gate): lockdown = sự
+    # kiện HIGH/MED đang trong cửa sổ ±15 phút, approaching = trong 1h, watch =
+    # trong 5h. Trả cả 2 bộ key (protection_level/level, live_seconds/
+    # live_remaining_seconds) để EA parse được dù dùng tên nào.
+    protection_level = "none"
+    live_seconds = 0
+    next_event = None
+    # pyrefly: ignore [bad-argument-type]
+    news_window_min = int(_config.get("news_window_minutes", 15))
+    try:
+        cal = _market_cache.get("economic_calendar") or {}
+        now_ts = datetime.now(timezone.utc).timestamp()
+        for ev in (cal.get("events") or []):
+            impact = str(ev.get("impact") or "").upper()
+            if impact not in ("HIGH", "MED", "MEDIUM"):
+                continue
+            ev_dt = _parse_event_datetime(ev)
+            if ev_dt is None:
+                continue
+            delta = ev_dt.timestamp() - now_ts  # giây tới khi sự kiện (âm = đang diễn ra)
+            title = str(ev.get("title") or ev.get("name") or "event")
+            event_payload = {
+                "title": title, "impact": impact,
+                "datetime": ev_dt.isoformat(),
+            }
+            if -news_window_min * 60 <= delta <= news_window_min * 60:
+                # BUG FIX: lockdown là mức nghiêm nhất — gán vô điều kiện để event
+                # lockdown xử lý SAU event watch/approaching vẫn nâng cấp được mức
+                # bảo vệ (trước đây guard `in ("none","")` khiến lockdown bị bỏ qua
+                # khi một event thấp hơn đã được xử lý trước).
+                protection_level = "lockdown"
+                live_seconds = max(0, int(news_window_min * 60 + delta))
+                next_event = event_payload
+            elif 0 <= delta <= 3600:
+                if protection_level not in ("lockdown",):
+                    protection_level = "approaching"
+                    live_seconds = int(delta)
+                    next_event = event_payload
+            elif 0 <= delta <= 5 * 3600:
+                if protection_level not in ("lockdown", "approaching"):
+                    protection_level = "watch"
+                    live_seconds = int(delta)
+                    next_event = event_payload
+    except Exception:
+        protection_level = "none"
+
     return {
         "status": "OK",
-        "protection_level": "none",
-        "live_seconds": 0,
-        "next_event": None,
+        "protection_level": protection_level,
+        "level": protection_level,
+        "live_seconds": live_seconds,
+        "live_remaining_seconds": live_seconds,
+        "next_event": next_event,
         "server_time": datetime.now(timezone.utc).isoformat()
     }
 
@@ -2543,8 +3261,34 @@ def evaluate_risk_gate(symbol: str, signal: str, entry: float, sl: float, tp: fl
     atr_pct = (atr / max(entry, 1)) * 100 if entry > 0 else 0
     checks["volatility"] = {"atr_pct": atr_pct, "ok": 0.05 <= atr_pct <= 5.0}
     
-    # 3. News protection
-    checks["news"] = {"protected": False, "ok": True}
+    # 3. News protection — BUG FIX: trước đây hardcode ok=True nên AI auto-trade
+    # vẫn mở lệnh ngay sát tin HIGH impact. Giờ đọc economic_calendar thật từ EA
+    # và chặn nếu có event HIGH/MEDIUM xảy ra trong cửa sổ ±15 phút (mặc định).
+    news_block = False
+    news_event = None
+    # pyrefly: ignore [bad-argument-type]
+    news_window_min = int(_config.get("news_window_minutes", 15))
+    try:
+        cal = _market_cache.get("economic_calendar") or {}
+        now_ts = datetime.now(timezone.utc).timestamp()
+        for ev in (cal.get("events") or []):
+            impact = str(ev.get("impact") or "").upper()
+            # BUG FIX: EA gửi 'MED' (MQL5 CALENDAR_IMPORTANCE_MODERATE) — phải
+            # nhận cả 'MED' và 'MEDIUM' nếu client khác gửi chuẩn đầy đủ.
+            if impact not in ("HIGH", "MED", "MEDIUM"):
+                continue
+            ev_dt = _parse_event_datetime(ev)
+            if ev_dt is None:
+                continue
+            ev_ts = ev_dt.timestamp()
+            if abs(now_ts - ev_ts) <= news_window_min * 60:
+                news_block = True
+                news_event = f"{ev.get('title') or ev.get('name') or 'event'} {impact} @{ev_dt.isoformat()}"
+                break
+    except Exception:
+        news_block = False
+    # pyrefly: ignore [bad-assignment]
+    checks["news"] = {"protected": news_block, "event": news_event, "window_min": news_window_min, "ok": not news_block}
     
     # 4. Margin
     free_margin = _account.get("margin_free", 10000)

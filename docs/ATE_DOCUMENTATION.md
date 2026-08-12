@@ -107,14 +107,17 @@ Trước khi bất kỳ lệnh nào được ghi vào CommandStore, mọi đề 
 ### 1. Biến Môi Trường (.env)
 
 ```properties
-# AI mặc định (free)
+# AI mặc định (free — OpenCode Zen, không cần key)
 OPENCODE_BASE_URL=https://opencode.ai/zen/v1/chat/completions
-QUANTAI_AI_MODEL=deepseek-v4-flash-free
+ATE_AI_MODEL=deepseek-v4-flash-free
 
-# Key thương mại (tùy chọn)
+# Freebuff2API — gateway dự phòng (model deepseek qua codebuff proxy)
+FREEBUFF_LLM_URL=http://127.0.0.1:8080/v1/chat/completions
+FREEBUFF_AUTH_TOKEN=YOUR_FREEBUFF_AUTH_TOKEN
+
+# Key thương mại (tùy chọn — auto failover)
 GEMINI_API_KEY=YOUR_GEMINI_API_KEY
 OPENAI_API_KEY=YOUR_OPENAI_API_KEY
-ANTHORPIC_API_KEY=YOUR_ANTHORPIC_API_KEY
 
 # Router cá nhân (ưu tiên cao nhất)
 GATEWAY_URL=https://openrouter.ai/api/v1
@@ -123,9 +126,22 @@ GATEWAY_KEY=sk-or-xxxx
 # Địa chỉ backend
 ATE_BACKEND_URL=http://127.0.0.1:8005
 ATE_DASHBOARD_PORT=8005
+
+# Token EA <-> backend (khớp InpBridgeToken trong EA)
+QUANTAI_BRIDGE_TOKEN=YOUR_BRIDGE_TOKEN
+ATE_BRIDGE_TOKEN=YOUR_BRIDGE_TOKEN   # alias cùng giá trị
+
+# Execution & risk
+ATE_EXECUTION_MODE=DEMO        # DEMO / LIVE / DISABLED (LIVE = fail-closed)
+ATE_EXECUTION_SYMBOL=XAUUSDm
+ATE_RISK_PERCENT=1
+ATE_MAX_POSITIONS=5
+ATE_MAX_SPREAD=4.5
+ATE_KILL_SWITCH=false
 ```
 
-Tham chiếu đầy đủ: `.env.example` và [OPERATION_GUIDE.md](./OPERATION_GUIDE.md).
+Tham chiếu đầy đủ: `.env.example`, [`ENVIRONMENT_CONFIG.md`](../ENVIRONMENT_CONFIG.md)
+(canonical — bảng biến đầy đủ + security checklist) và [OPERATION_GUIDE.md](./OPERATION_GUIDE.md).
 
 ### 2. Tổ Chức Thư Mục
 

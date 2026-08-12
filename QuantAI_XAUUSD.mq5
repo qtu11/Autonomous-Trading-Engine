@@ -72,9 +72,14 @@ void ATEFetchConfig()
 
    string body = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
    int idx = StringFind(body, "\"trading_method\":\"");
+   if(idx < 0)
+      idx = StringFind(body, "\"trading_method\": \""); // spaced JSON fallback
    if(idx >= 0)
    {
-      int s = idx + StringLen("\"trading_method\":\"");
+      int s = idx + StringLen("\"trading_method\":");
+      while(s < StringLen(body) && StringGetCharacter(body, s) != '\"')
+         s++;
+      s++;
       int e = StringFind(body, "\"", s);
       if(e > s) g_trading_method = StringSubstr(body, s, e - s);
    }
@@ -87,9 +92,14 @@ void ATEFetchConfig()
       else g_kill_switch = "false";
    }
    idx = StringFind(body, "\"execution_mode\":\"");
+   if(idx < 0)
+      idx = StringFind(body, "\"execution_mode\": \""); // spaced JSON fallback
    if(idx >= 0)
    {
-      int s = idx + StringLen("\"execution_mode\":\"");
+      int s = idx + StringLen("\"execution_mode\":");
+      while(s < StringLen(body) && StringGetCharacter(body, s) != '\"')
+         s++;
+      s++;
       int e = StringFind(body, "\"", s);
       if(e > s) g_execution_mode = StringSubstr(body, s, e - s);
    }
@@ -182,7 +192,6 @@ bool IsAuthorizedEnvironment()
    {
       // Broker allowlist removed
       return true;
-      return true;
    }
    if(accountMode == ACCOUNT_TRADE_MODE_REAL)
    {
@@ -191,7 +200,6 @@ bool IsAuthorizedEnvironment()
       // server, company) to the backend on every telemetry/heartbeat/claim,
       // so the web dashboard "logs in" automatically from the EA itself.
       // Broker allowlist removed
-      return true;
       return true;
    }
    return false;
@@ -348,7 +356,10 @@ string BridgeHeaders()
 void RegisterSymbolOnInit()
 {
    if(StringLen(InpApiUrl) == 0) return;
-   string url = InpApiUrl + "symbol/register";
+   // BUG FIX: trước đây nối thẳng InpApiUrl + "symbol/register" — nếu InpApiUrl
+   // không kết thúc bằng "/" thì thành ".../api/v1symbol/register" (404). Dùng
+   // ATEApiBase() như mọi endpoint khác cho thống nhất.
+   string url = ATEApiBase() + "/api/v1/symbol/register";
    string company = AccountInfoString(ACCOUNT_COMPANY);
    string broker = AccountInfoString(ACCOUNT_SERVER);
    long accountId = (long)AccountInfoInteger(ACCOUNT_LOGIN);
@@ -392,20 +403,28 @@ void SendTelemetry()
       return;
    }
    string headers = BridgeHeaders();
+   // BUG FIX: payload phải khớp model TelemetryRequest của server (executor_id,
+   // account_id, margin_free, account_mode...) — trước đây thiếu executor_id nên
+   // FastAPI trả 422, balance/equity không bao giờ được đồng bộ về dashboard.
    string payload = StringFormat(
-      "{\"symbol\":\"%s\",\"account_id\":%I64d,\"server\":\"%s\",\"broker\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"margin_free\":%.2f,\"profit\":%.2f,\"positions\":%d,\"ask\":%.2f,\"bid\":%.2f}",
+      "{\"symbol\":\"%s\",\"account_id\":%I64d,\"login\":%I64d,\"server\":\"%s\",\"company\":\"%s\",\"broker\":\"%s\",\"account_mode\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,\"margin\":%.2f,\"margin_free\":%.2f,\"free_margin\":%.2f,\"profit\":%.2f,\"positions\":%d,\"ask\":%.2f,\"bid\":%.2f,\"executor_id\":\"%s\"}",
       g_symbol,
+      AccountInfoInteger(ACCOUNT_LOGIN),
       AccountInfoInteger(ACCOUNT_LOGIN),
       AccountInfoString(ACCOUNT_SERVER),
       AccountInfoString(ACCOUNT_COMPANY),
+      AccountInfoString(ACCOUNT_COMPANY),
+      AccountModeLabel(),
       AccountInfoDouble(ACCOUNT_BALANCE),
       AccountInfoDouble(ACCOUNT_EQUITY),
       AccountInfoDouble(ACCOUNT_MARGIN),
       AccountInfoDouble(ACCOUNT_MARGIN_FREE),
+      AccountInfoDouble(ACCOUNT_MARGIN_FREE),
       AccountInfoDouble(ACCOUNT_PROFIT),
       PositionsTotal(),
       SymbolInfoDouble(g_symbol, SYMBOL_ASK),
-      SymbolInfoDouble(g_symbol, SYMBOL_BID)
+      SymbolInfoDouble(g_symbol, SYMBOL_BID),
+      EscapeJson(InpExecutorId)
    );
    
    char data[];
@@ -417,7 +436,7 @@ void SendTelemetry()
    if(res != 200)
    {
       int err = GetLastError();
-      ATELogThrottled("TELEMETRY_HTTP_" + string(res), StringFormat("Telemetry push failed (HTTP %d, err=%d). Bridge may be down, URL not allowlisted, or network blocked.", res, err));
+      ATELogThrottled("TELEMETRY_HTTP_" + string(res), StringFormat("Telemetry push failed (HTTP %d, err=%d). Huong dan: (1) InpApiUrl phai la https://autonomous-trading-engine.vercel.app/api/v1/ (hoac http://113.173.192.226:8848/api/v1/) - KHONG dung localhost/127.0.0.1 (MT5 chan); (2) them URL vao MT5 allowlist: Tools > Options > Expert Advisors > Allow WebRequest; (3) backend phai chay: python dashboard/server.py; (4) kiem tra token InpBridgeToken = QUANTAI_BRIDGE_TOKEN.", res, err));
    }
    else if(!g_telemetry_ok_logged)
    {
@@ -520,9 +539,18 @@ void CheckNewsProtection()
    }
 
    string response = CharArrayToString(result);
+   // BUG FIX: server trả cả level & protection_level; live_seconds &
+   // live_remaining_seconds; title & name — parse fallback để không phụ thuộc
+   // tên key cụ thể của backend.
    string level = ExtractJsonString(response, "\"level\":");
+   if(StringLen(level) == 0)
+      level = ExtractJsonString(response, "\"protection_level\":");
    int liveSeconds = (int)ExtractDouble(response, "\"live_remaining_seconds\":", 0.0);
+   if(liveSeconds == 0)
+      liveSeconds = (int)ExtractDouble(response, "\"live_seconds\":", 0.0);
    string eventTitle = ExtractJsonString(response, "\"title\":");
+   if(StringLen(eventTitle) == 0)
+      eventTitle = ExtractJsonString(response, "\"name\":");
    if(StringLen(level) == 0)
       level = "none";
 
@@ -644,7 +672,12 @@ void PollAndExecuteAISignals()
    }
 
    string response = CharArrayToString(result);
-   if(StringFind(response, "\"status\":\"CLAIMED\"") < 0)
+   // BUG FIX: server dùng Python json.dumps — trước đây separator có khoảng
+   // trắng ("status": "CLAIMED") nên khớp compact "status":"CLAIMED" luôn
+   // thất bại -> lệnh claim KHÔNG BAO GIỜ được thực thi. Server đã chuyển sang
+   // JSON compact, nhưng vẫn chấp nhận cả 2 dạng để tương thích backend cũ.
+   if(StringFind(response, "\"status\":\"CLAIMED\"") < 0 &&
+      StringFind(response, "\"status\": \"CLAIMED\"") < 0)
       return;
 
    int commandStart = StringFind(response, "\"command\":");
@@ -829,7 +862,9 @@ void FetchAndRenderChartMarkup()
       return;
 
    string headers = BridgeHeaders();
-   string payload = StringFormat("{\"executor_id\":\"%s\",\"symbol\":\"%s\",\"account_login\":%I64d,\"account_server\":\"%s\",\"broker_company\":\"%s\",\"trade_mode\":\"%s\"}", EscapeJson(InpExecutorId), EscapeJson(g_symbol), AccountInfoInteger(ACCOUNT_LOGIN), EscapeJson(AccountInfoString(ACCOUNT_SERVER)), EscapeJson(AccountInfoString(ACCOUNT_COMPANY)), AccountModeLabel());
+   // Send the EA's chart timeframe so the server analyzes the SAME timeframe
+   // the user is viewing (previously the server always fell back to M15).
+   string payload = StringFormat("{\"executor_id\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"%s\",\"account_login\":%I64d,\"account_server\":\"%s\",\"broker_company\":\"%s\",\"trade_mode\":\"%s\"}", EscapeJson(InpExecutorId), EscapeJson(g_symbol), TimeframeLabel(_Period), AccountInfoInteger(ACCOUNT_LOGIN), EscapeJson(AccountInfoString(ACCOUNT_SERVER)), EscapeJson(AccountInfoString(ACCOUNT_COMPANY)), AccountModeLabel());
    char data[];
    char result[];
    string result_headers;
@@ -955,12 +990,42 @@ void RenderMarkupObjects(string response)
       int objStart = StringFind(response, "\"type\":", pos);
       if(objStart < 0)
          break;
-      // Locate the object braces { ... } that enclose this "type" token.
-      int braceStart = StringFind(response, "{", objStart);
+      // Locate the JSON object braces that enclose this "type" token.
+      // FIX: the old code searched FORWARD for '{' from the token, which found
+      // the NEXT object's brace and made braceEnd < braceStart -> it broke on
+      // the very first object and never drew anything. We now walk BACKWARD
+      // from the token to its own '{', then count depth forward to the
+      // matching '}' (nested objects in "points" are handled by the depth).
+      int braceStart = -1;
+      for(int i = objStart - 1; i >= 0; i--)
+      {
+         if(StringGetCharacter(response, i) == '{')
+         {
+            braceStart = i;
+            break;
+         }
+      }
       if(braceStart < 0)
          break;
-      int braceEnd = StringFind(response, "}", objStart);
-      if(braceEnd < 0 || braceEnd < braceStart)
+      int braceEnd = -1;
+      int depth = 0;
+      int respLen = StringLen(response);
+      for(int i = braceStart; i < respLen; i++)
+      {
+         ushort ch = StringGetCharacter(response, i);
+         if(ch == '{')
+            depth++;
+         else if(ch == '}')
+         {
+            depth--;
+            if(depth == 0)
+            {
+               braceEnd = i;
+               break;
+            }
+         }
+      }
+      if(braceEnd < 0)
          break;
       string block = StringSubstr(response, braceStart, braceEnd - braceStart + 1);
 
@@ -1110,7 +1175,10 @@ void SendLiveCandles()
 
    MqlRates rates[];
    ArraySetAsSeries(rates, false); // Oldest first, newest last
-   int copied = CopyRates(g_symbol, _Period, 0, 100, rates);
+   // BUG FIX: trước đây chỉ CopyRates 100 nến -> chart web chỉ có ~8 nến M15
+   // (resample từ 100 nến M1) và hầu như không có pattern markup. Giờ push 5000
+   // nến để chart hiển thị lịch sử đầy đủ như MT5 (M15 ~330 nến, H1 ~83 nến).
+   int copied = CopyRates(g_symbol, _Period, 0, 5000, rates);
    PrintFormat("CANDLES_COPY_RESULT: copied=%d err=%d symbol=%s period=%d",
       copied, GetLastError(), g_symbol, _Period);
    if(copied <= 0)
@@ -1154,7 +1222,7 @@ void SendLiveCandles()
    StringToCharArray(payload, data, 0, StringLen(payload));
    
    string headers = BridgeHeaders();
-   int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 4000, data, result, result_headers);
+   int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 12000, data, result, result_headers);
    if(res == 200)
    {
       PrintFormat("CANDLES_PUSH_OK: pushed %d candles for %s %s", copied, g_symbol, tfLabel);

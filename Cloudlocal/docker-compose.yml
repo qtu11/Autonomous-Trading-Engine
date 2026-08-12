@@ -85,14 +85,16 @@ services:
       - ATE_EXECUTION_MAGIC=${ATE_EXECUTION_MAGIC:-888999}
       - ATE_MAGIC_NUMBER=${ATE_MAGIC_NUMBER:-888999}
       - ATE_DEMO_COMMAND_TTL_SECONDS=${ATE_DEMO_COMMAND_TTL_SECONDS:-10}
-      - ATE_DEMO_BROKER_COMPANY=${ATE_DEMO_BROKER_COMPANY:-Exness Technologies Ltd}
-      - ATE_LIVE_BROKER_COMPANY=${ATE_LIVE_BROKER_COMPANY:-Exness Technologies Ltd}
       # Dashboard
       - ATE_DASHBOARD_PORT=8005
       # BUG FIX: server.py gọi bridge/AI engine qua tên service Docker (trước đây
       # thiếu -> backend trong container không tới được bridge localhost:8007)
       - BRIDGE_URL=http://python-bridge:8007
       - AI_ENGINE_URL=http://ai-engine:8006
+      # BUG FIX: copilot gọi LLM thật qua 2 gateway — opencode.ai/zen (free) +
+      # freebuff2api (model deepseek) — tự động xoay khi 1 gateway bị rate limit.
+      - FREEBUFF_LLM_URL=http://freebuff2api:8080/v1/chat/completions
+      - FREEBUFF_AUTH_TOKEN=${FREEBUFF_AUTH_TOKEN:-9ffd1dea-cc02-4581-b14a-613023b33298}
       - ATE_DASHBOARD_HOST=0.0.0.0
       # Database
       - POSTGRES_HOST=postgres
@@ -162,6 +164,24 @@ services:
       resources:
         limits:
           memory: 1G
+
+  # Freebuff LLM Gateway (OpenAI-compatible proxy -> codebuff.com upstream)
+  # Dùng authToken Freebuff (từ ~/.config/manicode/credentials.json) để gọi model
+  # deepseek/deepseek-v4-flash. server.py tự động xoay vòng opencode.ai/zen <-> freebuff.
+  freebuff2api:
+    image: ghcr.io/quorinex/freebuff2api:latest
+    container_name: cloudlocal-freebuff2api
+    restart: unless-stopped
+    environment:
+      - AUTH_TOKENS=${FREEBUFF_AUTH_TOKEN:-9ffd1dea-cc02-4581-b14a-613023b33298}
+      - API_KEYS=
+      - ROTATION_INTERVAL=6h
+      - REQUEST_TIMEOUT=15m
+      - UPSTREAM_BASE_URL=https://www.codebuff.com
+    deploy:
+      resources:
+        limits:
+          memory: 256M
 
   # Python Bridge to MT5 (Windows Host) - API/docs/health gateway.
   # NOTE: MT5 pip package on Linux cannot talk to a Windows-native terminal.

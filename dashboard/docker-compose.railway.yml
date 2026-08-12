@@ -26,10 +26,7 @@ services:
       - QUANTAI_LIVE_SERVER=${QUANTAI_LIVE_SERVER}
       - QUANTAI_LIVE_BROKER_COMPANY=${QUANTAI_LIVE_BROKER_COMPANY:-Exness Technologies Ltd}
 
-      # MT5 Credentials (set in Railway dashboard)
-      - MT5_LOGIN=${MT5_LOGIN}
-      - MT5_PASSWORD=${MT5_PASSWORD}
-      - MT5_SERVER=${MT5_SERVER}
+      # MT5 (EA MQL5 tự đăng nhập & báo cáo account — không cần credentials)
       - MT5_PATH=${MT5_PATH:-C:/Program Files/MetaTrader 5-1/terminal64.exe}
       - MT5_TERMINAL_TIMEOUT_SECONDS=${MT5_TERMINAL_TIMEOUT_SECONDS:-30}
       - MT5_AUTOSTART=${MT5_AUTOSTART:-false}

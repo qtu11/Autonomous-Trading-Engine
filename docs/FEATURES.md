@@ -136,7 +136,7 @@ Chi tiết: [ARCHITECTURE.md](./ARCHITECTURE.md), [MODULES.md](./MODULES.md), [D
 
 | Biến | Vai trò |
 |------|---------|
-| `MT5_LOGIN/PASSWORD/SERVER/PATH` | Kết nối MT5 terminal |
+| `MT5_PATH` | Đường dẫn terminal MT5 (EA tự đăng nhập — không cần login/password) |
 | `QUANTAI_EXECUTION_MODE` | `DEMO` / `LIVE` / `DISABLED` |
 | `QUANTAI_KILL_SWITCH` | Công tắc khẩn |
 | `QUANTAI_EXECUTION_SYMBOL` | `XAUUSDm` |

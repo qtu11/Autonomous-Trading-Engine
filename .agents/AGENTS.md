@@ -107,9 +107,7 @@ Mọi thao tác chỉnh sửa mã nguồn trong dự án phải tuân thủ nghi
    **Required values in `.env`:**
    ```env
    PUBLIC_IP=YOUR_ACTUAL_PUBLIC_IP      # Critical! Get from https://api.ipify.org
-   MT5_LOGIN=12345678
-   MT5_PASSWORD=your_mt5_password
-   MT5_SERVER=YourBroker-Demo
+   # EA MQL5 tự đăng nhập & báo cáo account — KHÔNG cần MT5_LOGIN/PASSWORD/SERVER
    QUANTAI_BRIDGE_TOKEN=openssl_rand_hex_32
    ADMIN_PASSWORD=secure_admin_password
    QUANTAI_AI_MODEL=deepseek-v4-flash-free   # Model AI mặc định (OpenCode Zen Free, không cần key)

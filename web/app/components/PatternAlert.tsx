@@ -35,11 +35,12 @@ interface Pattern {
 
 interface PatternAlertProps {
   patterns?: Pattern[];
+  timeframe?: string;
   onViewChart?: (pattern: Pattern) => void;
   inlineBelow?: boolean; // when true, position below chart instead of overlay
 }
 
-export default function PatternAlert({ patterns = [], onViewChart }: PatternAlertProps) {
+export default function PatternAlert({ patterns = [], timeframe = 'M15', onViewChart }: PatternAlertProps) {
   const [alerts, setAlerts] = useState<Pattern[]>([]);
   const [showAll, setShowAll] = useState(false);
 
@@ -47,27 +48,28 @@ export default function PatternAlert({ patterns = [], onViewChart }: PatternAler
     setAlerts(prev => prev.filter(a => a.id !== id));
   }, []);
 
-  // Fetch real patterns from backend every 30s
+  // Fetch real patterns from backend every 30s (BUG FIX: theo dõi timeframe
+  // đang xem thay vì hardcode M15 — trước đây user xem M1 thì panel này luôn
+  // query M15 nên không bao giờ khớp pattern trên chart.)
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
         const token = localStorage.getItem('quantai_auth_token') || '';
         const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {};
-        const res = await fetch('/api/patterns?symbol=XAUUSD&tf=M15', { headers, credentials: 'same-origin' });
+        const res = await fetch(`/api/patterns?symbol=XAUUSD&tf=${encodeURIComponent(timeframe)}`, { headers, credentials: 'same-origin' });
         if (!res.ok || cancelled) return;
         const data = await res.json();
         const items = Array.isArray(data) ? data : (Array.isArray(data?.patterns) ? data.patterns : []);
-        if (items.length > 0) {
-          setAlerts(items.slice(0, 5));
-        }
-
+        // BUG FIX: gán bất kể rỗng hay không — trước đây `if (items.length > 0)`
+        // khiến alerts CŨ của TF trước hiển thị mãi nếu TF mới không có pattern.
+        setAlerts(items.slice(0, 5));
       } catch { /* silent */ }
     };
     load();
     const id = setInterval(load, 30000);
     return () => { cancelled = true; clearInterval(id); };
-  }, []);
+  }, [timeframe]);
 
   const getPatternColor = (direction: string) => direction === 'BULLISH' ? C.green : C.red;
   const getPatternBg = (direction: string) => direction === 'BULLISH' ? C.greenDim : C.redDim;

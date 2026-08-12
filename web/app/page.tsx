@@ -350,7 +350,10 @@ export default function DashboardPage() {
   const handleCancelOrder = async (ticket?: number) => {
     if (!ticket) return;
     try {
-      await fetch('/api/order/cancel_pending', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order_ticket: ticket }) });
+      // BUG FIX: QUEUED commands chưa có ticket (ticket=0) — phải gửi command_id
+      // kèm order_ticket, nếu không nút cancel không bao giờ khớp được lệnh chờ.
+      const pend = pendingOrders.find(o => o.ticket === ticket);
+      await fetch('/api/order/cancel_pending', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order_ticket: ticket, command_id: (pend as any)?.command_id }) });
       setPendingOrders(prev => prev.filter(o => o.ticket !== ticket));
       addNotif('Order cancelled', 'success');
     } catch { addNotif('Failed to cancel', 'error'); }
@@ -687,7 +690,7 @@ export default function DashboardPage() {
           {!showCompact && (
             <div style={{ flexShrink: 0, maxHeight: 160 }}>
               <Panel title="Alerts" live style={{ height: '100%' }}>
-                <PatternAlert onViewChart={(p) => { setSelectedSymbol(p.symbol); setShowChart(true); }} />
+                <PatternAlert timeframe={chartTf} onViewChart={(p) => { setSelectedSymbol(p.symbol); setShowChart(true); }} />
               </Panel>
             </div>
           )}

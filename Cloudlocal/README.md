@@ -80,18 +80,29 @@ copy .env.template .env
 notepad .env
 ```
 
-**Required values in `.env`:**
+**Required values in `.env`** (đầy đủ: `Cloudlocal/.env.template` — nguồn chuẩn: `../ENVIRONMENT_CONFIG.md`):
 ```env
-PUBLIC_IP=YOUR_ACTUAL_PUBLIC_IP      # Critical! Get from https://api.ipify.org
-MT5_LOGIN=12345678
-MT5_PASSWORD=your_mt5_password
-MT5_SERVER=YourBroker-Demo
+# IP công khai home server — Critical! Get from https://api.ipify.org
+VNPT_PUBLIC_IP=YOUR_ACTUAL_PUBLIC_IP
+# Token xác thực EA <-> backend (khớp InpBridgeToken trong EA)
 QUANTAI_BRIDGE_TOKEN=openssl_rand_hex_32
+ATE_BRIDGE_TOKEN=openssl_rand_hex_32      # alias — cùng giá trị
+ADMIN_LOGIN=your-email@example.com
 ADMIN_PASSWORD=secure_admin_password
-QUANTAI_AI_MODEL=deepseek-v4-flash-free   # Model AI mặc định (OpenCode Zen Free, không cần key)
+# Execution mode: DEMO (an toàn) / LIVE (thật, fail-closed)
+ATE_EXECUTION_MODE=DEMO
+ATE_EXECUTION_SYMBOL=XAUUSDm
+ATE_AI_MODEL=deepseek-v4-flash-free   # Model AI mặc định (OpenCode Zen Free, không cần key)
 OPENCODE_BASE_URL=https://opencode.ai/zen/v1/chat/completions   # Gateway OpenCode Zen Free
-# GATEWAY_URL=            # (tùy chọn) Gateway khách hàng riêng — ưu tiên cao nhất
-# GATEWAY_KEY=            # (tùy chọn) Key gateway riêng
+# Freebuff LLM Gateway (model deepseek qua proxy OpenAI-compatible)
+FREEBUFF_AUTH_TOKEN=your-freebuff-auth-token   # từ ~/.config/manicode/credentials.json
+FREEBUFF_LLM_URL=http://freebuff2api:8080/v1/chat/completions
+# MT5 bridge (chạy native trên Windows) — EA tự đăng nhập, không cần credentials
+MT5_PATH=C:\Program Files\MetaTrader 5-1\
+MT5_AUTOSTART=true
+# (tùy chọn) Gateway khách hàng riêng — ưu tiên cao nhất:
+# GATEWAY_URL=https://openrouter.ai/api/v1
+# GATEWAY_KEY=sk-or-xxxx
 ```
 
 **AI Provider Priority (từ cao → thấp):** `GATEWAY_URL+KEY` → Key/Model khách hàng (`*_API_KEY` + `custom_model_id`) → `OpenCode Zen Free Pool` (mặc định) → default keys khác. Hệ thống chạy hoàn toàn miễn phí trên OpenCode khi chưa cấu hình key nào.

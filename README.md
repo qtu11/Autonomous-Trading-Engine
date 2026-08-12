@@ -133,6 +133,32 @@ npm run dev
 
 Xem hướng dẫn chi tiết tại [`docs/OPERATION_GUIDE.md`](docs/OPERATION_GUIDE.md).
 
+## Cấu Hình Môi Trường (.env)
+
+> **Nguồn chuẩn duy nhất: [`ENVIRONMENT_CONFIG.md`](ENVIRONMENT_CONFIG.md)** (mirror: `docs/ENVIRONMENT_CONFIG.md`).
+
+Mỗi thành phần đọc file `.env` riêng (tất cả đều **không commit** — xem `.env.example`):
+
+| Thành phần | File env | Bắt buộc tối thiểu |
+|------------|----------|--------------------|
+| Backend (`server.py`) | `dashboard/.env` | `ADMIN_LOGIN/PASSWORD`, `QUANTAI_BRIDGE_TOKEN` |
+| Frontend (Next.js) | `web/.env` (+ `.env.local`) | `ATE_BACKEND_URL`, `JWT_SECRET`, Firebase |
+| Docker/Cloudlocal | `Cloudlocal/.env` | `QUANTAI_BRIDGE_TOKEN`, `ATE_EXECUTION_MODE` |
+| EA (MT5) | input `InpApiUrl` + `InpBridgeToken` | URL backend + token (khớp `QUANTAI_BRIDGE_TOKEN`) |
+
+```bash
+# Bắt đầu nhanh:
+cp .env.example .env                  # root (tham chiếu)
+cp dashboard/.env.example dashboard/.env
+cp web/.env.example web/.env
+cp Cloudlocal/.env.template Cloudlocal/.env
+```
+
+**3 biến phải ĐỒNG BỘ giữa mọi file**: `QUANTAI_BRIDGE_TOKEN` (EA + backend + web proxy),
+`ATE_EXECUTION_MODE` (DEMO/LIVE), `ATE_EXECUTION_SYMBOL` (`XAUUSDm`).
+Khi chạy **LIVE** phải đọc kỹ **Security Checklist** trong `ENVIRONMENT_CONFIG.md`
+(đổi token, JWT, admin password) — hệ thống fail-closed: mọi lệnh phải qua EA thật.
+
 ## API Endpoints Chính
 
 | Endpoint | Method | Mô tả |
@@ -154,13 +180,14 @@ Xem hướng dẫn chi tiết tại [`docs/OPERATION_GUIDE.md`](docs/OPERATION_G
 
 ```bash
 cd dashboard
-python -m pytest tests/test_market_analysis.py -v
+python -m pytest tests/ -v   # 67+ test (bao gồm bridge protocol, control center, risk gate)
 ```
 
 ## Tài Liệu
 
 Toàn bộ tài liệu dự án nằm trong [`docs/`](docs/README.md):
 - [Mục lục tài liệu](docs/README.md)
+- [Cấu hình môi trường (canonical)](ENVIRONMENT_CONFIG.md)
 - [Tính năng](docs/FEATURES.md)
 - [Kiến trúc](docs/ARCHITECTURE.md)
 - [AI Pipeline & Multi-AI Engine](docs/AI_PIPELINE.md)

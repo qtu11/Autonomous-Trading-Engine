@@ -25,17 +25,23 @@ pip install -r requirements.txt
 ### 2.2. Cấu hình môi trường
 
 ```bash
-copy .env.example .env
+copy .env.example .env   # (backend) — bản chuẩn đầy đủ tại ENVIRONMENT_CONFIG.md
 # Sửa .env: điền ADMIN_LOGIN/PASSWORD, token bridge, MT5 login (demo), Telegram (tùy chọn)
 ```
 
-Các biến quan trọng:
+Các biến quan trọng (tham chiếu đầy đủ: [`ENVIRONMENT_CONFIG.md`](../ENVIRONMENT_CONFIG.md)):
 - `ADMIN_LOGIN` / `ADMIN_PASSWORD`: đăng nhập UI.
-- `QUANTAI_BRIDGE_TOKEN`: token xác thực EA - **tự tạo ngẫu nhiên, không commit lên Git**.
-- `MT5_LOGIN/PASSWORD/SERVER/PATH`: thông tin tài khoản MT5.
-- `QUANTAI_EXECUTION_MODE=DEMO` mặc định; **KHÔNG đổi LIVE khi chưa sẵn sàng**.
+- `QUANTAI_BRIDGE_TOKEN` (alias `ATE_BRIDGE_TOKEN`): token xác thực EA - **tự tạo ngẫu nhiên,
+  không commit lên Git, phải khớp `InpBridgeToken` trong EA và `web` proxy**.
+- `MT5_PATH`: đường dẫn terminal MT5 (EA MQL5 tự đăng nhập & báo cáo account qua telemetry —
+  **không cần** `MT5_LOGIN/PASSWORD/SERVER`).
+- `ATE_EXECUTION_MODE=DEMO` mặc định; **KHÔNG đổi LIVE khi chưa sẵn sàng** (fail-closed).
 - `ATE_BACKEND_URL`: nếu chạy local để `http://127.0.0.1:8005`.
-- AI: giữ mặc định `OPENCODE_BASE_URL` + `QUANTAI_AI_MODEL=deepseek-v4-flash-free` để chạy free; thêm key Gemini/OpenAI nếu muốn tăng cường.
+- AI: giữ mặc định `OPENCODE_BASE_URL` + `ATE_AI_MODEL=deepseek-v4-flash-free` để chạy free;
+  thêm key Gemini/OpenAI nếu muốn tăng cường. Copilot còn xoay vòng qua `FREEBUFF_LLM_URL` +
+  `FREEBUFF_AUTH_TOKEN` (model deepseek qua freebuff2api) khi gateway chính bị rate limit.
+- Risk: `ATE_RISK_PERCENT`, `ATE_MAX_POSITIONS`, `ATE_MAX_SPREAD`, `ATE_KILL_SWITCH`
+  (kill switch = chặn mọi lệnh ngay lập tức).
 
 ### 2.3. Frontend (Next.js)
 

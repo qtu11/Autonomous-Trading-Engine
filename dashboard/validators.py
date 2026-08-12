@@ -1,7 +1,7 @@
 """
 Comprehensive Input Validation for Trading System
 """
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List, Literal
 from datetime import datetime
 from enum import Enum
@@ -106,8 +106,8 @@ class AnalyzeRequest(BaseModel):
     symbol: SymbolEnum
     timeframe: TimeframeEnum = TimeframeEnum.M15
     count: int = Field(default=1000, ge=10, le=5000)
-    
-    @validator('count')
+
+    @field_validator('count')
     def validate_count(cls, v):
         if v < 10 or v > 5000:
             raise ValueError('count must be between 10 and 5000')
@@ -123,15 +123,15 @@ class OrderRequest(BaseModel):
     stop_loss: Optional[float] = Field(default=None, gt=0)
     take_profit: Optional[float] = Field(default=None, gt=0)
     
-    @validator('quantity')
+    @field_validator('quantity')
     def validate_quantity(cls, v):
         if v <= 0:
             raise ValueError('quantity must be positive')
         if v > 100:
             raise ValueError('quantity exceeds maximum (100)')
         return v
-    
-    @validator('stop_loss', 'take_profit', 'entry_price')
+
+    @field_validator('stop_loss', 'take_profit', 'entry_price')
     def validate_prices(cls, v):
         if v is not None and v <= 0:
             raise ValueError('price must be positive')
@@ -154,11 +154,12 @@ class SignalFilterRequest(BaseModel):
     timeframe: Optional[TimeframeEnum] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
-    
-    @validator('end_date')
-    def validate_dates(cls, v, values):
-        if v and 'start_date' in values and values['start_date']:
-            if v < values['start_date']:
+
+    @field_validator('end_date')
+    def validate_dates(cls, v, info):
+        start = info.data.get('start_date') if info.data else None
+        if v and start:
+            if v < start:
                 raise ValueError('end_date must be after start_date')
         return v
 
@@ -175,12 +176,7 @@ class SignalResponse(BaseModel):
     take_profit: float
     confidence: float = Field(ge=0, le=100)
     total_score: int = Field(ge=0, le=15)
-    created_at: datetime
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    created_at: datetime  # Pydantic V2 serializes datetime -> ISO-8601 natively
 
 
 class PositionResponse(BaseModel):
@@ -192,12 +188,7 @@ class PositionResponse(BaseModel):
     current_price: float
     unrealized_pnl: float
     unrealized_pnl_pct: float
-    opened_at: datetime
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat()
-        }
+    opened_at: datetime  # Pydantic V2 serializes datetime -> ISO-8601 natively
 
 
 class AccountResponse(BaseModel):
