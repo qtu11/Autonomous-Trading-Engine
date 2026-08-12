@@ -348,7 +348,10 @@ string BridgeHeaders()
 void RegisterSymbolOnInit()
 {
    if(StringLen(InpApiUrl) == 0) return;
-   string url = InpApiUrl + "symbol/register";
+   // BUG FIX: trước đây nối thẳng InpApiUrl + "symbol/register" — nếu InpApiUrl
+   // không kết thúc bằng "/" thì thành ".../api/v1symbol/register" (404). Dùng
+   // ATEApiBase() như mọi endpoint khác cho thống nhất.
+   string url = ATEApiBase() + "/api/v1/symbol/register";
    string company = AccountInfoString(ACCOUNT_COMPANY);
    string broker = AccountInfoString(ACCOUNT_SERVER);
    long accountId = (long)AccountInfoInteger(ACCOUNT_LOGIN);
@@ -425,7 +428,7 @@ void SendTelemetry()
    if(res != 200)
    {
       int err = GetLastError();
-      ATELogThrottled("TELEMETRY_HTTP_" + string(res), StringFormat("Telemetry push failed (HTTP %d, err=%d). Bridge may be down, URL not allowlisted, or network blocked.", res, err));
+      ATELogThrottled("TELEMETRY_HTTP_" + string(res), StringFormat("Telemetry push failed (HTTP %d, err=%d). Huong dan: (1) InpApiUrl phai la http://<IP-LAN>:8005/api/v1/ (VD http://192.168.1.12:8005/api/v1/) - KHONG dung localhost/127.0.0.1 (MT5 chan); (2) them URL vao MT5 allowlist: Tools > Options > Expert Advisors > Allow WebRequest; (3) backend phai chay: python dashboard/server.py; (4) kiem tra token InpBridgeToken = QUANTAI_BRIDGE_TOKEN.", res, err));
    }
    else if(!g_telemetry_ok_logged)
    {

@@ -5,6 +5,7 @@ import {
   fetchControlCenterStatus,
   updateAiAutoLoop, loginMT5Account,
   fetchAIConfig, updateTradingMethod,
+  fetchMT5Diagnostics,
 } from '../../lib/api';
 
 const C = {
@@ -50,7 +51,14 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
   const [mt5Login, setMt5Login] = useState('');
   const [mt5Password, setMt5Password] = useState('');
   const [mt5Server, setMt5Server] = useState('');
+  const [diag, setDiag] = useState<any>(null);
+  const [loginResult, setLoginResult] = useState<any>(null);
 
+  // BUG FIX: tải chẩn đoán MT5 (LAN IP, checklist allowlist/firewall, lần cuối EA
+  // gửi telemetry) để hiển thị ngay lý do "MT5 Connected NO" khi EA chưa kết nối.
+  const loadDiag = useCallback(async () => {
+    try { const d = await fetchMT5Diagnostics(); setDiag(d); } catch { /* silent */ }
+  }, []);
 
   const loadStatus = useCallback(async () => {
     try {
@@ -66,9 +74,11 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
   useEffect(() => {
     loadStatus();
     loadAIConfig();
+    loadDiag();
     const interval = setInterval(loadStatus, 3000);
-    return () => clearInterval(interval);
-  }, [loadStatus, loadAIConfig]);
+    const diagInterval = setInterval(loadDiag, 10000);
+    return () => { clearInterval(interval); clearInterval(diagInterval); };
+  }, [loadStatus, loadAIConfig, loadDiag]);
 
   const handleToggleAI = async () => {
     try {
@@ -80,9 +90,14 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
 
   const handleMT5Login = async () => {
     if (!mt5Login || !mt5Password) return;
+    setLoginResult(null);
     try {
-      await loginMT5Account(Number(mt5Login), mt5Password, mt5Server);
+      // BUG FIX: trả về báo cáo từng bước (locate/login/copy/attach/algo) để hiển
+      // thị lỗi chính xác — trước đây bỏ qua kết quả, chỉ refresh status.
+      const result = await loginMT5Account(Number(mt5Login), mt5Password, mt5Server);
+      setLoginResult(result);
       await loadStatus();
+      await loadDiag();
       setMt5Password('');
     } catch { /* silent */ }
   };
@@ -152,6 +167,33 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
               padding: '8px 14px', background: C.goldDim, border: `1px solid ${C.gold}`, borderRadius: 6,
               color: C.gold, fontSize: 9, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase',
             }}>Connect</button>
+
+            {/* BUG FIX: hiển thị chẩn đoán — lý do EA chưa kết nối (allowlist/URL) */}
+            <div style={{ marginTop: 6, padding: '8px 10px', background: 'rgba(244,63,94,0.06)', border: `1px solid ${C.redDim}`, borderRadius: 6 }}>
+              <div style={{ fontSize: 7, fontFamily: C.mono, color: C.muted, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                MT5 Diagnostics
+              </div>
+              <div style={{ fontSize: 8, fontFamily: C.mono, color: C.text, lineHeight: '16px' }}>
+                <div>EA TELEMETRY: <span style={{ color: diag?.ea_connected ? C.green : C.red, fontWeight: 800 }}>{diag?.ea_connected ? 'ONLINE' : 'CHƯA CÓ'}</span></div>
+                <div>DATA: <span style={{ color: diag?.data_status === 'LIVE' ? C.green : C.gold }}>{diag?.data_status || status?.account?.data_status || 'STUB'}</span> · LAST: {diag?.last_ea_telemetry_at ? new Date(diag.last_ea_telemetry_at).toLocaleTimeString() : '—'}</div>
+                <div style={{ color: C.muted, marginTop: 4 }}>EA URL (InpApiUrl): <span style={{ color: C.cyan }}>{diag?.ea_url_hint || '...'}</span></div>
+                <div style={{ color: C.muted }}>⚠ Không dùng localhost — MT5 chặn. Thêm URL vào allowlist MT5.</div>
+              </div>
+            </div>
+
+            {/* Kết quả đăng nhập MT5 (từng bước) */}
+            {loginResult && (
+              <div style={{ marginTop: 6, padding: '8px 10px', background: 'rgba(0,0,0,0.4)', border: `1px solid ${loginResult.status === 'SUCCESS' ? C.greenDim : C.redDim}`, borderRadius: 6 }}>
+                <div style={{ fontSize: 7, fontFamily: C.mono, color: loginResult.status === 'SUCCESS' ? C.green : C.red, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.1em' }}>
+                  {loginResult.status === 'SUCCESS' ? '✓ Connected' : '✗ Failed — ' + (loginResult.message || '')}
+                </div>
+                {(loginResult.steps || []).map((s: any, i: number) => (
+                  <div key={i} style={{ fontSize: 8, fontFamily: C.mono, color: s.ok ? C.green : C.red, lineHeight: '15px' }}>
+                    {s.ok ? '✓' : '✗'} {s.name}: {s.message}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>

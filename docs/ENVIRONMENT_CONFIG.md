@@ -70,12 +70,23 @@
 
 ## Triển khai 3 môi trường
 
-### 1. Local dev (máy Windows cài MT5)
+### 1. Local dev (máy Windows cài MT5) — ⚠️ BẮT BUỘC đọc kỹ
 ```bash
 cd dashboard && pip install -r requirements.txt && python server.py   # :8005
 cd web && npm install && npm run dev                                   # :3000
-# EA trong MT5: InpApiUrl = http://localhost:8005/api/v1/ + allowlist
 ```
+**EA trong MT5 — QUAN TRỌNG (MT5 WebRequest CHẶN localhost/127.0.0.1):**
+1. `InpApiUrl = http://192.168.1.12:8005/api/v1/` (IP LAN của máy, xem `ipconfig`
+   hoặc Control Center → MT5 Diagnostics). **KHÔNG dùng localhost**.
+2. MT5 allowlist: `Công cụ → Tùy chọn → Trình điều tra` → Allow WebRequest →
+   thêm `http://192.168.1.12`.
+3. Windows Firewall: cho phép cổng **8005 TCP** inbound.
+4. Attach EA vào chart XAUUSD, bật **Algo Trading**.
+5. Log MT5 có `TELEMETRY_OK`/`CANDLES_PUSH_OK` → web hiện MT5 CONNECTED + số thật.
+
+> Mẹo: nút **Connect** trong Control Center tự launch/login/copy EA/mở chart/attach
+> và trả báo cáo từng bước. Nếu muốn qua internet (Vercel): deploy vercel.json
+> rewrite về `http://<VNPT_PUBLIC_IP>:8848` + home server chạy nginx + backend.
 
 ### 2. Docker (home server / máy nhà)
 ```bash
@@ -91,6 +102,18 @@ docker compose up -d --build    # backend :8005, frontend :3000, redis
 4. EA trong MT5: `InpApiUrl = https://autonomous-trading-engine.vercel.app/api/v1/`,
    thêm domain vào **MT5 WebRequest allowlist**.
 5. Bật `ATE_EXECUTION_MODE=LIVE` + `live_armed=true` khi sẵn sàng trade thật.
+
+> ⚠️ **QUAN TRỌNG — env trên Vercel Dashboard (Project → Settings → Environment
+> Variables) GHI ĐÈ lên env trong `web/vercel.json`.** 4 biến phải đúng:
+>
+> | Biến | Giá trị ĐÚNG | Giá trị SAI (gây hỏng) |
+> |------|-------------|------------------------|
+> | `ATE_BACKEND_URL` | `http://113.173.192.226:8848` | `https://...vercel.app/backend` (tự tham chiếu → loop) |
+> | `ATE_MT5_API` | `http://113.173.192.226:8848/api/v1` | `https://...vercel.app/api/v1` (rewrite loop) |
+> | `ATE_DASHBOARD_PORT` | `8005` | `8848` (server.py bind đè nginx) |
+> | `ATE_DASHBOARD_HOST` | `0.0.0.0` | `http://127.0.0.1/` (sai format) |
+>
+> `NEXT_PUBLIC_ATE_API_ORIGIN` không được code đọc — có thể xóa khỏi Dashboard.
 
 ## Troubleshooting
 

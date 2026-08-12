@@ -89,6 +89,10 @@ services:
       - ATE_LIVE_BROKER_COMPANY=${ATE_LIVE_BROKER_COMPANY:-Exness Technologies Ltd}
       # Dashboard
       - ATE_DASHBOARD_PORT=8005
+      # BUG FIX: server.py gọi bridge/AI engine qua tên service Docker (trước đây
+      # thiếu -> backend trong container không tới được bridge localhost:8007)
+      - BRIDGE_URL=http://python-bridge:8007
+      - AI_ENGINE_URL=http://ai-engine:8006
       - ATE_DASHBOARD_HOST=0.0.0.0
       # Database
       - POSTGRES_HOST=postgres

@@ -30,9 +30,34 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, Query, Depends, Request, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+
+
+class SafeJSONResponse(JSONResponse):
+    """JSONResponse chặn NaN/Infinity — NaN từ indicators (thiếu nến cho window
+    EMA/RSI) làm json.dumps ném "Out of range float" -> 500. Thay bằng null."""
+
+    def render(self, content):
+        return json.dumps(
+            _json_safe(content),
+            ensure_ascii=False,
+            allow_nan=False,
+            default=str,
+        ).encode("utf-8")
+
+
+def _json_safe(obj):
+    """Đệ quy thay NaN/Infinity bằng None để mọi response luôn JSON hợp lệ."""
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    return obj
 from pydantic import BaseModel, Field
 from asyncio import Queue
 import json
+import math
 import uvicorn
 from chart_markup import build_chart_markup
 
@@ -67,19 +92,23 @@ _account = {
     "mt5_connected": False, "login": 0, "server": "",
 }
 
+# BUG FIX: đọc cấu hình từ env (ATE_EXECUTION_MODE/KILL_SWITCH/LIVE_ARMED...) để
+# container Docker tôn trọng .env — trước đây server.py bỏ qua env, luôn DEMO/kill=False.
+_exec_mode_env = os.getenv("ATE_EXECUTION_MODE", "DEMO").upper()
 _config = {
-    "execution_mode": "DEMO",
-    "kill_switch": False,
-    "demo_armed": True,
-    "live_armed": False,
+    "execution_mode": _exec_mode_env,
+    "kill_switch": os.getenv("ATE_KILL_SWITCH", "false").lower() == "true",
+    "demo_armed": os.getenv("ATE_DEMO_ARMED", "true").lower() == "true",
+    "live_armed": os.getenv("ATE_LIVE_ARMED", "false").lower() == "true",
     "ai_auto_loop": False,  # Start disabled until user enables
     "trading_method": "SMC",
-    "symbol": "XAUUSD",
+    "symbol": os.getenv("ATE_EXECUTION_SYMBOL", "XAUUSD"),
     "timeframe": "M15",
-    "risk_per_trade_fraction": 0.01,
-    "max_open_positions": 5,
-    "max_spread": 4.5,
-    "symbols": ["XAUUSD"],  # Active symbols for multi-symbol support
+    "risk_per_trade_fraction": float(os.getenv("ATE_RISK_PERCENT", "1")) / 100.0,
+    "max_open_positions": int(os.getenv("ATE_MAX_POSITIONS", "5")),
+    "max_spread": float(os.getenv("ATE_MAX_SPREAD", "4.5")),
+    "magic": int(os.getenv("ATE_EXECUTION_MAGIC", "888999")),
+    "symbols": [os.getenv("ATE_EXECUTION_SYMBOL", "XAUUSD")],
 }
 
 # ─── SYMBOL MAP ───────────────────────────────────────────────────────────────
@@ -90,11 +119,32 @@ SYMBOL_MAP = {
     "GBPUSD": "GBPUSDm",
 }
 
+# Các prefix symbol chuẩn để canonical hóa. BUG FIX: broker thật (ICMarkets) dùng
+# symbol có suffix như XAUUSDc — cache key từ EA push (XAUUSDc_M15) không bao giờ
+# khớp key fetch (XAUUSDm_M15) nên data_status rơi về STUB dù EA đang gửi nến thật.
+_CANONICAL_SYMBOLS = {
+    "XAUUSD": "XAUUSDm",
+    "GOLD": "XAUUSDm",
+    "EURUSD": "EURUSDm",
+    "GBPUSD": "GBPUSDm",
+}
+
 def resolve_symbol(sym: str) -> str:
-    return SYMBOL_MAP.get(sym.upper(), sym)
+    """Canonical hóa symbol: XAUUSD, XAUUSDm, XAUUSDc, XAUUSD.a, GOLD... -> XAUUSDm
+    để cache nến/claim từ EA (symbol chart thật có suffix broker) khớp với fetch."""
+    s = sym.upper()
+    if s in SYMBOL_MAP:
+        return SYMBOL_MAP[s]
+    for base, canonical in _CANONICAL_SYMBOLS.items():
+        if s.startswith(base):
+            return canonical
+    return s
 
 # ─── APP CREATION ─────────────────────────────────────────────────────────────
-app = FastAPI(title=APP_NAME, version=VERSION, description="ATE - Autonomous Trading Engine")
+app = FastAPI(
+    title=APP_NAME, version=VERSION, description="ATE - Autonomous Trading Engine",
+    default_response_class=SafeJSONResponse,
+)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # ─── LOGGING ─────────────────────────────────────────────────────────────────
@@ -230,10 +280,50 @@ async def fetch_real_candles(symbol: str, tf: str, count: int = 1000) -> Optiona
         _add_log("DEBUG", "DATA_SRC", f"EA-push candles (partial) {symbol} {tf} ({len(cached)}/{count})")
         return cached.tail(count).reset_index(drop=True)
 
+    # BUG FIX: EA push nến theo TF của chart (thường M1). Nếu TF yêu cầu (M15/H1)
+    # không có trong cache, RESAMPLE nến M1 thật từ EA lên TF đó — vẫn là dữ liệu
+    # THẬT từ MT5 (không phải stub). Trước đây miss TF -> rơi vào stub => toàn bộ
+    # dashboard hiện STUB dù EA đang đẩy nến thật về mỗi 30s.
+    base_src = _resample_from_cache(symbol, tf, count)
+    if base_src is not None:
+        _bridge_data_real = True
+        _add_log("DEBUG", "DATA_SRC", f"EA-push resampled {symbol} {tf} from {base_src}")
+        return base_src
+
     # Fallback: chỉ dùng stub khi KHÔNG có nguồn thật nào, và đánh dấu STUB
     _bridge_data_real = False
     _add_log("WARN", "DATA_STUB", f"No real MT5 data for {symbol} {tf} -> STUB (bridge down / EA not connected)")
     return generate_stub_candles(count, tf, symbol)
+
+def _resample_from_cache(symbol: str, tf: str, count: int) -> Optional[pd.DataFrame]:
+    """Resample nến M1 thật (EA push) lên TF bất kỳ. Trả None nếu không có nguồn.
+    Dùng OHLC chuẩn: open=first, high=max, low=min, close=last, volume=sum."""
+    if tf in ("M1", "MN1"):
+        return None  # M1 không cần resample; MN1 quá xa, bỏ qua
+    base_df = _cached_candles(symbol, "M1")
+    if base_df is None or base_df.empty or "timestamp" not in base_df.columns:
+        return None
+    try:
+        df = base_df.copy()
+        df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+        df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+        if df.empty:
+            return None
+        freq = {"M5": "5min", "M15": "15min", "M30": "30min", "H1": "1h", "H4": "4h", "D1": "1D"}.get(tf)
+        if not freq:
+            return None
+        df = df.set_index("timestamp")
+        agg = df.resample(freq, label="left", closed="left").agg(
+            {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+        ).dropna(subset=["open"])
+        agg = agg.reset_index()
+        # pyrefly: ignore [missing-attribute]
+        agg["timestamp"] = agg["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
+        return agg.tail(count).reset_index(drop=True)
+    except Exception as e:
+        _add_log("WARN", "RESAMPLE_FAIL", f"resample {tf} failed: {e}")
+        return None
+
 
 def generate_stub_candles(count: int, tf: str, symbol: str) -> pd.DataFrame:
     """Generate realistic stub candle data when MT5 is unavailable.
@@ -364,6 +454,20 @@ async def fetch_real_bid_ask(symbol: str) -> tuple[float, float]:
     return price, price + spread
 
 # ─── INDICATORS & ANALYSIS ────────────────────────────────────────────────────
+def _series_last(series, default):
+    """Lấy giá trị cuối của series, NaN/Inf -> default. BUG FIX: khi nến ít hơn
+    window indicator (vd EMA200 cần 200 nến nhưng resample M1->M15 chỉ có 20),
+    iloc[-1] = NaN -> JSON serialize fail 500 ("Out of range float")."""
+    if series is None or len(series) == 0:
+        return default
+    try:
+        v = series.ffill().iloc[-1]
+        f = float(v)
+        return f if math.isfinite(f) else default
+    except Exception:
+        return default
+
+
 def calculate_indicators(df: pd.DataFrame) -> Dict[str, Any]:
     """Calculate technical indicators from candles"""
     if df.empty:
@@ -402,19 +506,19 @@ def calculate_indicators(df: pd.DataFrame) -> Dict[str, Any]:
     stoch_str = "OVERBOUGHT" if stoch_k.iloc[-1] > 80 else "OVERSOLD" if stoch_k.iloc[-1] < 20 else "NEUTRAL"
 
     return {
-        "ema_fast": float(ema_fast.iloc[-1]) if len(ema_fast) > 0 else 0,
-        "ema_medium": float(ema_medium.iloc[-1]) if len(ema_medium) > 0 else 0,
-        "ema_slow": float(ema_slow.iloc[-1]) if len(ema_slow) > 0 else 0,
-        "ema200": float(ema200.iloc[-1]) if len(ema200) > 0 else 0,
-        "rsi": float(rsi.iloc[-1]) if len(rsi) > 0 else 50,
-        "atr": float(atr.iloc[-1]) if len(atr) > 0 else 15,
+        "ema_fast": _series_last(ema_fast, 0),
+        "ema_medium": _series_last(ema_medium, 0),
+        "ema_slow": _series_last(ema_slow, 0),
+        "ema200": _series_last(ema200, 0),
+        "rsi": _series_last(rsi, 50),
+        "atr": _series_last(atr, 15),
         "macd": macd_str,
-        "macd_value": float(macd_hist.iloc[-1]) if len(macd_hist) > 0 else 0,
-        "macd_signal": float(signal_line.iloc[-1]) if len(signal_line) > 0 else 0,
+        "macd_value": _series_last(macd_hist, 0),
+        "macd_signal": _series_last(signal_line, 0),
         "stoch": stoch_str,
-        "stoch_k": float(stoch_k.iloc[-1]) if len(stoch_k) > 0 else 50,
-        "stoch_d": float(stoch_d.iloc[-1]) if len(stoch_d) > 0 else 50,
-        "volume": float(df["volume"].iloc[-1]) if "volume" in df.columns and len(df) > 0 else 1000,
+        "stoch_k": _series_last(stoch_k, 50),
+        "stoch_d": _series_last(stoch_d, 50),
+        "volume": _series_last(df["volume"], 1000) if "volume" in df.columns else 1000,
     }
 
 def detect_fvg(df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -864,6 +968,21 @@ def _is_demo_mode() -> bool:
     Chế độ LIVE: fail-closed — KHÔNG bao giờ giả lập, mọi lệnh phải đi qua EA thật."""
     # pyrefly: ignore [unnecessary-type-conversion]
     return str(_config.get("execution_mode", "DEMO")).upper() != "LIVE"
+
+
+def _ea_fresh() -> bool:
+    """EA còn sống? = telemetry gần nhất < 60s (EA gửi mỗi 5s).
+    BUG FIX: trước đây ea_connected là cờ dính — set True mãi mãi sau lần đầu,
+    dashboard báo EA ONLINE dù EA đã bị gỡ khỏi chart/MT5 đóng."""
+    t = _account.get("last_ea_telemetry_at")
+    if not t:
+        return False
+    try:
+        # pyrefly: ignore [missing-attribute]
+        ts = datetime.fromisoformat(t.replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - ts).total_seconds() < 60
+    except Exception:
+        return False
 
 
 def _record_closed_trade(sym: str, pos: Dict[str, Any], price_close: float, reason: str = "CLOSE") -> Dict[str, Any]:
@@ -1320,6 +1439,12 @@ async def get_status(symbol: str = Query("XAUUSD")):
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "server": APP_NAME,
         "mt5_connected": _account["mt5_connected"],
+        "ea_connected": _ea_fresh(),
+        "last_ea_telemetry_at": _account.get("last_ea_telemetry_at"),
+        "last_ea_candles_at": _account.get("last_ea_candles_at"),
+        "last_ea_claim_at": _account.get("last_ea_claim_at"),
+        "ea_executor_id": _account.get("ea_executor_id"),
+        "ea_symbol": _account.get("ea_symbol"),
         "balance": _account["balance"],
         "equity": _account["equity"],
         "margin": _account["margin"],
@@ -1650,9 +1775,16 @@ async def get_control_center_status():
         },
         "account": {
             "mt5_connected": _account["mt5_connected"],
+            "ea_connected": _ea_fresh(),
             "login": _account["login"],
             "balance": _account["balance"],
-            "equity": _account["equity"]
+            "equity": _account["equity"],
+            "last_ea_telemetry_at": _account.get("last_ea_telemetry_at"),
+            "last_ea_candles_at": _account.get("last_ea_candles_at"),
+            "last_ea_claim_at": _account.get("last_ea_claim_at"),
+            "ea_executor_id": _account.get("ea_executor_id"),
+            "ea_symbol": _account.get("ea_symbol"),
+            "data_status": "LIVE" if _bridge_data_real else "STUB"
         },
         "bridge": {
             "mt5_connected": _account["mt5_connected"],
@@ -1663,6 +1795,84 @@ async def get_control_center_status():
             "max_open_positions": _config.get("max_open_positions", 5)
         }
     }
+
+@app.get("/api/control-center/mt5-diagnostics")
+async def mt5_diagnostics(request: Request):
+    """Chẩn đoán kết nối MT5 — trả checklist hành động để người dùng biết
+    CHÍNH XÁC lỗi đang ở đâu (backend/bridge/EA URL/allowlist/firewall)."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    try:
+        import socket
+        lan_ip = socket.gethostbyname(socket.gethostname())
+    except Exception:
+        lan_ip = "<IP LAN của máy>"
+
+    bridge_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            r = await client.get(f"{BRIDGE_URL}/health")
+            bridge_ok = r.status_code == 200
+    except Exception:
+        pass
+
+    ea_connected = _ea_fresh()
+    checklist = [
+        {
+            "id": "backend", "ok": True,
+            "title": "Backend đang chạy (cổng 8005)",
+            "detail": "Server này đang phục vụ request — OK."
+        },
+        {
+            "id": "ea_url", "ok": ea_connected,
+            "title": "EA gửi telemetry về server",
+            "detail": (f"Lần cuối: {_account.get('last_ea_telemetry_at', 'CHƯA BAO GIỜ')}. "
+                       f"EA URL cấu hình (InpApiUrl) phải là http://{lan_ip}:8005/api/v1/ — "
+                       "KHÔNG dùng localhost/127.0.0.1 (MT5 chặn). Nếu EA đang dùng "
+                       "https://autonomous-trading-engine.vercel.app/api/v1/ thì Vercel "
+                       "đang 404 (kiểm tra web/vercel.json đã deploy chưa).")
+        },
+        {
+            "id": "allowlist", "ok": None,  # thông tin hướng dẫn — không kiểm tra được tự động
+            "title": "MT5 WebRequest allowlist",
+            "detail": f"Trong MT5: Công cụ → Tùy chọn → Trình điều tra → Allow WebRequest, "
+                       f"thêm http://{lan_ip} (và http://{lan_ip}:8005). Xem log EA: "
+                       "CANDLES_PUSH_OK / TELEMETRY_OK / CLAIM_RESULT."
+        },
+        {
+            "id": "firewall", "ok": None,
+            "title": "Windows Firewall cho phép cổng 8005 inbound",
+            "detail": "Cổng 8005 TCP phải mở nếu EA ở máy khác; EA cùng máy vẫn cần backend chạy."
+        },
+        {
+            "id": "token", "ok": None,
+            "title": "Token khớp nhau",
+            "detail": "InpBridgeToken trong EA = QUANTAI_BRIDGE_TOKEN trong backend (mặc định 20022007@Tu)."
+        },
+        {
+            "id": "bridge", "ok": bridge_ok,
+            "title": "python-bridge (cổng 8007) chạy native trên Windows",
+            "detail": (f"BRIDGE_URL={BRIDGE_URL} → reachable={bridge_ok}. Bridge cần MetaTrader5 "
+                       "python + terminal64.exe để phục vụ nến đa khung giờ; nếu tắt, EA vẫn là "
+                       "nguồn nến chính (chart đang xem).")
+        },
+    ]
+    return {
+        "status": "OK",
+        "lan_ip": lan_ip,
+        "ea_url_hint": f"http://{lan_ip}:8005/api/v1/",
+        "bridge_url": BRIDGE_URL,
+        "bridge_reachable": bridge_ok,
+        "ea_connected": ea_connected,
+        "last_ea_telemetry_at": _account.get("last_ea_telemetry_at"),
+        "last_ea_candles_at": _account.get("last_ea_candles_at"),
+        "last_ea_claim_at": _account.get("last_ea_claim_at"),
+        "data_status": "LIVE" if _bridge_data_real else "STUB",
+        "execution_mode": _config.get("execution_mode", "DEMO"),
+        "checklist": checklist
+    }
+
 
 @app.get("/api/control-center/ai-config")
 async def get_ai_config():
@@ -1678,15 +1888,77 @@ async def get_ai_config():
         ]
     }
 
-# ─── MT5 LOGIN ───────────────────────────────────────────────────────────────
+# ─── MT5 LOGIN (THẬT qua mt5_auto) ─────────────────────────────────────────
 @app.post("/api/control-center/login-mt5")
 async def login_mt5(req: MT5LoginRequest):
-    """Login to MT5 account"""
-    _account["mt5_connected"] = True
-    _account["login"] = req.login
-    _account["server"] = req.server
-    _add_log("INFO", "MT5_LOGIN", f"MT5 logged in: {req.login}@{req.server}")
-    return {"status": "SUCCESS", "message": f"Logged in to MT5 account {req.login}"}
+    """Đăng nhập MT5 THẬT: launch terminal64 -> login -> copy EA -> mở chart ->
+    attach EA -> bật Algo Trading (dùng mt5_auto.deploy_expert_to_chart).
+    BUG FIX: trước đây chỉ set _account['mt5_connected']=True ẢO — web báo
+    "connected" nhưng MT5 thật không có gì, auto-trade không chạy. Giờ trả về
+    báo cáo từng bước để web hiển thị lỗi chính xác."""
+    import mt5_auto  # lazy import: MetaTrader5/pywinauto đều có guard riêng
+    symbol = _config.get("symbol", "XAUUSD")
+    tf = _config.get("timeframe", "M15")
+
+    def _run():
+        try:
+            return mt5_auto.deploy_expert_to_chart(
+                login=str(req.login), password=req.password, server=req.server,
+                symbol=symbol, timeframe=tf)
+        except Exception as exc:  # pragma: no cover
+            return {"ok": False, "steps": [], "error": str(exc)}
+
+    # Chạy trong thread riêng để không block event loop (deploy có UI automation
+    # + mt5.initialize có thể chờ login). Hard timeout 60s để request không treo.
+    try:
+        report = await asyncio.wait_for(asyncio.to_thread(_run), timeout=60)
+    except asyncio.TimeoutError:
+        _add_log("WARNING", "MT5_LOGIN_TIMEOUT", f"MT5 login timed out (>60s) for {req.login}")
+        return {"status": "ERROR",
+                "message": "Đăng nhập MT5 quá lâu (>60s). Kiểm tra tài khoản/password/server, "
+                            "hoặc MT5 đang hiện cửa sổ login cần xử lý thủ công.",
+                "steps": [{"name": "connect_login", "ok": False,
+                           "message": "timeout > 60s — MT5 terminal có thể đang chờ login thủ công"}]}
+    acc = report.get("account") or {}
+    steps = report.get("steps") or []
+
+    if report.get("ok") and acc:
+        # Chỉ đánh dấu connected khi python THẬT nối được terminal + có account
+        _account["mt5_connected"] = True
+        # pyrefly: ignore [missing-attribute]
+        _account["login"] = acc.get("login") or req.login
+        # pyrefly: ignore [missing-attribute]
+        # pyrefly: ignore [missing-attribute]
+        _account["server"] = acc.get("server") or req.server
+        # pyrefly: ignore [missing-attribute]
+        if acc.get("balance") is not None:
+            # pyrefly: ignore [bad-index, unsupported-operation]
+            _account["balance"] = float(acc["balance"])
+        # pyrefly: ignore [missing-attribute]
+        if acc.get("equity") is not None:
+            # pyrefly: ignore [bad-index, unsupported-operation]
+            _account["equity"] = float(acc["equity"])
+        _add_log("INFO", "MT5_LOGIN", f"MT5 connected (python): {_account['login']}@{_account['server']}")
+        # pyrefly: ignore [bad-argument-type]
+        _add_ai_event("INFO", "MT5_LOGIN", symbol, {"login": _account["login"], "steps": len(steps)})
+        # ea_attached: attach EA có thể fail (pywinauto thiếu / MT5 chạy admin) —
+        # báo rõ để user biết auto-trade chưa sẵn sàng dù python đã nối được MT5
+        attach = report.get("attach") or {}
+        return {"status": "SUCCESS",
+                # pyrefly: ignore [missing-attribute]
+                "message": f"MT5 connected: {acc.get('login')} @ {acc.get('server')}",
+                "account": acc, "steps": steps,
+                # pyrefly: ignore [missing-attribute]
+                "ea_attached": bool(attach.get("ok")),
+                # pyrefly: ignore [missing-attribute]
+                "attach_message": attach.get("message", "")}
+
+    # Thất bại: KHÔNG fake connected; trả báo cáo chi tiết để web chỉ ra lỗi
+    _add_log("WARNING", "MT5_LOGIN_FAIL", f"MT5 login failed for {req.login}@{req.server}: {steps}")
+    return {"status": "ERROR",
+            "message": "Không kết nối được MT5. Xem chi tiết từng bước bên dưới.",
+            "steps": steps,
+            "error": report.get("error", "")}
 
 # ─── BRAIN / AI DECISIONS ────────────────────────────────────────────────────
 @app.get("/api/brain")
@@ -1891,6 +2163,9 @@ async def bridge_claim(req: ClaimRequest, request: Request):
         cmd["claimed_at"] = datetime.now(timezone.utc).isoformat()
         cmd["executor_id"] = req.executor_id
         claimed.append(cmd)
+        _account["last_ea_claim_at"] = datetime.now(timezone.utc).isoformat()
+        # pyrefly: ignore [bad-assignment]
+        _account["ea_executor_id"] = req.executor_id or _account.get("ea_executor_id")
         _add_log("INFO", "CMD_CLAIMED", f"Command {cmd['command_id']} claimed by {req.executor_id}")
     
     resp = {
@@ -2019,6 +2294,10 @@ class TelemetryRequest(BaseModel):
     ai_loop_enabled: Optional[bool] = False
     timestamp: Optional[str] = None
 
+# BUG FIX: EA gọi POST /api/v1/telemetry (thiếu /bridge) — trước đây server chỉ có
+# /api/v1/bridge/telemetry nên telemetry EA luôn 404 => MT5 Connected NO.
+# Thêm alias route để cả 2 đường đều chạy, KHÔNG cần recompile EA.
+@app.post("/api/v1/telemetry")
 @app.post("/api/v1/bridge/telemetry")
 async def bridge_telemetry(req: TelemetryRequest, request: Request):
     """EA gửi heartbeat telemetry."""
@@ -2062,6 +2341,15 @@ async def bridge_telemetry(req: TelemetryRequest, request: Request):
             "ts": datetime.now(timezone.utc).isoformat(),
             "source": "EA"
         }
+
+    # BUG FIX: theo dõi lần liên hệ gần nhất của EA để dashboard hiển thị rõ
+    # trạng thái (trước đây chỉ có mt5_connected bật/tắt, không biết EA còn sống).
+    _account["ea_connected"] = True
+    _account["last_ea_telemetry_at"] = datetime.now(timezone.utc).isoformat()
+    # pyrefly: ignore [bad-assignment]
+    _account["ea_executor_id"] = req.executor_id or _account.get("ea_executor_id")
+    # pyrefly: ignore [bad-assignment]
+    _account["ea_symbol"] = req.symbol or _account.get("ea_symbol")
     
     _add_log("DEBUG", "EA_TELEMETRY", f"EA {req.executor_id or 'unknown'} on {req.symbol} login={login_id} balance={_account['balance']} equity={_account['equity']} bid={req.bid} ask={req.ask}")
     
@@ -2140,13 +2428,19 @@ async def bridge_candles(req: CandlePushRequest, request: Request):
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
     
-    cache_key = f"{req.symbol}_{req.timeframe}"
+    # BUG FIX: canonical hóa symbol (XAUUSDc -> XAUUSDm) để cache key khớp với
+    # _cached_candles/fetch_real_candles. Trước đây lưu raw "XAUUSDc_M1" nhưng
+    # fetch đọc "XAUUSDm_M1" -> miss -> dashboard rơi về STUB dù EA đang đẩy nến.
+    cache_key = f"{resolve_symbol(req.symbol)}_{req.timeframe}"
     _market_cache[cache_key] = _market_cache.get(cache_key, {})
     _market_cache[cache_key]["candles"] = req.candles
     _market_cache[cache_key]["candles_updated"] = datetime.now(timezone.utc).isoformat()
     _market_cache[cache_key]["source"] = "EA"
     if req.candles:
         _bridge_data_real = True
+    _account["last_ea_candles_at"] = datetime.now(timezone.utc).isoformat()
+    # pyrefly: ignore [bad-assignment]
+    _account["ea_symbol"] = req.symbol or _account.get("ea_symbol")
     
     return {"status": "OK", "candles_received": len(req.candles)}
 
@@ -2201,6 +2495,9 @@ async def bridge_account_sync(req: AccountSyncRequest, request: Request):
     return {"status": "OK"}
 
 
+# BUG FIX: EA gọi GET /api/economic-calendar/protection (không có /api/v1) nhưng
+# server chỉ có /api/v1/economic-calendar/protection -> 404. Alias cả 2 đường.
+@app.get("/api/economic-calendar/protection")
 @app.get("/api/v1/economic-calendar/protection")
 async def economic_calendar_protection(request: Request):
     """EA lấy trạng thái news protection."""
@@ -2340,7 +2637,8 @@ async def get_settings(request: Request):
     return {
         "status": "SUCCESS",
         "runtime_config": _config,
-        "account": _account,
+        "account": {**_account, "ea_connected": _ea_fresh(),
+                    "data_status": "LIVE" if _bridge_data_real else "STUB"},
         "available_models": [
             {"id": "deepseek-v4-flash-free", "name": "DeepSeek V4 Flash (Free)", "provider": "OpenCode Zen"},
             {"id": "gpt-4o", "name": "GPT-4o", "provider": "OpenAI"},

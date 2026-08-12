@@ -70,13 +70,29 @@
 
 ## Triển khai 3 môi trường
 
-### 1. Local dev (máy Windows cài MT5)
+### 1. Local dev (máy Windows cài MT5) — ⚠️ BẮT BUỘC đọc kỹ
 ```bash
 cd dashboard && pip install -r requirements.txt && python server.py      # :8005
 cd web && npm install && npm run dev                                       # :3000
-# EA trong MT5: đổi InpApiUrl = http://localhost:8005/api/v1/  + allowlist
-# (nến/bid-ask thật từ EA; bridge :8007 chạy native nếu cần đa khung giờ)
+# Mở http://localhost:3000, đăng nhập, vào Control Center
 ```
+**EA trong MT5 — QUAN TRỌNG (MT5 WebRequest CHẶN localhost/127.0.0.1):**
+1. Trong MetaEditor: đổi `InpApiUrl = http://192.168.1.12:8005/api/v1/`
+   (thay `192.168.1.12` bằng IP LAN của máy — xem `ipconfig`; cũng có trong
+   Control Center → MT5 Diagnostics). **KHÔNG dùng `http://localhost:8005`**.
+2. MT5 allowlist: `Công cụ → Tùy chọn → Trình điều tra` → bật `Allow WebRequest`
+   → thêm `http://192.168.1.12` (IP LAN) vào danh sách.
+3. Windows Firewall: cho phép cổng **8005 TCP** inbound (nếu cần).
+4. Attach EA vào chart XAUUSD, bật **Algo Trading** (nút ON).
+5. Kiểm tra MT5 Experts log có `TELEMETRY_OK` / `CANDLES_PUSH_OK` — khi đó web
+   hiện MT5 CONNECTED + balance/equity thật.
+
+> Mẹo: dùng nút **Connect** trong Control Center (đăng nhập MT5) — server tự
+> launch terminal, login, copy EA, mở chart XAUUSD M15, attach EA và bật Algo
+> Trading, trả báo cáo từng bước. Nếu EA ở máy khác, dùng `http://<IP-LAN>:8005/api/v1/`
+> + mở firewall 8005.
+> Nếu muốn qua internet (Vercel): phải deploy `web/vercel.json` với rewrite về
+> `http://<VNPT_PUBLIC_IP>:8848` VÀ home server chạy nginx + backend (mục 3).
 
 ### 2. Docker (home server / máy nhà)
 ```bash
@@ -93,6 +109,19 @@ docker compose up -d --build        # backend :8005, frontend :3000, redis
 4. EA trong MT5: giữ `InpApiUrl = https://autonomous-trading-engine.vercel.app/api/v1/`,
    thêm domain vào **MT5 WebRequest allowlist** (`Công cụ → Tùy chọn → Trình điều tra`).
 5. Bật `ATE_EXECUTION_MODE=LIVE` + `live_armed=true` khi sẵn sàng trade thật.
+
+> ⚠️ **QUAN TRỌNG — env trên Vercel Dashboard (Project → Settings → Environment
+> Variables) GHI ĐÈ lên env trong `web/vercel.json`.** 4 biến phải đúng:
+>
+> | Biến | Giá trị ĐÚNG | Giá trị SAI (gây hỏng) |
+> |------|-------------|------------------------|
+> | `ATE_BACKEND_URL` | `http://113.173.192.226:8848` | `https://...vercel.app/backend` (tự tham chiếu → loop) |
+> | `ATE_MT5_API` | `http://113.173.192.226:8848/api/v1` | `https://...vercel.app/api/v1` (rewrite loop) |
+> | `ATE_DASHBOARD_PORT` | `8005` | `8848` (server.py bind đè nginx) |
+> | `ATE_DASHBOARD_HOST` | `0.0.0.0` | `http://127.0.0.1/` (sai format) |
+>
+> `NEXT_PUBLIC_ATE_API_ORIGIN` không được code đọc — có thể xóa khỏi Dashboard
+> để tránh nhầm lẫn.
 
 ## Troubleshooting
 

@@ -17,7 +17,21 @@ export interface PendingOrder { ticket: number; symbol: string; type: string; pr
 export interface LogEntry { ts?: string; level: string; event?: string; component?: string; message: string; }
 export interface ChatMsg { role: 'ai' | 'user'; text: string; time: string; }
 export interface TechnicalIndicators { rsi: number; atr: number; macd: string; stoch: string; ema20: number; ema50: number; ema200: number; volume: number; }
-export interface ControlCenterStatus { generated_at: string; execution: { mode: string; browser_execution_enabled: boolean; symbol: string; }; safeguards: { kill_switch_active: boolean; demo_armed: boolean; ai_auto_loop?: boolean; trading_method?: string; }; account: { mt5_connected: boolean; login?: number; balance?: number; equity?: number; }; bridge: { mt5_connected: boolean; status: string; }; risk: { risk_per_trade_fraction: number; max_open_positions: number; }; }
+export interface ControlCenterStatus { generated_at: string; execution: { mode: string; browser_execution_enabled: boolean; symbol: string; }; safeguards: { kill_switch_active: boolean; demo_armed: boolean; ai_auto_loop?: boolean; trading_method?: string; }; account: { mt5_connected: boolean; ea_connected?: boolean; login?: number; balance?: number; equity?: number; last_ea_telemetry_at?: string | null; last_ea_candles_at?: string | null; last_ea_claim_at?: string | null; ea_executor_id?: string; ea_symbol?: string; data_status?: 'LIVE' | 'STUB'; }; bridge: { mt5_connected: boolean; status: string; }; risk: { risk_per_trade_fraction: number; max_open_positions: number; }; }
+export interface MT5Diagnostics {
+  status: string;
+  lan_ip: string;
+  ea_url_hint: string;
+  bridge_url: string;
+  bridge_reachable: boolean;
+  ea_connected: boolean;
+  last_ea_telemetry_at?: string | null;
+  last_ea_candles_at?: string | null;
+  last_ea_claim_at?: string | null;
+  data_status: 'LIVE' | 'STUB';
+  execution_mode: string;
+  checklist: Array<{ id: string; ok: boolean; title: string; detail: string }>;
+}
 export interface BrainState { strategies: Array<{ strategy_version: string; status: string; wins: number; losses: number; win_rate: number | null; total_pnl: number; }>; recent_decisions: Array<{ decision_id: string; ts: string; action: string; confidence: number; entry: number | null; stop_loss: number | null; take_profit: number | null; volume: number | null; reason_codes: string[]; status: string; order_ticket: number | null; }>; recent_evaluations: Array<{ decision_id: string; order_ticket: number; closed_at: string; exit_price: number; net_profit: number; r_multiple: number; outcome: string; exit_reason: string; }>; }
 export interface BrainAdjustment { adjustment_id: string; decision_id: string; strategy_version: string; kind: string; params: Record<string, unknown>; reason: string; status: string; created_at: string; applied_at: string | null; }
 export interface MarkupItem {
@@ -123,7 +137,11 @@ export async function updateAiAutoLoop(enabled: boolean) { return postJson<{ sta
 export async function updateTradingMethod(method: string) { return postJson<{ status: string; trading_method: string }>(`${API_BASE}/api/control-center/trading-method`, { trading_method: method }); }
 
 export async function loginMT5Account(login: number, password: string, server: string) {
-  return postJson<{ status: string; message?: string }>(`${API_BASE}/api/control-center/login-mt5`, { login, password, server });
+  return postJson<{ status: string; message?: string; steps?: Array<{ name: string; ok: boolean; message: string }> }>(`${API_BASE}/api/control-center/login-mt5`, { login, password, server });
+}
+
+export function fetchMT5Diagnostics() {
+  return getJson<MT5Diagnostics>(`${API_BASE}/api/control-center/mt5-diagnostics`);
 }
 
 export async function testAIConnection(payload: { key_type: string; model: string; api_key?: string }) {

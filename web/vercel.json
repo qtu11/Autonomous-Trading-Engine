@@ -7,17 +7,16 @@
       "source": "/api/v1/(.*)",
       "destination": "http://113.173.192.226:8848/api/v1/$1"
     }
-  ],
-  "env": {
-    "ATE_BACKEND_URL": "http://113.173.192.226:8848",
-    "ATE_FRONTEND_URL": "https://autonomous-trading-engine.vercel.app",
-    "ATE_MT5_API": "https://autonomous-trading-engine.vercel.app/api/v1",
-    "NEXT_PUBLIC_ATE_API_ORIGIN": "https://autonomous-trading-engine.vercel.app",
-    "ATE_BRIDGE_TOKEN": "20022007@Tu",
-    "ATE_EXECUTION_MODE": "LIVE",
-    "ATE_LIVE_ARMED": "true",
-    "ATE_DEMO_ARMED": "true",
-    "VERCEL": "1",
-    "VERCEL_ENV": "production"
-  }
+  ],    "env": {
+      "ATE_BACKEND_URL": "http://113.173.192.226:8848",
+      "ATE_FRONTEND_URL": "https://autonomous-trading-engine.vercel.app",
+      "ATE_MT5_API": "http://113.173.192.226:8848/api/v1",
+      "NEXT_PUBLIC_ATE_API_ORIGIN": "https://autonomous-trading-engine.vercel.app",
+      "ATE_BRIDGE_TOKEN": "20022007@Tu",
+      "ATE_EXECUTION_MODE": "LIVE",
+      "ATE_LIVE_ARMED": "true",
+      "ATE_DEMO_ARMED": "true",
+      "VERCEL": "1",
+      "VERCEL_ENV": "production"
+    }
 }

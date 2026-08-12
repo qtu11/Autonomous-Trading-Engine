@@ -26,9 +26,11 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       // MT5 EA sends to /api/v1/* — rewrite to backend server
+      // BUG FIX: EA gọi POST /api/v1/telemetry (thiếu /bridge); backend route là
+      // /api/v1/bridge/telemetry — trước đây destination sai => EA 404 => MT5 NO.
       {
         source: '/api/v1/telemetry',
-        destination: `${ATE_MT5_API}/telemetry`,
+        destination: `${ATE_MT5_API}/bridge/telemetry`,
       },
       {
         source: '/api/v1/bridge/commands/claim',

@@ -168,9 +168,22 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                 <Row label="Balance" value={`$${Number(acc.balance || 0).toFixed(2)}`} />
                 <Row label="Equity" value={`$${Number(acc.equity || 0).toFixed(2)}`} />
                 <Row label="MT5 Connected" value={acc.mt5_connected ? 'YES' : 'NO'} valueColor={acc.mt5_connected ? C.green : C.red} />
+                {/* BUG FIX: hiển thị trạng thái EA thật (telemetry) + nguồn dữ liệu */}
+                <Row label="EA Telemetry" value={acc.ea_connected ? 'ONLINE' : 'NO SIGNAL'} valueColor={acc.ea_connected ? C.green : C.red} />
+                <Row label="Data Status" value={(acc.data_status || 'STUB') === 'LIVE' ? 'LIVE (MT5)' : 'STUB (fake)'} valueColor={acc.data_status === 'LIVE' ? C.green : C.gold} />
+                <Row label="Last Telemetry" value={acc.last_ea_telemetry_at ? new Date(acc.last_ea_telemetry_at).toLocaleTimeString('en-US', { hour12: false }) : 'NEVER'} valueColor={acc.last_ea_telemetry_at ? C.dim : C.red} />
                 <Row label="Execution Mode" value={cfg.execution_mode || 'DEMO'} />
                 <Row label="Active Symbol" value={cfg.symbol || 'XAUUSD'} />
                 <Row label="Timeframe" value={cfg.timeframe || 'M15'} />
+                {!acc.ea_connected && (
+                  <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(244,63,94,0.06)', border: `1px solid rgba(244,63,94,0.25)`, borderRadius: 6, fontSize: 8, fontFamily: C.mono, color: C.dim, lineHeight: '15px' }}>
+                    ⚠ EA CHƯA GỬI TELEMETRY — MT5 không thể hiện trên web.
+                    <br />• Backend đang chạy? <b>python dashboard/server.py</b> (cổng 8005)
+                    <br />• EA (MetaEditor) — InpApiUrl = <b>http://{'<IP-LAN>'}:8005/api/v1/</b> (KHÔNG localhost — MT5 chặn)
+                    <br />• MT5: Tools → Options → Expert Advisors → Allow WebRequest → thêm <b>http://{'<IP-LAN>'}</b>
+                    <br />• Bật Algo Trading; log MT5 phải có <b>TELEMETRY_OK</b>
+                  </div>
+                )}
               </Card>
 
               {/* CONNECT MT5 credentials */}
