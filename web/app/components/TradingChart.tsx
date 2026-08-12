@@ -265,6 +265,9 @@ export default function TradingChart({
       'SNIPER_SIGNAL', 'SNIPER_SL', 'SNIPER_TP1', 'SNIPER_TP2', 'SNIPER_TP3', 'SNIPER_TP4', 'SNIPER_TP5', 'SNIPER_SCORE', 'SNIPER_DASH',
       'BSL', 'SSL', 'EQH', 'EQL', 'LIQUIDITY', 'SWING', 'BOS', 'CHoCH', 'MSS',
       'TREND', 'PULLBACK', 'RETEST', 'BREAKOUT', 'FAKE_BREAKOUT', 'PATTERN', 'CANDLE_PATTERN',
+      // Advanced + ICT objects that carry a single anchor price
+      'SR', 'KILLZONE', 'DEALING_RANGE', 'INDUCEMENT', 'TURTLE_SOUP',
+      'SMT_DIVERGENCE', 'SILVER_BULLET', 'EQUILIBRIUM', 'NYMO', 'AMD',
     ]);
 
     const markerTypes = new Set([
@@ -293,14 +296,17 @@ export default function TradingChart({
         case 'TREND': return isBullish ? C.green : C.red;
         case 'CANDLE_PATTERN': return isBullish ? C.greenBright : C.redBright;
         case 'ASIAN': case 'OTE': case 'PD': return C.amberBright;
+        case 'SR': case 'SUPPORT': case 'RESISTANCE': return C.amberBright;
+        case 'BREAKOUT': case 'PULLBACK': case 'RETEST': case 'FAKE_BREAKOUT': return C.cyan;
+        case 'PATTERN': case 'CHART_PATTERN': return C.cyan;
+        case 'TURTLE_SOUP': case 'SMT_DIVERGENCE': case 'SILVER_BULLET': return C.purple;
+        case 'INDUCEMENT': case 'DEALING_RANGE': case 'DEALING_CURVE': return C.amber;
         default: return isBullish ? C.green : C.red;
       }
-    };
-
-    // Render zone-type objects (OB, FVG, PD, etc.)
+    };        // Render zone-type objects (OB, FVG, PD, etc.)
     markupData.objects.forEach((m: any) => {
       try {
-        if (zoneTypes.has(m.type) && typeof m.top === 'number' && typeof m.bottom === 'number' && m.top !== m.bottom) {
+        if (zoneTypes.has(m.type) && typeof m.top === 'number' && typeof m.bottom === 'number' && m.top !== m.bottom && m.top > 0) {
           const color = getColor(m);
           const lo = Math.min(m.top, m.bottom);
           const hi = Math.max(m.top, m.bottom);
@@ -487,7 +493,7 @@ export default function TradingChart({
               color: confluence.signal === 'BUY' ? C.greenBright : confluence.signal === 'SELL' ? C.redBright : C.muted,
               fontWeight: 800
             }}>
-              {confluence.signal} | score {typeof confluence.score === 'number' ? Math.round(confluence.score * 100) : confluence.score}
+              {confluence.signal} | score {typeof confluence.score === 'number' ? Math.round(confluence.score) : confluence.score}
             </span>
           </div>
         )}

@@ -829,7 +829,9 @@ void FetchAndRenderChartMarkup()
       return;
 
    string headers = BridgeHeaders();
-   string payload = StringFormat("{\"executor_id\":\"%s\",\"symbol\":\"%s\",\"account_login\":%I64d,\"account_server\":\"%s\",\"broker_company\":\"%s\",\"trade_mode\":\"%s\"}", EscapeJson(InpExecutorId), EscapeJson(g_symbol), AccountInfoInteger(ACCOUNT_LOGIN), EscapeJson(AccountInfoString(ACCOUNT_SERVER)), EscapeJson(AccountInfoString(ACCOUNT_COMPANY)), AccountModeLabel());
+   // Send the EA's chart timeframe so the server analyzes the SAME timeframe
+   // the user is viewing (previously the server always fell back to M15).
+   string payload = StringFormat("{\"executor_id\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"%s\",\"account_login\":%I64d,\"account_server\":\"%s\",\"broker_company\":\"%s\",\"trade_mode\":\"%s\"}", EscapeJson(InpExecutorId), EscapeJson(g_symbol), TimeframeLabel(_Period), AccountInfoInteger(ACCOUNT_LOGIN), EscapeJson(AccountInfoString(ACCOUNT_SERVER)), EscapeJson(AccountInfoString(ACCOUNT_COMPANY)), AccountModeLabel());
    char data[];
    char result[];
    string result_headers;
@@ -955,12 +957,42 @@ void RenderMarkupObjects(string response)
       int objStart = StringFind(response, "\"type\":", pos);
       if(objStart < 0)
          break;
-      // Locate the object braces { ... } that enclose this "type" token.
-      int braceStart = StringFind(response, "{", objStart);
+      // Locate the JSON object braces that enclose this "type" token.
+      // FIX: the old code searched FORWARD for '{' from the token, which found
+      // the NEXT object's brace and made braceEnd < braceStart -> it broke on
+      // the very first object and never drew anything. We now walk BACKWARD
+      // from the token to its own '{', then count depth forward to the
+      // matching '}' (nested objects in "points" are handled by the depth).
+      int braceStart = -1;
+      for(int i = objStart - 1; i >= 0; i--)
+      {
+         if(StringGetCharacter(response, i) == '{')
+         {
+            braceStart = i;
+            break;
+         }
+      }
       if(braceStart < 0)
          break;
-      int braceEnd = StringFind(response, "}", objStart);
-      if(braceEnd < 0 || braceEnd < braceStart)
+      int braceEnd = -1;
+      int depth = 0;
+      int respLen = StringLen(response);
+      for(int i = braceStart; i < respLen; i++)
+      {
+         ushort ch = StringGetCharacter(response, i);
+         if(ch == '{')
+            depth++;
+         else if(ch == '}')
+         {
+            depth--;
+            if(depth == 0)
+            {
+               braceEnd = i;
+               break;
+            }
+         }
+      }
+      if(braceEnd < 0)
          break;
       string block = StringSubstr(response, braceStart, braceEnd - braceStart + 1);
 

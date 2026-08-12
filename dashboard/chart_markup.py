@@ -59,10 +59,37 @@ def _dt(ts: pd.Timestamp) -> str:
     return str(ts)
 
 
+def _time_col(df: pd.DataFrame) -> str:
+    return 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
+
+
+def _norm_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a candle frame: canonical `time` column (datetime) + volume
+    alias so every detector can rely on one naming convention. The MT5 bridge
+    returns `timestamp`, stub data uses `timestamp` too, and unit tests use
+    `time` — this unifies all three."""
+    df = df.copy()
+    tc = _time_col(df)
+    if tc not in df.columns:
+        return df  # no usable time column — leave as-is, detectors will skip it
+    if tc != "time":
+        df = df.rename(columns={tc: "time"})
+    df["time"] = pd.to_datetime(df["time"], errors="coerce")
+    df = df.dropna(subset=["time"])
+    if "volume" not in df.columns:
+        for alias in ("tick_volume", "real_volume"):
+            if alias in df.columns:
+                df["volume"] = df[alias]
+                break
+    return df
+
+
 # ── Trading-method → allowed markup object types ─────────────────────────────
-# The web/EA select a trading method (PRICE_ACTION / SMC / ICT / ULTRA_CONFLUENCE /
-# INDICATOR). The chart must ONLY render concepts belonging to the selected
-# method — this map decides which object types survive for each method.
+# NOTE: The authoritative per-method filter lives in method_overlays.
+# METHOD_OBJECT_GROUPS (kept in sync with the user's concept checklist). This
+# legacy map is retained for documentation/back-compat only and is no longer
+# applied during markup building (it disagreed with the overlay groups and
+# silently dropped valid objects like SUPPORT/RESISTANCE/CHANNEL for PA).
 METHOD_ALLOWED_TYPES: dict[str, set | None] = {
     "PRICE_ACTION": {
         "SWING", "TRENDLINE", "SR", "CHANNEL", "RANGE",
@@ -121,18 +148,19 @@ def build_chart_markup(
     mtf_data: dict[str, pd.DataFrame],
     broker_utc_offset_hours: float = 2.0,
     method: str = "ULTRA_CONFLUENCE",
+    primary_tf: str = "M15",
 ) -> dict[str, Any]:
     """Tính toàn bộ cấu trúc ICT/SMC/PA từ dữ liệu đa khung thời gian.
 
     Trả về dict chuẩn: {"symbol", "method", "generated_at", "objects": [...]}.
+    `primary_tf` chọn khung giờ dùng để phân tích cấu trúc (mặc định M15).
+    Nếu thiếu khung giờ yêu cầu, tự rơi vào khung giờ đầu tiên có dữ liệu —
+    nên markup hiển thị được trên MỌI timeframe, không chỉ M15.
     Chỉ dùng dữ liệu có sẵn; nếu thiếu khung giờ, bỏ qua nhóm tương ứng.
     """
     objects: list[dict[str, Any]] = []
     method_upper = method.upper()
 
-    allowed_types = METHOD_ALLOWED_TYPES.get(method_upper)
-    if allowed_types is None:
-        allowed_types = None  # ULTRA_CONFLUENCE / unknown → keep everything
     include_pa = include_smc = include_ict = True
     if method_upper == "PRICE_ACTION":
         include_pa, include_smc, include_ict = True, False, False
@@ -143,12 +171,21 @@ def build_chart_markup(
     elif method_upper == "INDICATOR":
         include_pa = include_smc = include_ict = False
 
-    m15 = mtf_data.get("M15")
+    # Normalize every provided frame once (canonical `time` column).
+    mtf_data = {k: _norm_df(v) for k, v in mtf_data.items() if v is not None and not v.empty}
+
+    # Pick the analysis frame: the requested primary TF, else any available one.
+    m15 = mtf_data.get(primary_tf)
     if m15 is None or m15.empty:
+        m15 = next((v for v in mtf_data.values() if not v.empty), None)
+    if m15 is None:
         return {"symbol": symbol, "method": method_upper, "generated_at": datetime.now(timezone.utc).isoformat(), "objects": []}
 
     m15 = m15.copy()
-    time_col = 'time' if 'time' in m15.columns else 'timestamp' if 'timestamp' in m15.columns else 'time'
+    # Cap the detection window so huge frames (e.g. 72k M1 bars) stay fast.
+    if len(m15) > 2000:
+        m15 = m15.tail(2000)
+    time_col = 'time'
     m15_candles = df_to_candles(m15)
     m15_swings = find_swing_points(m15, window=2)
     last_candle = m15_candles[-1]
@@ -218,8 +255,20 @@ def build_chart_markup(
             "bottom": 0.0,
         })
 
-    # 6. BOS / CHoCH (last confirmed event)
-    bos_choch = detect_bos_choch(m15_candles, m15_swings, len(m15_candles) - 1)
+    # 6. BOS / CHoCH / MSS (most recent confirmed event over the last few
+    # candles — previously it only checked the very last bar, so markers were
+    # almost never shown)
+    bos_choch = {}
+    for probe in range(len(m15_candles) - 1, max(-1, len(m15_candles) - 7), -1):
+        evt = detect_bos_choch(m15_candles, m15_swings, probe)
+        if evt:
+            # MSS = CHoCH followed by a 2nd close beyond the broken level
+            if evt["kind"] == "CHoCH" and probe - 1 >= 0:
+                if (evt["direction"] == "BULLISH" and m15_candles[probe - 1].close > evt["break_price"]) or \
+                   (evt["direction"] == "BEARISH" and m15_candles[probe - 1].close < evt["break_price"]):
+                    evt["kind"] = "MSS"
+            bos_choch = evt
+            break
     if bos_choch:
         objects.append({
             "type": bos_choch["kind"],
@@ -314,13 +363,9 @@ def build_chart_markup(
         include_pa=include_pa,
         include_smc=include_smc,
         include_ict=include_ict,
+        primary_tf=primary_tf,
     )
     objects.extend(advanced["objects"])
-
-    if allowed_types is not None:
-        objects = [obj for obj in objects if obj.get("type") in allowed_types]
-        for key in list(advanced["counts"].keys()):
-            advanced["counts"][key] = 0
 
     # 12. Per-method overlays — Sniper / SMC / ICT / Price Action. Each method
     # exposes its own object types; ULTRA_CONFLUENCE merges all four.

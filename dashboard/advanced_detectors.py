@@ -208,6 +208,7 @@ def detect_range_state(df: pd.DataFrame, lookback: int = 60) -> dict[str, Any]:
 
     if adx_now < 20.0 or bounded:
         last_pos = len(window) - 1
+        tc = 'time' if 'time' in window.columns else 'timestamp' if 'timestamp' in window.columns else 'time'
         return {
             "type": "RANGE",
             "direction": "NEUTRAL",
@@ -218,7 +219,7 @@ def detect_range_state(df: pd.DataFrame, lookback: int = 60) -> dict[str, Any]:
             "status": "ACTIVE",
             "adx": round(adx_now, 1),
             "index": int(window.index[last_pos]),
-            "time_start": str(window.index[0] if "time" not in window.columns else window["time"].iloc[0]),
+            "time_start": str(window[tc].iloc[0]),
         }
     return {"type": "RANGE", "direction": "NEUTRAL", "top": 0.0, "bottom": 0.0, "status": "TRENDING"}
 
@@ -438,14 +439,19 @@ def detect_mss(
     prior_high, recent_high = highs_before[-2], highs_before[-1]
     prior_low, recent_low = lows_before[-2], lows_before[-1]
 
-    # CHoCH bearish: HH + HL (uptrend) breaks recent low; MSS = 2 closes beyond
-    if prior_high > recent_high and prior_low < recent_low and current.close < recent_low:
-        if candles[current_index - 1].close < recent_low:
-            return {"kind": "MSS", "direction": "BEARISH", "break_price": recent_low, "index": current_index}
-    # CHoCH bullish: LH + LL (downtrend) breaks recent high; MSS = 2 closes beyond
-    if prior_high > recent_high and prior_low > recent_low and current.close > recent_high:
-        if candles[current_index - 1].close > recent_high:
-            return {"kind": "MSS", "direction": "BULLISH", "break_price": recent_high, "index": current_index}
+    # MSS logic fix: the structure context was inverted before.
+    #   was_uptrend   = HH + HL   (prior < recent for both)
+    #   was_downtrend = LH + LL   (prior > recent for both)
+    # Bearish MSS: UPTREND breaks the recent swing LOW and confirms with a 2nd
+    # close below it (this is a true Change of Character, not a continuation).
+    was_uptrend = prior_high < recent_high and prior_low < recent_low
+    was_downtrend = prior_high > recent_high and prior_low > recent_low
+    if was_uptrend and current.close < recent_low and candles[current_index - 1].close < recent_low:
+        return {"kind": "MSS", "direction": "BEARISH", "break_price": recent_low, "index": current_index}
+    # Bullish MSS: DOWNTREND breaks the recent swing HIGH and confirms with a 2nd
+    # close above it.
+    if was_downtrend and current.close > recent_high and candles[current_index - 1].close > recent_high:
+        return {"kind": "MSS", "direction": "BULLISH", "break_price": recent_high, "index": current_index}
     return {}
 
 
@@ -1046,15 +1052,35 @@ def build_advanced_markup(
     include_pa: bool = True,
     include_smc: bool = True,
     include_ict: bool = True,
+    primary_tf: str = "M15",
 ) -> dict[str, list[dict[str, Any]]]:
     """Run every advanced detector and return {"objects": [...]} additions.
 
     Only appends objects NOT already produced by dashboard/chart_markup.py
     (SWING, OB, FVG, BREAKER, MITIGATION, REJECTION, LIQUIDITY, BOS, CHoCH,
     TRENDLINE, PD, OTE, ASIAN, KILLZONE live in the base builder).
+
+    `primary_tf` chọn khung giờ phân tích cấu trúc (mặc định M15); nếu thiếu,
+    rơi vào khung giờ đầu tiên có dữ liệu. Mọi frame được chuẩn hoá về cột
+    `time` (datetime) để các detector dùng chung một quy ước.
     """
+    def _norm(df: pd.DataFrame | None) -> pd.DataFrame | None:
+        if df is None or df.empty:
+            return df
+        df = df.copy()
+        tc = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
+        if tc not in df.columns:
+            return df
+        if tc != "time":
+            df = df.rename(columns={tc: "time"})
+        df["time"] = pd.to_datetime(df["time"], errors="coerce")
+        return df.dropna(subset=["time"])
+
     objects: list[dict[str, Any]] = []
-    m15 = mtf_data.get("M15")
+    mtf_data = {k: _norm(v) for k, v in mtf_data.items()}
+    m15 = mtf_data.get(primary_tf)
+    if m15 is None or m15.empty:
+        m15 = next((v for v in mtf_data.values() if v is not None and not v.empty), None)
     m5 = mtf_data.get("M5")
     h1 = mtf_data.get("H1")
     d1 = mtf_data.get("D1")

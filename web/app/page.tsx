@@ -288,8 +288,10 @@ export default function DashboardPage() {
   const realSentiment = (() => {
     const isSell = aiSignal?.action === 'SELL' || aiBias === 'BEARISH';
     const confluenceScore = market?.markup?.confluence?.score;
-    if (typeof confluenceScore === 'number' && confluenceScore > 0) {
-      const score = Math.round(Math.min(100, Math.max(0, confluenceScore * 100)));
+    // Markup confluence score is -100..100 (not 0..1). Map it to a 0-100
+    // bullish percent: 50 + score/2.
+    if (typeof confluenceScore === 'number') {
+      const score = Math.round(Math.min(100, Math.max(0, 50 + confluenceScore / 2)));
       return isSell ? 100 - score : score;
     }
     const brainConf = aiSignal?.confidence ?? 0;
@@ -304,8 +306,8 @@ export default function DashboardPage() {
 
   const aiConfidence = (() => {
     const confluenceScore = market?.markup?.confluence?.score;
-    if (typeof confluenceScore === 'number' && confluenceScore > 0) {
-      return Math.round(Math.min(100, Math.max(0, confluenceScore * 100)));
+    if (typeof confluenceScore === 'number') {
+      return Math.round(Math.min(100, Math.max(0, 50 + confluenceScore / 2)));
     }
     const brainConf = aiSignal?.confidence ?? 0;
     if (brainConf > 0) {

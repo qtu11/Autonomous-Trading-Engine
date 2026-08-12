@@ -49,27 +49,51 @@ DOJI_BODY_RATIO = 0.10  # body/range <= 10%
 PIVOT_TOLERANCE = 0.0010  # 0.1% of price for EQH/EQL
 BSL_SSL_CLUSTER = 0.0030  # 0.3% cluster band for BSL/SSL pools
 
-# Object type groups per method (used to filter final markup list)
+# Object type groups per method (used to filter final markup list).
+# These mirror the user's concept checklist for every method, so the chart
+# only renders the components that belong to the selected method:
+#   SNIPER        -> EMA9/21 + ribbon, VWAP, ADX/RSI/MACD, signal + SL/TP1-5, score,
+#                    BOS/CHoCH/MSS confluence, Breakout/Pullback/Retest/FakeBreakout,
+#                    S/R + trendline, Supply/Demand, liquidity sweep.
+#   SMC           -> Market structure (SWING), BOS/CHoCH/MSS, OB/Breaker/Mitigation/
+#                    Rejection, FVG/iFVG, Liquidity + pools, EQH/EQL, SFP (stop hunt),
+#                    Inducement, Supply/Demand, Volume Imbalance, Liquidity Void,
+#                    Dealing Range/Curve, Premium/Discount (PD).
+#   ICT           -> BOS/CHoCH/MSS, OB/Breaker/FVG/iFVG, BPR, PD/OTE, Asian range,
+#                    Killzone, Judas Swing, PO3/AMD, Silver Bullet, Unicorn, NYMO,
+#                    Turtle Soup, SMT Divergence, Session HL, PDH/PDL, Weekly/Monthly
+#                    HL, Liquidity pools, Dealing Range/Curve, Void, Inducement.
+#   PRICE_ACTION  -> Trend, Swing (HH/HL/LH/LL), S/R, Trendline, Channel, Range,
+#                    Breakout/Pullback/Retest/FakeBreakout, candle + chart patterns,
+#                    Pivots + PDH/PDL.
 METHOD_OBJECT_GROUPS: dict[str, set[str]] = {
     "SNIPER": {
         "EMA", "EMA_RIBBON", "VWAP", "ADX", "MACD_LINE", "MACD_SIGNAL", "RSI_LEVEL",
         "SNIPER_SIGNAL", "SNIPER_SL", "SNIPER_TP1", "SNIPER_TP2", "SNIPER_TP3",
         "SNIPER_TP4", "SNIPER_TP5", "SNIPER_SCORE", "SNIPER_DASH",
-        "SWING", "BOS", "CHoCH",
+        "SWING", "BOS", "CHoCH", "MSS", "LIQUIDITY", "LIQUIDITY_POOL", "SFP",
+        "SUPPLY_DEMAND", "TRENDLINE", "SUPPORT", "RESISTANCE", "SR",
+        "BREAKOUT", "PULLBACK", "RETEST", "FAKE_BREAKOUT", "PATTERN",
     },
     "SMC": {
         "SWING", "BOS", "CHoCH", "MSS", "OB", "BREAKER", "MITIGATION", "REJECTION",
-        "FVG", "iFVG", "BSL", "SSL", "EQH", "EQL", "LIQUIDITY", "SFP",
-        "INDUCEMENT", "SUPPLY_DEMAND", "TRENDLINE",
+        "FVG", "iFVG", "BSL", "SSL", "EQH", "EQL", "LIQUIDITY", "LIQUIDITY_POOL",
+        "SFP", "INDUCEMENT", "SUPPLY_DEMAND", "VOLUME_IMBALANCE", "VOID",
+        "DEALING_RANGE", "DEALING_CURVE", "PD", "TRENDLINE",
     },
     "ICT": {
         "ASIAN", "KILLZONE", "OTE", "PD", "JUDAS_SWING", "PO3", "SILVER_BULLET",
         "UNICORN", "NYMO", "BSL", "SSL", "EQH", "EQL", "BOS", "CHoCH",
-        "OB", "FVG", "OTE",
+        "MSS", "OB", "BREAKER", "MITIGATION", "REJECTION", "FVG", "iFVG", "BPR",
+        "LIQUIDITY", "LIQUIDITY_POOL", "INDUCEMENT", "SUPPLY_DEMAND",
+        "VOLUME_IMBALANCE", "VOID", "DEALING_RANGE", "DEALING_CURVE",
+        "TURTLE_SOUP", "SMT_DIVERGENCE", "AMD", "SESSION_HL", "PDH_PDL",
+        "WEEKLY_MONTHLY_HL",
     },
     "PRICE_ACTION": {
-        "CANDLE_PATTERN", "SUPPORT", "RESISTANCE", "PIVOT", "PDH", "PDL",
-        "CHART_PATTERN", "TRENDLINE", "TREND", "SWING", "BOS", "CHoCH",
+        "CANDLE_PATTERN", "PATTERN", "CHART_PATTERN", "SUPPORT", "RESISTANCE", "SR",
+        "PIVOT", "PDH", "PDL", "TRENDLINE", "TREND", "SWING", "BOS", "CHoCH",
+        "CHANNEL", "RANGE", "BREAKOUT", "PULLBACK", "RETEST", "FAKE_BREAKOUT",
     },
     "ULTRA_CONFLUENCE": set(),  # empty -> include everything
 }
@@ -135,10 +159,21 @@ def _macd(series: pd.Series) -> tuple[pd.Series, pd.Series, pd.Series]:
     return macd_line, signal, hist
 
 
+def _vol(df: pd.DataFrame) -> pd.Series:
+    """Resolve the volume column regardless of the bridge's naming (volume /
+    tick_volume / real_volume). Missing volume degrades to a zero series so
+    VWAP and volume-confirmation never crash on real MT5 payloads."""
+    for col in ("volume", "tick_volume", "real_volume"):
+        if col in df.columns:
+            return df[col].fillna(0.0)
+    return pd.Series(0.0, index=df.index)
+
+
 def _vwap(df: pd.DataFrame) -> pd.Series:
     typical = (df["high"] + df["low"] + df["close"]) / 3.0
-    cum_vol = df["volume"].cumsum().replace(0, np.nan)
-    return (typical * df["volume"]).cumsum() / cum_vol
+    vol = _vol(df)
+    cum_vol = vol.cumsum().replace(0, np.nan)
+    return (typical * vol).cumsum() / cum_vol
 
 
 def _candle_row(c: dict[str, Any]) -> dict[str, float]:
@@ -195,7 +230,8 @@ def compute_sniper_overlay(
     macd_line, macd_sig, _ = _macd(close)
     adx, plus_di, minus_di = _adx(df)
     atr = _atr(df)
-    vol_ma = df["volume"].rolling(VOL_MA_PERIOD).mean()
+    vol = _vol(df)
+    vol_ma = vol.rolling(VOL_MA_PERIOD).mean()
     last = df.iloc[-1]
     last_time = last[time_col]
 
@@ -281,7 +317,7 @@ def compute_sniper_overlay(
     if macd_line.iloc[-1] > macd_sig.iloc[-1]: bull += 1
     if ema9.iloc[-1] > ema21.iloc[-1]: bull += 1
     if adx.iloc[-1] > 25 and close.iloc[-1] > ema9.iloc[-1]: bull += 1
-    if df["volume"].iloc[-1] > vol_ma.iloc[-1] and close.iloc[-1] > df["open"].iloc[-1]: bull += 1
+    if vol.iloc[-1] > vol_ma.iloc[-1] and close.iloc[-1] > df["open"].iloc[-1]: bull += 1
     if rsi_5m > 50: bull += 1
 
     bear = 0
@@ -290,7 +326,7 @@ def compute_sniper_overlay(
     if macd_line.iloc[-1] < macd_sig.iloc[-1]: bear += 1
     if ema9.iloc[-1] < ema21.iloc[-1]: bear += 1
     if adx.iloc[-1] > 25 and close.iloc[-1] < ema9.iloc[-1]: bear += 1
-    if df["volume"].iloc[-1] > vol_ma.iloc[-1] and close.iloc[-1] < df["open"].iloc[-1]: bear += 1
+    if vol.iloc[-1] > vol_ma.iloc[-1] and close.iloc[-1] < df["open"].iloc[-1]: bear += 1
     if rsi_5m < 50: bear += 1
 
     bull_pct = round(bull / 7 * 100, 1)
@@ -314,7 +350,7 @@ def compute_sniper_overlay(
             "macd_bull": macd_line.iloc[-1] > macd_sig.iloc[-1],
             "ema9_above_21": ema9.iloc[-1] > ema21.iloc[-1],
             "adx_strong_with_trend": float(adx.iloc[-1]) > 25,
-            "volume_confirm": float(df["volume"].iloc[-1]) > float(vol_ma.iloc[-1]) if not pd.isna(vol_ma.iloc[-1]) else False,
+            "volume_confirm": float(vol.iloc[-1]) > float(vol_ma.iloc[-1]) if not pd.isna(vol_ma.iloc[-1]) else False,
             "rsi_5m_above_50": rsi_5m > 50,
         },
     })
@@ -478,43 +514,9 @@ def compute_smc_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
                 })
                 break
 
-    # ---- BOS / CHoCH / MSS detection ----
-    if swing_highs and swing_lows:
-        last_sh = swing_highs[-1]
-        last_sl = swing_lows[-1]
-        # Bullish BOS: close > last swing high
-        if close.iloc[-1] > last_sh[1] and close.iloc[-2] <= last_sh[1]:
-            objects.append({
-                "type": "BOS", "direction": "BULLISH", "label": "BOS_BULLISH",
-                "top": last_sh[1], "bottom": last_sh[1], "price": last_sh[1],
-                # pyrefly: ignore [unnecessary-type-conversion]
-                "index": int(last_sh[0]), "time_start": _dt(df.iloc[last_sh[0]][time_col]),
-            })
-        elif close.iloc[-1] < last_sl[1] and close.iloc[-2] >= last_sl[1]:
-            objects.append({
-                "type": "BOS", "direction": "BEARISH", "label": "BOS_BEARISH",
-                "top": last_sl[1], "bottom": last_sl[1], "price": last_sl[1],
-                # pyrefly: ignore [unnecessary-type-conversion]
-                "index": int(last_sl[0]), "time_start": _dt(df.iloc[last_sl[0]][time_col]),
-            })
-
-        # CHoCH: trend change. We need swing trend: if recent higher-highs dominant -> CHoCH bearish = LH breaks HL
-        last_highs = [h for _, h in swing_highs[-3:]]
-        last_lows = [l for _, l in swing_lows[-3:]]
-        if len(last_highs) >= 2 and len(last_lows) >= 2:
-            was_uptrend = last_highs[-1] > last_highs[-2] and last_lows[-1] > last_lows[-2]
-            if was_uptrend and close.iloc[-1] < last_lows[-1]:
-                objects.append({
-                    "type": "CHoCH", "direction": "BEARISH", "label": "CHoCH_BEARISH",
-                    "top": last_lows[-1], "bottom": last_lows[-1], "price": last_lows[-1],
-                    "index": 0, "time_start": _dt(last_time),
-                })
-            elif not was_uptrend and close.iloc[-1] > last_highs[-1]:
-                objects.append({
-                    "type": "CHoCH", "direction": "BULLISH", "label": "CHoCH_BULLISH",
-                    "top": last_highs[-1], "bottom": last_highs[-1], "price": last_highs[-1],
-                    "index": 0, "time_start": _dt(last_time),
-                })
+    # BOS / CHoCH / MSS markers are emitted by the core markup builder
+    # (chart_markup step 6 scans the last candles for every method), so they
+    # are NOT duplicated here.
 
     # ---- Swing Failure Pattern (SFP) on last candle ----
     if len(df) >= 3 and swing_lows and swing_highs:
@@ -843,13 +845,16 @@ def compute_pa_overlay(df: pd.DataFrame) -> list[dict[str, Any]]:
             objects.append({"type": "PDH", "direction": "BEARISH", "label": "PDH", "top": ph, "bottom": ph, "price": ph, "index": last_idx, "time_start": _dt(last_time)})
             objects.append({"type": "PDL", "direction": "BULLISH", "label": "PDL", "top": pl, "bottom": pl, "price": pl, "index": last_idx, "time_start": _dt(last_time)})
 
-    # ---- Support / Resistance from price clustering ----
+    # ---- Support / Resistance from price clustering (bucket scaled to ATR so
+    # it works for every symbol: gold ~$3000 vs forex ~1.08) ----
     window = df.tail(60)
     price_counts: dict[float, int] = {}
+    atr_now = float(_atr(df).iloc[-1]) if len(df) > ATR_PERIOD else float(df["close"].iloc[-1]) * 0.001
+    bucket = max(atr_now * 0.5, 1e-9)
     for _, row in window.iterrows():
         h, l = float(row["high"]), float(row["low"])
-        bucket_h = round(h / 5.0) * 5.0
-        bucket_l = round(l / 5.0) * 5.0
+        bucket_h = round(h / bucket) * bucket
+        bucket_l = round(l / bucket) * bucket
         price_counts[bucket_h] = price_counts.get(bucket_h, 0) + 1
         price_counts[bucket_l] = price_counts.get(bucket_l, 0) + 1
     sorted_prices = sorted(price_counts.items(), key=lambda x: -x[1])[:5]
@@ -1007,12 +1012,10 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
             elif t in ("PD", "OTE") and o.get("label") == "DISCOUNT" and last_close < o.get("bottom", 0):
                 vote("BULLISH", 8, "DISCOUNT_zone")
             elif t == "KILLZONE":
-                if o.get("is_london"):
-                    factors.append({"reason": "London KillZone bias", "direction": "BULLISH", "weight": 5})
-                    score += 5
-                elif o.get("is_ny"):
-                    factors.append({"reason": "NY KillZone bias", "direction": "BULLISH", "weight": 5})
-                    score += 5
+                # KillZone is a timing context, not a directional bias — it must
+                # never add bullish points on its own (was a logic error before).
+                zone = "LONDON" if o.get("is_london") else "NY" if o.get("is_ny") else "ASIA"
+                factors.append({"reason": f"{zone}_KillZone", "direction": "NEUTRAL", "weight": 0})
             elif t == "CHART_PATTERN":
                 vote(d, 15, f"CHART_PATTERN_{label}")
             elif t in ("SUPPORT", "RESISTANCE"):
@@ -1020,6 +1023,40 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
                     vote("BULLISH", 5, f"SUPPORT_at_{o.get('price'):.2f}")
                 elif t == "RESISTANCE" and last_close >= o.get("price", 0) * 0.999:
                     vote("BEARISH", 5, f"RESISTANCE_at_{o.get('price'):.2f}")
+
+    # ULTRA_CONFLUENCE: blend the Sniper 7-factor score with the structural
+    # votes so neither signal dominates (before, ULTRA returned only the
+    # sniper bull-bear difference, discarding every SMC/ICT/PA structure).
+    if method == "ULTRA_CONFLUENCE" and sniper_score_obj is not None:
+        structure_votes = 0
+        for o in objects:
+            t = o.get("type")
+            d = o.get("direction", "NEUTRAL")
+            label = o.get("label", "")
+            if t == "BOS":
+                structure_votes += 20 if d == "BULLISH" else -20
+            elif t in ("CHoCH", "MSS"):
+                structure_votes += 25 if d == "BULLISH" else -25
+            elif t == "OB":
+                structure_votes += 12 if d == "BULLISH" else -12
+            elif t == "FVG":
+                structure_votes += 10 if d == "BULLISH" else -10
+            elif t in ("BREAKER", "MITIGATION"):
+                structure_votes += 8 if d == "BULLISH" else -8
+            elif t == "SFP":
+                structure_votes += 18 if d == "BULLISH" else -18
+            elif t == "JUDAS_SWING":
+                structure_votes += 20 if d == "BULLISH" else -20
+            elif t == "PO3":
+                structure_votes += 18 if d == "BULLISH" else -18
+            elif t == "UNICORN":
+                structure_votes += 22 if d == "BULLISH" else -22
+            elif t == "CHART_PATTERN":
+                structure_votes += 15 if d == "BULLISH" else -15
+        sniper_diff = float(sniper_score_obj.get("bull_pct", 0)) - float(sniper_score_obj.get("bear_pct", 0))
+        score = int(round(0.5 * sniper_diff + 0.5 * structure_votes))
+        factors.append({"reason": f"ULTRA blend sniper={sniper_diff:.0f} structure={structure_votes}",
+                        "direction": "BULLISH" if score > 0 else "BEARISH", "weight": abs(score)})
 
     score = max(min(score, 100), -100)
     direction = "BULLISH" if score > 15 else "BEARISH" if score < -15 else "NEUTRAL"
@@ -1034,6 +1071,37 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
         sl = sniper_sl.get("price")
         tp = sniper_tp1.get("price")
         risk_per_unit = abs(entry - sl) if sl else 0.0
+
+    # Structure-based SL/TP for methods without a native SNIPER signal:
+    # BUY  -> SL = strongest structure level below entry, TP = first level above
+    # SELL -> SL = strongest structure level above entry, TP = first level below
+    # This is what lets the AI read the chart (OB/FVG/OTE/S-R) and place a
+    # precision entry with a real risk/reward ratio before auto-trading.
+    if sl is None or tp is None:
+        levels: list[tuple[float, int]] = []
+        for o in objects:
+            p = o.get("price")
+            if isinstance(p, (int, float)) and p > 0:
+                levels.append((float(p), int(o.get("touches", 1) or 1)))
+            elif isinstance(o.get("top"), (int, float)) and isinstance(o.get("bottom"), (int, float)) \
+                    and o.get("top") != o.get("bottom"):
+                levels.append(((float(o["top"]) + float(o["bottom"])) / 2.0, int(o.get("touches", 1) or 1)))
+        # Ignore levels sitting almost exactly on entry (0.05%) so SL/TP are
+        # real structure levels, not noise — otherwise RRR degenerates.
+        min_gap = max(entry * 0.0005, 1e-9)
+        below = [(p, c) for p, c in levels if p < entry - min_gap]
+        above = [(p, c) for p, c in levels if p > entry + min_gap]
+        if signal == "BUY":
+            if below:
+                sl = max(p for p, _ in below)
+            if above:
+                tp = min(p for p, _ in above)
+        elif signal == "SELL":
+            if above:
+                sl = min(p for p, _ in above)
+            if below:
+                tp = max(p for p, _ in below)
+    risk_per_unit = abs(entry - sl) if sl else 0.0
     reward_per_unit = abs(tp - entry) if tp else 0.0
     rrr = (reward_per_unit / risk_per_unit) if risk_per_unit > 0 else None
 

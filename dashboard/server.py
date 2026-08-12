@@ -201,6 +201,44 @@ def generate_stub_candles(count: int, tf: str, symbol: str) -> pd.DataFrame:
     })
     return df
 
+# ─── MULTI-TIMEFRAME CONTEXT CACHE ──────────────────────────────────────────
+_ctx_cache: Dict[str, Dict[str, Any]] = {}
+_CTX_TTL = 60.0  # seconds
+
+async def _fetch_context_candles(symbol: str, tf: str, count: int = 600) -> Optional[pd.DataFrame]:
+    """Best-effort fetch of an HTF context frame (M15/H1/D1...) with a short
+    TTL cache so the markup engine gets multi-timeframe data on every request
+    without hammering the MT5 bridge every 2 seconds."""
+    key = f"{symbol}:{tf}"
+    now = datetime.now(timezone.utc).timestamp()
+    cached = _ctx_cache.get(key)
+    if cached and (now - cached["ts"]) < _CTX_TTL:
+        return cached["df"]
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            res = await client.get(
+                f"{BRIDGE_URL}/api/candles",
+                params={"symbol": resolve_symbol(symbol), "tf": tf, "count": count}
+            )
+            if res.status_code == 200:
+                data = res.json()
+                if "candles" in data and data["candles"]:
+                    df = pd.DataFrame(data["candles"])
+                    if "time" in df.columns:
+                        df = df.rename(columns={"time": "timestamp"})
+                    _ctx_cache[key] = {"df": df, "ts": now}
+                    return df
+    except Exception:
+        pass
+    _ctx_cache[key] = {"df": None, "ts": now}
+    # Keep the context cache bounded (one small entry per symbol:tf).
+    if len(_ctx_cache) > 64:
+        for stale_key in [k for k in _ctx_cache if k != key]:
+            _ctx_cache.pop(stale_key, None)
+            if len(_ctx_cache) <= 64:
+                break
+    return None
+
 async def fetch_real_bid_ask(symbol: str) -> tuple[float, float]:
     """Fetch REAL bid/ask from MT5 Bridge"""
     try:
@@ -718,25 +756,53 @@ async def _ai_trade_loop():
             method = _config.get("trading_method", "SMC")
             max_pos = _config.get("max_open_positions", 5)
 
-            # Run analysis
-            analysis = await run_ai_analysis(symbol, method)
+            # ── AI reads the REAL chart structures (OB/FVG/OTE/BOS/CHoCH + S-R)
+            # from the same markup engine the dashboard draws, and only auto-trades
+            # a strong entry that has a structure-based SL/TP with real RRR.
+            tf = _config.get("timeframe", "M15")
+            df = await fetch_real_candles(symbol, tf, 1000)
+            if df is None or df.empty:
+                await asyncio.sleep(5)
+                continue
+            mtf_data: Dict[str, pd.DataFrame] = {tf: df}
+            for ctx_tf in ("M15", "H1", "D1"):
+                if ctx_tf == tf:
+                    continue
+                ctx_df = await _fetch_context_candles(symbol, ctx_tf)
+                if ctx_df is not None and not ctx_df.empty:
+                    mtf_data[ctx_tf] = ctx_df
+            markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
+            cf = markup.get("confluence") or {}
 
-            score = analysis.get("score", 50)
-            signal = analysis.get("signal", "WAIT")
-            atr = analysis.get("indicators", {}).get("atr", 15)
-            last_price = analysis.get("last_price", 0)
+            score = int(cf.get("score", 0) or 0)          # -100..100
+            signal = cf.get("signal", "WAIT")
+            last_price = float(df["close"].iloc[-1])
+            entry = float(cf.get("entry") or last_price)
+            sl = cf.get("sl")
+            tp = cf.get("tp")
+            rrr = cf.get("rrr")
+            atr = float((df["high"] - df["low"]).tail(14).mean()) if len(df) >= 14 else 15.0
+            reasons = [f.get("reason") for f in (cf.get("factors") or []) if f.get("reason")][:3]
 
             # Log heartbeat
             _add_ai_event("INFO", "HEARTBEAT", symbol, {
                 "method": method,
                 "score": score,
                 "signal": signal,
+                "objects": len(markup.get("objects", [])),
                 "open_positions": len(_positions.get(symbol, [])),
                 "max_positions": max_pos
             })
 
-            # Generate trade if conditions met
-            if signal in ("BUY", "SELL") and (score >= 55 or score <= 45):
+            # Generate trade ONLY on a strong structural confluence with a
+            # defined SL/TP and a real risk/reward ratio.
+            trade_ok = (
+                signal in ("BUY", "SELL")
+                and abs(score) >= 45
+                and sl and tp
+                and (rrr or 0) >= 1.0
+            )
+            if trade_ok:
 
                 current_positions = _positions.get(symbol, [])
 
@@ -755,16 +821,16 @@ async def _ai_trade_loop():
                     ]
 
                     if not recent:
-                        # Calculate SL/TP
+                        # Structure-based SL/TP from the markup engine; fall back
+                        # to ATR multiples only when the chart had no levels.
                         sl_dist = max(5, atr * 1.5)
                         tp_dist = sl_dist * 2
-
                         if signal == "BUY":
-                            sl = round(last_price - sl_dist, 2)
-                            tp = round(last_price + tp_dist, 2)
+                            sl = float(sl) if sl else round(last_price - sl_dist, 2)
+                            tp = float(tp) if tp else round(last_price + tp_dist, 2)
                         else:
-                            sl = round(last_price + sl_dist, 2)
-                            tp = round(last_price - tp_dist, 2)
+                            sl = float(sl) if sl else round(last_price + sl_dist, 2)
+                            tp = float(tp) if tp else round(last_price - tp_dist, 2)
 
                         # PHASE 1.3: Risk Manager check (9 conditions)
                         # Estimate current spread
@@ -776,7 +842,7 @@ async def _ai_trade_loop():
 
                         risk_result = evaluate_risk_gate(
                             symbol=symbol, signal=signal,
-                            entry=last_price, sl=sl, tp=tp,
+                            entry=entry, sl=sl, tp=tp,
                             spread=current_spread, atr=atr,
                             score=score, method=method
                         )
@@ -800,10 +866,10 @@ async def _ai_trade_loop():
                             "action": signal,
                             "symbol": symbol,
                             "volume": 0.01,
-                            "stop_loss": sl,
-                            "take_profit": tp,
-                            "entry": last_price,
-                            "reason": f"AI {method} score={score} signal={signal}",
+                            "stop_loss": round(sl, 2),
+                            "take_profit": round(tp, 2),
+                            "entry": round(entry, 2),
+                            "reason": f"AI {method} structure score={score} rrr={rrr} {' | '.join(reasons)}",
                             "status": "QUEUED"
                         }
                         _commands.append(cmd)
@@ -811,13 +877,14 @@ async def _ai_trade_loop():
                         _add_ai_event("TRADE", signal, symbol, {
                             "method": method,
                             "score": score,
-                            "entry": last_price,
-                            "sl": sl,
-                            "tp": tp,
-                            "reason": analysis.get("factors", [])[:2]
+                            "entry": round(entry, 2),
+                            "sl": round(sl, 2),
+                            "tp": round(tp, 2),
+                            "rrr": rrr,
+                            "reason": " | ".join(reasons) or f"{method} confluence {score}"
                         })
 
-                        _add_log("INFO", "AI_SIGNAL", f"{method} {signal} score={score} price={last_price}")
+                        _add_log("INFO", "AI_SIGNAL", f"{method} {signal} score={score} entry={entry} sl={sl} tp={tp} rrr={rrr}")
 
         except Exception as e:
             _add_log("ERROR", "AI_LOOP_ERR", str(e))
@@ -1036,26 +1103,43 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
         df = generate_mock_candles(symbol, tf, count)
     bid, ask = await fetch_real_bid_ask(symbol)
 
-    # Run method-specific analysis
+    # Run method-specific analysis (naive indicator scoring, kept as reference)
     method = _config.get("trading_method", "SMC")
     analysis = await run_ai_analysis(symbol, method)
 
-    # Generate canonical multi-method markup objects from chart_markup engine
-    mtf_data: Dict[str, pd.DataFrame] = {tf: df}
-    markup_data = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method)
-
-    # Merge AI analysis confluence metrics if available
     raw_score = analysis.get("score") if analysis else 50
     score_num = float(raw_score) if raw_score is not None else 50.0
-    score_val = round(score_num / 100.0, 2) if score_num > 1.0 else score_num
 
-    if analysis and "signal" in analysis:
-        markup_data["confluence"] = {
-            "score": score_val,
-            "direction": analysis.get("signal", "WAIT"),
-            "signal": analysis.get("signal", "WAIT"),
-            "factors": analysis.get("factors", []),
-        }
+    # Build multi-timeframe context: the requested TF is the PRIMARY analysis
+    # frame; M15/H1/D1 are fetched best-effort as HTF context. This fixes the
+    # bug where markup was only ever computed when the user happened to view M15.
+    mtf_data: Dict[str, pd.DataFrame] = {tf: df}
+    for ctx_tf in ("M5", "M15", "H1", "D1"):
+        if ctx_tf == tf or ctx_tf in mtf_data:
+            continue
+        ctx_df = await _fetch_context_candles(symbol, ctx_tf)
+        if ctx_df is not None and not ctx_df.empty:
+            mtf_data[ctx_tf] = ctx_df
+
+    markup_data = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
+
+    # Keep the markup engine's own confluence (score -100..100 + entry/sl/tp/rrr)
+    # — previously it was overwritten by the naive indicator analysis, so the
+    # chart and the auto-trader never saw the structure-based signal. The naive
+    # result is attached under `ai` for reference.
+    markup_confluence = dict(markup_data.get("confluence") or {})
+    markup_confluence.setdefault("factors", [])
+    if analysis and analysis.get("factors"):
+        extras = [{"reason": str(f), "direction": "NEUTRAL", "weight": 0}
+                  for f in (analysis.get("factors") or [])]
+        markup_confluence["factors"] = list(markup_confluence["factors"]) + extras[:15]
+    markup_confluence["ai"] = {
+        "score": round(score_num, 1),
+        "signal": (analysis or {}).get("signal"),
+        "method": method,
+        "indicator_factors": (analysis or {}).get("factors", [])[:5],
+    }
+    markup_data["confluence"] = markup_confluence
 
     # Convert dataframe to candles format expected by lightweight-charts frontend
     candles = []
@@ -1595,29 +1679,46 @@ async def bridge_telemetry(req: TelemetryRequest, request: Request):
 class MarkupRequest(BaseModel):
     executor_id: str
     symbol: str
-    timeframe: str
+    timeframe: Optional[str] = "M15"
     objects: List[Dict[str, Any]] = []
     method: Optional[str] = None
 
 @app.post("/api/v1/bridge/markup")
 async def bridge_markup(req: MarkupRequest, request: Request):
-    """EA đẩy chart markup (OB, FVG, BOS...) lên server."""
+    """EA yêu cầu chart markup để vẽ lên MT5; server tính toán (AI Engine quyết
+    định, EA chỉ vẽ) và TRẢ VỀ objects. Trước đây endpoint này không trả objects
+    nên EA không bao giờ vẽ được cấu trúc lên chart MT5."""
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
     
-    # Cache markup theo symbol+tf
-    cache_key = f"{req.symbol}_{req.timeframe}"
-    _market_cache[cache_key] = _market_cache.get(cache_key, {})
-    _market_cache[cache_key]["markup"] = {
-        "symbol": req.symbol,
-        "timeframe": req.timeframe,
-        "method": req.method or "SMC",
-        "objects": req.objects,
-        "received_at": datetime.now(timezone.utc).isoformat()
-    }
-    _add_log("DEBUG", "EA_MARKUP", f"EA {req.executor_id} sent {len(req.objects)} markup objects for {req.symbol}")
-    return {"status": "OK", "objects_received": len(req.objects)}
+    method = (req.method or _config.get("trading_method", "SMC")).upper()
+    tf = req.timeframe or "M15"
+    symbol = req.symbol or _config.get("symbol", "XAUUSD")
+    try:
+        df = await fetch_real_candles(symbol, tf, 1000)
+        if df is None or df.empty:
+            return {"status": "ERROR", "message": "no candle data", "objects": []}
+        mtf_data: Dict[str, pd.DataFrame] = {tf: df}
+        for ctx_tf in ("M15", "H1", "D1"):
+            if ctx_tf == tf:
+                continue
+            ctx_df = await _fetch_context_candles(symbol, ctx_tf)
+            if ctx_df is not None and not ctx_df.empty:
+                mtf_data[ctx_tf] = ctx_df
+        markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
+        _add_log("DEBUG", "EA_MARKUP", f"EA {req.executor_id} fetched {len(markup['objects'])} markup objects for {symbol} [{method}]")
+        return {
+            "status": "OK",
+            "symbol": symbol,
+            "timeframe": tf,
+            "method": markup["method"],
+            "objects": markup["objects"],
+            "confluence": markup.get("confluence", {}),
+        }
+    except Exception as e:
+        _add_log("ERROR", "BRIDGE_MARKUP", str(e))
+        return {"status": "ERROR", "message": str(e), "objects": []}
 
 
 class CandlePushRequest(BaseModel):
