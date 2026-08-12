@@ -1021,8 +1021,75 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
         "markup": markup_data
     }
 
+# ─── PATTERNS ─────────────────────────────────────────────────────────────────
 
-# ─── POSITIONS ────────────────────────────────────────────────────────────────
+@app.get("/api/patterns")
+async def get_patterns(symbol: str = Query("XAUUSD"), tf: str = Query("M15")):
+    """Return detected chart patterns for symbol and timeframe (FVG, OB, BOS, Sweeps)"""
+    df = await fetch_real_candles(symbol, tf, 200)
+    if df is None or df.empty:
+        df = generate_mock_candles(symbol, tf, 200)
+
+    patterns = []
+    try:
+        from detectors import detect_fvg, detect_order_blocks, detect_bos_choch, detect_liquidity_sweep
+        fvgs = detect_fvg(df)
+        for f in fvgs[-5:]:
+            patterns.append({
+                "id": f"fvg-{f.get('index', 0)}",
+                "type": f"FVG ({f.get('direction', 'NEUTRAL')})",
+                "symbol": symbol,
+                "tf": tf,
+                "direction": f.get("direction", "NEUTRAL"),
+                "confidence": 85,
+                "description": f"Fair Value Gap zone between {f.get('bottom', 0):.2f} - {f.get('top', 0):.2f}",
+                "time": datetime.now(timezone.utc).isoformat(),
+            })
+
+        obs = detect_order_blocks(df)
+        for ob in obs[-5:]:
+            patterns.append({
+                "id": f"ob-{ob.get('index', 0)}",
+                "type": f"Order Block ({ob.get('direction', 'NEUTRAL')})",
+                "symbol": symbol,
+                "tf": tf,
+                "direction": ob.get("direction", "NEUTRAL"),
+                "confidence": 90,
+                "description": f"Order Block zone at {ob.get('bottom', 0):.2f} - {ob.get('top', 0):.2f}",
+                "time": datetime.now(timezone.utc).isoformat(),
+            })
+
+        struct = detect_bos_choch(df)
+        for s in struct[-5:]:
+            patterns.append({
+                "id": f"struct-{s.get('index', 0)}",
+                "type": s.get("type", "BOS"),
+                "symbol": symbol,
+                "tf": tf,
+                "direction": s.get("direction", "NEUTRAL"),
+                "confidence": 88,
+                "description": f"Market Structure {s.get('type')} broken at {s.get('level', 0):.2f}",
+                "time": datetime.now(timezone.utc).isoformat(),
+            })
+
+        sweeps = detect_liquidity_sweep(df)
+        for sw in sweeps[-5:]:
+            patterns.append({
+                "id": f"sweep-{sw.get('index', 0)}",
+                "type": f"Liquidity Sweep ({sw.get('direction', 'NEUTRAL')})",
+                "symbol": symbol,
+                "tf": tf,
+                "direction": sw.get("direction", "NEUTRAL"),
+                "confidence": 92,
+                "description": f"Liquidity swept at {sw.get('price', 0):.2f}",
+                "time": datetime.now(timezone.utc).isoformat(),
+            })
+    except Exception as e:
+        _add_log("WARNING", "PATTERNS_DETECT", f"Error detecting patterns: {e}")
+
+    return {"status": "SUCCESS", "symbol": symbol, "tf": tf, "patterns": patterns[-10:]}
+
+
 @app.get("/api/positions")
 async def get_positions(symbol: str = Query("XAUUSD")):
     """Get current positions for symbol"""
