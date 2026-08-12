@@ -1003,10 +1003,24 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
                 vote(d, 18, f"PO3_{d}")
             elif t == "UNICORN":
                 vote(d, 22, f"UNICORN_{d}")
-            elif t == "PIVOT" and o.get("label") in ("R1", "R2", "R3") and last_close >= o.get("price", 0):
-                vote("BEARISH", 5, f"PIVOT_{o.get('label')}_reject")
-            elif t == "PIVOT" and o.get("label") in ("S1", "S2", "S3") and last_close <= o.get("price", 0):
-                vote("BULLISH", 5, f"PIVOT_{o.get('label')}_bounce")
+            elif t == "PIVOT" and o.get("label") in ("R1", "R2", "R3"):
+                # BUG FIX: hướng PIVOT bị đảo ngược. R1/R2/R3 là kháng cự:
+                #   - Giá phá TRÊN R = breakout → BULLISH (trước đây vote BEARISH "reject")
+                #   - Giá chạm R từ DƯỚI và thất bại (còn dưới R, trong 0.5%) mới là rejection → BEARISH
+                p = o.get("price", 0) or 0
+                if p > 0 and last_close < p and last_close > p * 0.995:
+                    vote("BEARISH", 5, f"PIVOT_{o.get('label')}_reject")
+                elif p > 0 and last_close >= p:
+                    vote("BULLISH", 5, f"PIVOT_{o.get('label')}_break")
+            elif t == "PIVOT" and o.get("label") in ("S1", "S2", "S3"):
+                # BUG FIX: S1/S2/S3 là hỗ trợ:
+                #   - Giá phá DƯỚI S = breakdown → BEARISH (trước đây vote BULLISH "bounce")
+                #   - Giá chạm S từ TRÊN và giữ vững (trên S, trong 0.5%) mới là bounce → BULLISH
+                p = o.get("price", 0) or 0
+                if p > 0 and last_close > p and last_close < p * 1.005:
+                    vote("BULLISH", 5, f"PIVOT_{o.get('label')}_bounce")
+                elif p > 0 and last_close <= p:
+                    vote("BEARISH", 5, f"PIVOT_{o.get('label')}_break")
             elif t in ("PD", "OTE") and o.get("label") == "PREMIUM" and last_close > o.get("top", 0):
                 vote("BEARISH", 8, "PREMIUM_zone")
             elif t in ("PD", "OTE") and o.get("label") == "DISCOUNT" and last_close < o.get("bottom", 0):

@@ -91,8 +91,9 @@ async function postJson<T>(url: string, body?: Record<string, unknown>): Promise
 export function fetchStatus() { return getJson<any>(`${API_BASE}/api/status`); }
 export function fetchControlCenterStatus() { return getJson<ControlCenterStatus>(`${API_BASE}/api/control-center/status`); }
 
+export interface MarketData { candles?: Candle[]; markup?: MarkupResponse; bid?: number; ask?: number; spread?: number; }
 export async function fetchMarket(symbol = 'XAUUSD', tf = 'M15') {
-  const data = await getJson<{ candles?: Candle[]; markup?: MarkupResponse }>(`${API_BASE}/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}`);
+  const data = await getJson<MarketData>(`${API_BASE}/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}`);
   if (!data || !Array.isArray(data.candles)) return null;
   return data;
 }

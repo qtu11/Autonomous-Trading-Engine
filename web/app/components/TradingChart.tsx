@@ -16,8 +16,10 @@ import { C } from '@/lib/design-tokens';
 import { parseCandleTime } from '@/lib/utils/time';
 
 const TIMEFRAMES = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'];
+// BUG FIX: M1 mặc định 40000 (khớp InpCandlesHistory của EA) — trước đây 72000
+// khiến server bỏ qua cache EA (chỉ 5000) và rơi vào bridge/stub.
 const TIMEFRAME_CANDLES: Record<string, number> = {
-  H4: 300, H1: 1200, M30: 2400, M15: 4800, M5: 14400, M1: 72000, D1: 365,
+  H4: 175, H1: 700, M30: 1350, M15: 2700, M5: 8000, M1: 40000, D1: 365,
 };
 
 interface TradingChartProps {
@@ -26,6 +28,9 @@ interface TradingChartProps {
   markup?: MarkupResponse | null;
   candles?: Candle[];
   positions?: any[];
+  pendingOrders?: any[];
+  bid?: number;
+  ask?: number;
   onTimeframeChange?: (tf: string) => void;
 }
 
@@ -35,12 +40,17 @@ export default function TradingChart({
   markup,
   candles: propCandles,
   positions = [],
+  pendingOrders = [],
+  bid,
+  ask,
   onTimeframeChange
 }: TradingChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const positionLinesRef = useRef<Map<string, IPriceLine[]>>(new Map());
+  const pendingLinesRef = useRef<IPriceLine[]>([]);
+  const aiSignalLinesRef = useRef<IPriceLine[]>([]);
   const markupObjectsRef = useRef<IPriceLine[]>([]);
   const isMountedRef = useRef(true);
 
@@ -168,8 +178,9 @@ export default function TradingChart({
   }, []);
 
   // Update candles
+  const prevChartDataRef = useRef<CandlestickData<Time>[]>([]);
   useEffect(() => {
-    if (!candleSeriesRef.current || !candles.length) return;
+    if (!candleSeriesRef.current) return;
     const series = candleSeriesRef.current;
 
     const chartData: CandlestickData<Time>[] = candles
@@ -180,22 +191,75 @@ export default function TradingChart({
       .filter(d => (d.time as number) > 0 && d.open > 0)
       .sort((a, b) => (a.time as number) - (b.time as number));
 
-    if (!chartData.length) return;
-    series.setData(chartData);
+    // BUG FIX: khi đổi symbol / chưa có dữ liệu → clear chart thay vì giữ nến của
+    // symbol cũ hiển thị sai trên chart mới.
+    if (!chartData.length) {
+      series.setData([]);
+      prevChartDataRef.current = [];
+      return;
+    }
 
-    // Scroll to last 200 candles
-    try {
-      const lastIdx = chartData.length - 1;
-      const visibleCount = Math.min(200, chartData.length);
-      const fromIdx = Math.max(0, lastIdx - visibleCount + 1);
-      chartRef.current?.timeScale().setVisibleRange({
-        from: chartData[fromIdx].time as any,
-        to: chartData[lastIdx].time as any,
-      });
-    } catch {
-      chartRef.current?.timeScale().fitContent();
+    // BUG FIX: real-time với 40000 nến M1 — chỉ update nến mới bằng series.update()
+    // (O(1)) thay vì setData lại toàn bộ mỗi 2s (giật). lightweight-charts chỉ cho
+    // update nến CUỐI hoặc append nến mới hơn — bắt đầu từ nến cuối của dữ liệu cũ.
+    const prev = prevChartDataRef.current;
+    let incremental = false;
+    let appendedNew = false;
+    if (prev.length > 0) {
+      const diff = chartData.length - prev.length;
+      const sameHistory = chartData[0]?.time === prev[0]?.time;
+      const prevLastTime = prev[prev.length - 1]?.time as number;
+      const lastTime = chartData[prev.length - 1]?.time as number;
+      // BUG FIX (review): series.update() chỉ chấp nhận time >= nến cuối hiện tại.
+      // Nếu server drop 1 nến (merge lệch) khiến nến cuối đổi time giữa 2 lần poll
+      // thì update() sẽ throw và chart treo. Chỉ dùng incremental khi an toàn:
+      //  - diff==0: chỉ khi nến cuối CÙNG time (nến đang hình thành đổi giá trị)
+      //  - diff>=1: khi time các nến mới tăng dần theo nến cuối cũ.
+      // Các trường hợp còn lại (nến mới nhảy cóc / bị drop) → setData redraw lại toàn bộ.
+      const safeIncremental =
+        sameHistory && diff >= 0 && diff <= 5 &&
+        (diff >= 1
+          ? lastTime >= prevLastTime
+          : lastTime === prevLastTime);
+      if (safeIncremental) {
+        const startIdx = Math.max(0, prev.length - 1);
+        for (let i = startIdx; i < chartData.length; i++) {
+          series.update(chartData[i]);
+        }
+        appendedNew = diff >= 1;
+        incremental = true;
+      }
+    }
+    if (!incremental) {
+      series.setData(chartData);
+      appendedNew = true; // setData = dữ liệu mới (đổi TF/khởi tạo) → cuộn theo
+    }
+    prevChartDataRef.current = chartData;
+
+    // Chỉ auto-scroll khi CÓ nến mới được thêm hoặc dữ liệu thay thế toàn bộ.
+    // Khi chỉ nến cuối đang hình thành đổi giá trị (diff==0), KHÔNG scroll để
+    // người dùng có thể tự pan/zoom qua 40000 nến lịch sử mà không bị giật về cuối.
+    if (appendedNew) {
+      try {
+        const lastIdx = chartData.length - 1;
+        const visibleCount = Math.min(250, chartData.length);
+        const fromIdx = Math.max(0, lastIdx - visibleCount + 1);
+        chartRef.current?.timeScale().setVisibleRange({
+          from: chartData[fromIdx].time as any,
+          to: chartData[lastIdx].time as any,
+        });
+      } catch {
+        chartRef.current?.timeScale().fitContent();
+      }
     }
   }, [candles]);
+
+  // BUG FIX: page.tsx poll /api/market mỗi 2s nhưng KHÔNG truyền bid/ask cho chart
+  // → nến có real-time nhưng đường BID/ASK không bao giờ hiện. Sync từ props:
+  useEffect(() => {
+    if (typeof bid === 'number' && isFinite(bid)) setBidPrice(bid);
+    if (typeof ask === 'number' && isFinite(ask)) setAskPrice(ask);
+  }, [bid, ask]);
 
   // Bid/Ask
   useEffect(() => {
@@ -228,25 +292,90 @@ export default function TradingChart({
 
     positions.forEach((pos: any) => {
       const lines: IPriceLine[] = [];
-      const isBuy = pos.type === 'BUY' || pos.type === 'buy';
-      const entry = pos.openPrice || pos.entry;
-      try {
-        lines.push(series.createPriceLine({
-          price: entry,
-          color: isBuy ? C.green : C.red,
-          lineWidth: 2, lineStyle: 0, axisLabelVisible: true,
-          title: `${pos.type} @ ${entry?.toFixed(2)}`,
-        }));
-      } catch { /* */ }
-      if (pos.sl) {
-        try { lines.push(series.createPriceLine({ price: pos.sl, color: C.red, lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: `SL @ ${pos.sl.toFixed(2)}` })); } catch { /* */ }
+      const isBuy = String(pos.type || '').toUpperCase() === 'BUY';
+      // BUG FIX: server lưu price_open, API chuẩn hóa thành entry/openPrice — đọc
+      // đủ các tên để đường ENTRY luôn vẽ được (trước đây vẽ undefined → lỗi lặng thầm).
+      const entry = Number(pos.price_open ?? pos.entry ?? pos.openPrice ?? pos.price ?? 0);
+      if (entry > 0) {
+        try {
+          lines.push(series.createPriceLine({
+            price: entry,
+            color: isBuy ? C.green : C.red,
+            lineWidth: 2, lineStyle: 0, axisLabelVisible: true,
+            title: `${isBuy ? 'BUY' : 'SELL'}${pos.lot ?? pos.volume ? ` ${Number(pos.lot ?? pos.volume ?? 0).toFixed(2)} lot` : ''} @ ${entry.toFixed(2)}`,
+          }));
+        } catch { /* */ }
       }
-      if (pos.tp) {
-        try { lines.push(series.createPriceLine({ price: pos.tp, color: C.green, lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: `TP @ ${pos.tp.toFixed(2)}` })); } catch { /* */ }
+      if (Number(pos.sl) > 0) {
+        try { lines.push(series.createPriceLine({ price: Number(pos.sl), color: C.red, lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: `SL @ ${Number(pos.sl).toFixed(2)}` })); } catch { /* */ }
       }
-      positionLinesRef.current.set(pos.id || String(pos.ticket), lines);
+      if (Number(pos.tp) > 0) {
+        try { lines.push(series.createPriceLine({ price: Number(pos.tp), color: C.green, lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: `TP @ ${Number(pos.tp).toFixed(2)}` })); } catch { /* */ }
+      }
+      positionLinesRef.current.set(String(pos.id ?? pos.ticket ?? pos.positionId ?? 'pos'), lines);
     });
   }, [positions]);
+
+  // Pending orders (BUY_LIMIT/SELL_LIMIT + SL/TP) — BUG FIX: trước đây tab ORD có
+  // lệnh chờ nhưng chart không hiển thị. Giờ vẽ đường dashed ở giá entry.
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+    pendingLinesRef.current.forEach(line => { try { series.removePriceLine(line); } catch { /* */ } });
+    pendingLinesRef.current = [];
+
+    (pendingOrders || []).forEach((o: any) => {
+      const type = String(o.type || '').toUpperCase();
+      const isBuy = type.startsWith('BUY');
+      const price = Number(o.price ?? o.entry ?? 0);
+      const color = isBuy ? C.cyan : C.amber;
+      if (price > 0) {
+        try {
+          pendingLinesRef.current.push(series.createPriceLine({
+            price, color, lineWidth: 1, lineStyle: 2, axisLabelVisible: true,
+            title: `${type} @ ${price.toFixed(2)}${Number(o.volume ?? 0) > 0 ? ` (${Number(o.volume).toFixed(2)} lot)` : ''}`,
+          }));
+        } catch { /* */ }
+      }
+      if (Number(o.sl) > 0) {
+        try { pendingLinesRef.current.push(series.createPriceLine({ price: Number(o.sl), color: C.red, lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: `SL @ ${Number(o.sl).toFixed(2)}` })); } catch { /* */ }
+      }
+      if (Number(o.tp) > 0) {
+        try { pendingLinesRef.current.push(series.createPriceLine({ price: Number(o.tp), color: C.green, lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: `TP @ ${Number(o.tp).toFixed(2)}` })); } catch { /* */ }
+      }
+    });
+  }, [pendingOrders]);
+
+  // AI active signal preview (entry/SL/TP từ markup confluence) — hiện lệnh AI
+  // đề xuất ngay trên chart trước khi auto-trade mở lệnh thật.
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+    aiSignalLinesRef.current.forEach(line => { try { series.removePriceLine(line); } catch { /* */ } });
+    aiSignalLinesRef.current = [];
+
+    const cf: any = markupData?.confluence;
+    const signal = cf?.signal;
+    if (!signal || signal === 'WAIT') return;
+    const entry = Number(cf?.entry ?? 0);
+    const sl = Number(cf?.sl ?? 0);
+    const tp = Number(cf?.tp ?? 0);
+    const color = signal === 'BUY' ? C.green : C.red;
+    if (entry > 0) {
+      try {
+        aiSignalLinesRef.current.push(series.createPriceLine({
+          price: entry, color, lineWidth: 1, lineStyle: 3, axisLabelVisible: true,
+          title: `AI ${signal} @ ${entry.toFixed(2)}`,
+        }));
+      } catch { /* */ }
+    }
+    if (sl > 0) {
+      try { aiSignalLinesRef.current.push(series.createPriceLine({ price: sl, color: C.red, lineWidth: 1, lineStyle: 4, axisLabelVisible: true, title: `AI SL @ ${sl.toFixed(2)}` })); } catch { /* */ }
+    }
+    if (tp > 0) {
+      try { aiSignalLinesRef.current.push(series.createPriceLine({ price: tp, color: C.green, lineWidth: 1, lineStyle: 4, axisLabelVisible: true, title: `AI TP @ ${tp.toFixed(2)}` })); } catch { /* */ }
+    }
+  }, [markupData]);
 
   // PHASE 1.4: Single, memoized renderMarkup
   const renderMarkup = useCallback(() => {
@@ -456,11 +585,6 @@ export default function TradingChart({
     setLocalTf(tf);
     onTimeframeChange?.(tf);
   }, [onTimeframeChange]);
-
-  // Update from props (only if changed)
-  useEffect(() => {
-    if (markup && markup !== markupData) setMarkupData(markup);
-  }, [markup]);
 
   const sniperScore = markupData?.objects?.find((o: any) => o.type === 'SNIPER_SCORE');
   const confluence = (markupData as any)?.confluence;

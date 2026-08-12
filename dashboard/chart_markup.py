@@ -386,7 +386,15 @@ def build_chart_markup(
     # Filter by METHOD_OBJECT_GROUPS if method-specific (so e.g. SNIPER shows
     # sniper objects + a few core SMC confluence ones, but not all ICT zones).
     allowed_method_types = METHOD_OBJECT_GROUPS.get(method_upper)
-    if allowed_method_types:
+    if method_upper == "INDICATOR":
+        # BUG FIX: INDICATOR = chỉ hiện chỉ báo, KHÔNG vẽ markup & KHÔNG có
+        # confluence vote. Trước đây METHOD_OBJECT_GROUPS thiếu key INDICATOR →
+        # allowed_types=None → filter bị bỏ qua → chart hiện đầy OB/FVG/BOS/PD
+        # và AI auto-trade có thể trade theo tín hiệu của phương pháp khác dù
+        # user đang chọn INDICATOR.
+        objects = []
+        method_specific_objects = []
+    elif allowed_method_types:
         objects = [obj for obj in objects if obj.get("type") in allowed_method_types]
         method_specific_objects = [obj for obj in method_specific_objects if obj.get("type") in allowed_method_types]
 

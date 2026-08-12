@@ -32,6 +32,9 @@ input bool     InpChartMarkupEnabled = true;                 // Bật/Tắt vẽ
 input int      InpMarkupReRenderSec  = 5;                    // Chu kỳ vẽ lại cấu trúc AI trên biểu đồ (giây)
 input int      InpMarkupMaxObjects   = 120;                  // Số lượng đối tượng vẽ tối đa trên biểu đồ
 input int      InpCandlesIntervalSec = 30;                   // Chu kỳ đẩy dữ liệu nến thời gian thực (giây)
+input int      InpCandlesHistory    = 40000;                 // Số nến lịch sử tối đa đẩy lên (mặc định 40000 cho M1)
+input int      InpCandlesChunkSize  = 10000;                 // Số nến mỗi request (tránh payload quá lớn bị WebRequest chặn)
+input int      InpLiveCandleIntervalSec = 3;                // Chu kỳ đẩy nến ĐANG HÌNH THÀNH (real-time, close = giá hiện tại như MT5)
 
 //--- Global Variables
 CTrade         m_trade;
@@ -44,6 +47,11 @@ datetime       m_last_markup_fetch = 0;
 int            m_markup_payload_md5 = 0;
 int            m_consecutive_failures = 0;
 datetime       m_last_candles_push = 0;
+datetime       m_last_live_candle_push = 0;
+datetime       m_last_live_candle_time = 0;
+double         m_last_live_candle_close = 0.0;
+datetime       m_last_live_tf_time = 0;
+double         m_last_live_tf_close = 0.0;
 string         g_symbol;
 string         g_protection_level = "none";
 int            g_protection_live_seconds = 0;
@@ -298,6 +306,15 @@ void OnTimer()
     {
        SendLiveCandles();
        m_last_candles_push = TimeLocal();
+    }
+
+    // 1c. BUG FIX real-time: đẩy nến ĐANG HÌNH THÀNH (1 nến, payload nhỏ) mỗi vài
+    //     giây để chart web cập nhật close theo từng tick giống MT5. Trước đây chỉ
+    //     đẩy full history mỗi 30s nên nến cuối trên web đứng im tới 30s.
+    if(TimeLocal() - m_last_live_candle_push >= InpLiveCandleIntervalSec)
+    {
+       PushLiveCandle();
+       m_last_live_candle_push = TimeLocal();
     }
 
    // 2. Push the broker's real economic calendar on its own cadence.
@@ -1158,39 +1175,13 @@ string TimeframeLabel(ENUM_TIMEFRAMES tf)
 }
 
 //+------------------------------------------------------------------+
-//| Send live candles from MT5 to the API                            |
+//| Push one batch (chunk) of candles for a timeframe                 |
 //+------------------------------------------------------------------+
-void SendLiveCandles()
+bool PushCandlesChunk(string tfLabel, int start, int end,
+                      const MqlRates &rates[], bool replaceFirst)
 {
-   // DEBUG: Always log entry so we know this function is being called
-   PrintFormat("CANDLES_DEBUG: entering SendLiveCandles() | token_len=%d url_len=%d last_push_ago=%d interval=%d",
-      StringLen(InpBridgeToken), StringLen(InpApiUrl),
-      (int)(TimeLocal() - m_last_candles_push), InpCandlesIntervalSec);
-
-   if(StringLen(InpBridgeToken) == 0 || StringLen(InpApiUrl) == 0)
-   {
-      Print("CANDLES_SKIP: token or url empty");
-      return;
-   }
-
-   MqlRates rates[];
-   ArraySetAsSeries(rates, false); // Oldest first, newest last
-   // BUG FIX: trước đây chỉ CopyRates 100 nến -> chart web chỉ có ~8 nến M15
-   // (resample từ 100 nến M1) và hầu như không có pattern markup. Giờ push 5000
-   // nến để chart hiển thị lịch sử đầy đủ như MT5 (M15 ~330 nến, H1 ~83 nến).
-   int copied = CopyRates(g_symbol, _Period, 0, 5000, rates);
-   PrintFormat("CANDLES_COPY_RESULT: copied=%d err=%d symbol=%s period=%d",
-      copied, GetLastError(), g_symbol, _Period);
-   if(copied <= 0)
-   {
-      PrintFormat("CANDLES_COPY_FAILED: err=%d for %s on %s", GetLastError(), g_symbol, _Period);
-      return;
-   }
-
-   PrintFormat("CANDLES_PUSH_START: symbol=%s tf=%s candles=%d", g_symbol, _Period, copied);
-
    string candlesJson = "";
-   for(int i = 0; i < copied; i++)
+   for(int i = start; i < end; i++)
    {
       string ts = TimeToString(rates[i].time, TIME_DATE|TIME_MINUTES|TIME_SECONDS);
       // Format as ISO 8601: YYYY.MM.DD HH:MM:SS -> YYYY-MM-DDTHH:MM:SS
@@ -1208,29 +1199,158 @@ void SendLiveCandles()
          (double)rates[i].tick_volume
       );
       
-      if(i > 0)
+      if(i > start)
          candlesJson += ",";
       candlesJson += item;
    }
 
-   string tfLabel = TimeframeLabel(_Period);
-   string payload = StringFormat("{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"candles\":[%s]}", EscapeJson(g_symbol), tfLabel, candlesJson);
-   
+   // replace=true ở chunk đầu tiên (ghi đè cache cũ); các chunk sau append.
+   string replaceFlag = (replaceFirst ? "true" : "false");
+   string payload = StringFormat(
+      "{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"replace\":%s,\"candles\":[%s]}",
+      EscapeJson(g_symbol), tfLabel, replaceFlag, candlesJson);
+
    char data[];
    char result[];
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
    
    string headers = BridgeHeaders();
-   int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 12000, data, result, result_headers);
-   if(res == 200)
-   {
-      PrintFormat("CANDLES_PUSH_OK: pushed %d candles for %s %s", copied, g_symbol, tfLabel);
-   }
-   else
+   int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 30000, data, result, result_headers);
+   if(res != 200)
    {
       int err = GetLastError();
-      ATELogThrottled("CANDLES_HTTP_" + string(res), StringFormat("CANDLES_PUSH_FAIL: HTTP %d err=%d", res, err));
+      ATELogThrottled("CANDLES_HTTP_" + string(res), StringFormat("CANDLES_PUSH_FAIL: tf=%s chunk=%d HTTP %d err=%d", tfLabel, start, res, err));
+      return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Push full candle history for a timeframe (chunked, replace first)|
+//+------------------------------------------------------------------+
+void PushCandlesTimeframe(ENUM_TIMEFRAMES tf, int history, string tfLabel)
+{
+   MqlRates rates[];
+   ArraySetAsSeries(rates, false); // Oldest first, newest last
+   int copied = CopyRates(g_symbol, tf, 0, history, rates);
+   if(copied <= 0)
+   {
+      PrintFormat("CANDLES_COPY_FAILED: tf=%s history=%d err=%d symbol=%s",
+         tfLabel, history, GetLastError(), g_symbol);
+      return;
+   }
+
+   int chunk = (InpCandlesChunkSize > 0) ? InpCandlesChunkSize : 10000;
+   int sent = 0;
+   bool first = true;
+   for(int start = 0; start < copied; start += chunk)
+   {
+      int end = MathMin(start + chunk, copied);
+      if(!PushCandlesChunk(tfLabel, start, end, rates, first))
+         return; // Dừng các chunk còn lại nếu 1 chunk fail (mạng/token/allowlist)
+      first = false;
+      sent += (end - start);
+   }
+   PrintFormat("CANDLES_PUSH_OK: pushed %d candles for %s %s", sent, g_symbol, tfLabel);
+}
+
+//+------------------------------------------------------------------+
+//| Send live candles from MT5 to the API (M1 base + chart TF)       |
+//+------------------------------------------------------------------+
+void SendLiveCandles()
+{
+   // DEBUG: Always log entry so we know this function is being called
+   PrintFormat("CANDLES_DEBUG: entering SendLiveCandles() | token_len=%d url_len=%d last_push_ago=%d interval=%d",
+      StringLen(InpBridgeToken), StringLen(InpApiUrl),
+      (int)(TimeLocal() - m_last_candles_push), InpCandlesIntervalSec);
+
+   if(StringLen(InpBridgeToken) == 0 || StringLen(InpApiUrl) == 0)
+   {
+      Print("CANDLES_SKIP: token or url empty");
+      return;
+   }
+
+   // BUG FIX: LUÔN đẩy M1 (40000 nến) làm base — server resample M1 -> M5/M15/H1...
+   // Trước đây chỉ đẩy theo _Period (TF chart EA gắn): nếu EA gắn chart M15 thì
+   // cache M1 trống -> web xem M1 rơi vào STUB/chỉ vài nến. Giờ M1 luôn đủ lịch sử.
+   PushCandlesTimeframe(PERIOD_M1, InpCandlesHistory, "M1");
+
+   // Đẩy thêm TF chart hiện tại nếu khác M1 (để có nến gốc đúng TF đang xem).
+   if(_Period != PERIOD_M1)
+   {
+      int tfHistory = InpCandlesHistory / 15; // ~ tương đương khoảng thời gian M1
+      if(tfHistory < 1000) tfHistory = 1000;
+      PushCandlesTimeframe(_Period, tfHistory, TimeframeLabel(_Period));
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Push ONE live forming candle (real-time close like MT5)           |
+//| Gửi payload nhỏ (1 nến) qua /api/v1/bridge/candles với replace=false;
+//| server merge theo ts nên nến cuối trong cache được cập nhật liên tục.
+//+------------------------------------------------------------------+
+bool PushLiveCandleRequest(string tfLabel, const MqlRates &r)
+{
+   string ts = TimeToString(r.time, TIME_DATE|TIME_MINUTES|TIME_SECONDS);
+   StringReplace(ts, ".", "-");
+   StringReplace(ts, " ", "T");
+   string item = StringFormat(
+      "{\"t\":\"%s\",\"ts\":\"%s\",\"o\":%.2f,\"h\":%.2f,\"l\":%.2f,\"c\":%.2f,\"v\":%.1f}",
+      TimeToString(r.time, TIME_MINUTES), ts,
+      r.open, r.high, r.low, r.close, (double)r.tick_volume);
+   string payload = StringFormat(
+      "{\"symbol\":\"%s\",\"timeframe\":\"%s\",\"replace\":false,\"candles\":[%s]}",
+      EscapeJson(g_symbol), tfLabel, item);
+   char data[];
+   char result[];
+   string result_headers;
+   StringToCharArray(payload, data, 0, StringLen(payload));
+   string headers = BridgeHeaders();
+   int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 10000, data, result, result_headers);
+   return (res == 200);
+}
+
+//+------------------------------------------------------------------+
+//| Push live forming candle for M1 (+ chart TF nếu khác M1)          |
+//+------------------------------------------------------------------+
+void PushLiveCandle()
+{
+   if(StringLen(InpBridgeToken) == 0 || StringLen(InpApiUrl) == 0)
+      return;
+
+   double minMove = MathMax(SymbolInfoDouble(g_symbol, SYMBOL_POINT), 0.001);
+
+   // M1 base — luôn là nguồn resample cho mọi TF trên web
+   MqlRates m1[];
+   ArraySetAsSeries(m1, false);
+   if(CopyRates(g_symbol, PERIOD_M1, 0, 1, m1) > 0)
+   {
+      // Guard chống spam WebRequest: chỉ gửi khi nến M1 mới hoặc giá đổi >= 1 point
+      if(m1[0].time != m_last_live_candle_time ||
+         MathAbs(m1[0].close - m_last_live_candle_close) >= minMove)
+      {
+         m_last_live_candle_time = m1[0].time;
+         m_last_live_candle_close = m1[0].close;
+         PushLiveCandleRequest("M1", m1[0]);
+      }
+   }
+
+   // TF chart EA đang gắn (M15/H1...) — nến đang hình thành cũng phải live
+   if(_Period != PERIOD_M1)
+   {
+      MqlRates tf[];
+      ArraySetAsSeries(tf, false);
+      if(CopyRates(g_symbol, _Period, 0, 1, tf) > 0)
+      {
+         if(tf[0].time != m_last_live_tf_time ||
+            MathAbs(tf[0].close - m_last_live_tf_close) >= minMove)
+         {
+            m_last_live_tf_time = tf[0].time;
+            m_last_live_tf_close = tf[0].close;
+            PushLiveCandleRequest(TimeframeLabel(_Period), tf[0]);
+         }
+      }
    }
 }
 //+------------------------------------------------------------------+

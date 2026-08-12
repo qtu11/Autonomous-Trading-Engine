@@ -25,6 +25,7 @@ from method_overlays import (
     compute_smc_overlay,
     compute_sniper_overlay,
 )
+from chart_markup import build_chart_markup
 
 
 def make_df(n: int = 200, base: float = 2000.0, slope: float = 0.5,
@@ -135,6 +136,50 @@ def test_method_groups_contain_overlay_types():
     assert "PIVOT" in pa_types, f"PA group missing PIVOT"
 
 
+def test_pivot_direction_not_inverted():
+    """BUG FIX regression: giá phá TRÊN kháng cự = breakout BULLISH, phá DƯỚI hỗ
+    trợ = breakdown BEARISH. Trước đây vote ngược (reject khi phá, bounce khi thủng)."""
+    last_close = 2050.0
+    # Price đã vượt R1 (2050 >= 2045) -> breakout bull; đã phá S1 (2050 <= 2055) -> breakdown bear
+    objs = [
+        {"type": "PIVOT", "label": "R1", "price": 2045.0},
+        {"type": "PIVOT", "label": "S1", "price": 2055.0},
+    ]
+    cf = compute_confluence_score(objs, "PRICE_ACTION", last_close)
+    factors = {f["reason"] for f in cf["factors"]}
+    assert "PIVOT_R1_break" in factors, f"expected breakout factor, got {factors}"
+    assert "PIVOT_S1_break" in factors, f"expected breakdown factor, got {factors}"
+    assert cf["score"] == 0  # +5 (bull break) - 5 (bear break) triệt tiêu
+
+    # Rejection/bounce vẫn đúng khi giá nằm CẠNH mức chưa phá (trong 0.5%)
+    objs2 = [
+        {"type": "PIVOT", "label": "R1", "price": 2051.0},  # giá dưới R1 (chưa phá) -> reject SELL
+        {"type": "PIVOT", "label": "S1", "price": 2049.0},  # giá trên S1 (chưa thủng) -> bounce BUY
+    ]
+    cf2 = compute_confluence_score(objs2, "PRICE_ACTION", 2050.0)
+    factors2 = {f["reason"] for f in cf2["factors"]}
+    assert "PIVOT_R1_reject" in factors2, f"expected reject factor, got {factors2}"
+    assert "PIVOT_S1_bounce" in factors2, f"expected bounce factor, got {factors2}"
+    assert cf2["score"] == 0
+
+
+def test_indicator_method_emits_no_markup_and_waits():
+    """BUG FIX regression: chọn INDICATOR phải KHÔNG vẽ OB/FVG/BOS và phải trả
+    WAIT. Trước đây filter bị bỏ qua nên chart hiện đầy markup của mọi phương pháp
+    và AI có thể tự trade theo tín hiệu của phương pháp khác."""
+    df = make_df(n=400, slope=0.8, seed=7)
+    mk = build_chart_markup(
+        symbol="XAUUSD",
+        mtf_data={"M15": df, "H1": df.copy(), "D1": df.copy()},
+        method="INDICATOR",
+        primary_tf="M15",
+    )
+    assert mk["objects"] == [], f"INDICATOR must not emit markup objects; got {len(mk['objects'])}"
+    cf = mk["confluence"]
+    assert cf["signal"] == "WAIT", f"INDICATOR must produce WAIT signal; got {cf['signal']}"
+    assert cf["score"] == 0
+
+
 def test_confluence_score_in_valid_range():
     df = make_df(n=200)
     objs = (
@@ -165,4 +210,8 @@ if __name__ == "__main__":
     print("PASS: test_method_groups_contain_overlay_types")
     test_confluence_score_in_valid_range()
     print("PASS: test_confluence_score_in_valid_range")
-    print("\nALL 7 UNIT TESTS PASSED")
+    test_pivot_direction_not_inverted()
+    print("PASS: test_pivot_direction_not_inverted")
+    test_indicator_method_emits_no_markup_and_waits()
+    print("PASS: test_indicator_method_emits_no_markup_and_waits")
+    print("\nALL 9 UNIT TESTS PASSED")

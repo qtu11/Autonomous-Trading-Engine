@@ -243,6 +243,10 @@ def _normalize_candle_df(df: pd.DataFrame) -> pd.DataFrame:
             df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
         except Exception:
             pass
+        # BUG FIX: bỏ dòng timestamp không parse được (NaT) — trước đây giữ NaT
+        # khiến chart vẽ nến lệch thời gian hoặc lỗi fromisoformat ở get_market.
+        df = df.dropna(subset=["timestamp"])
+        df = df.sort_values("timestamp").reset_index(drop=True)
     for col in ("open", "high", "low", "close", "volume"):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -281,8 +285,11 @@ async def fetch_real_candles(symbol: str, tf: str, count: int = 1000) -> Optiona
     global _bridge_data_real
 
     cached = _cached_candles(symbol, tf)
-    if cached is not None and len(cached) >= count:
-        # EA push đã đủ số nến yêu cầu — dùng luôn (nhanh, không gọi bridge)
+    if cached is not None and len(cached) > 0:
+        # BUG FIX: EA giờ đẩy 40000 nến M1 base + TF chart mỗi 30s. Trước đây điều
+        # kiện `len(cached) >= count` khiến cache (vd 5000) bị bỏ qua khi web yêu cầu
+        # count lớn (M1 mặc định 72000) -> rơi xuống bridge/stub -> chart chỉ vài nến.
+        # Giờ cache EA là nguồn ưu tiên NHẤT bất kể count; bridge chỉ dùng khi EA chưa push.
         _bridge_data_real = True
         _add_log("DEBUG", "DATA_SRC", f"EA-push candles {symbol} {tf} ({len(cached)})")
         return cached.tail(count).reset_index(drop=True)
@@ -1526,11 +1533,14 @@ async def get_status(symbol: str = Query("XAUUSD")):
 
 # ─── MARKET DATA + CHART MARKUP ────────────────────────────────────────────────
 @app.get("/api/market")
-async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), count: int = Query(0, ge=0, le=80000)):
+async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), count: int = Query(0, ge=0, le=150000)):
     """Market data with method-specific chart markup (SMC / ICT / Price Action / Sniper / Ultra)"""
     if count == 0:
-        defaults = {"M1": 72000, "M5": 14400, "M15": 4800, "M30": 2400, "H1": 1200, "H4": 300, "D1": 365}
-        count = defaults.get(tf, 4800)
+        # BUG FIX: M1 mặc định 40000 (EA đẩy 40000 nến M1) — trước đây 72000 > cache
+        # nên fetch_real_candles bỏ cache EA -> chart chỉ vài nến. Các TF khác tính
+        # tương đương khoảng thời gian 40000 nến M1.
+        defaults = {"M1": 40000, "M5": 8000, "M15": 2700, "M30": 1350, "H1": 700, "H4": 175, "D1": 365}
+        count = defaults.get(tf, 2700)
 
     # Fetch REAL candles
     df = await fetch_real_candles(symbol, tf, count)
@@ -1613,7 +1623,27 @@ async def get_positions(symbol: str = Query("XAUUSD")):
     """Get current positions for symbol"""
     # BUG FIX: key _positions chuẩn theo symbol đã resolve (XAUUSDm) — trước đây
     # demo lưu "XAUUSD" còn receipt EA lưu "XAUUSDm" nên frontend không thấy lệnh.
-    return _positions.get(resolve_symbol(symbol), [])
+    out = []
+    for pos in _positions.get(resolve_symbol(symbol), []):
+        p = dict(pos)
+        # BUG FIX: chuẩn hóa tên trường cho chart — server lưu price_open/volume,
+        # TradingChart đọc entry/openPrice/price. Trước đây chỉ fetchPositions tự
+        # map nên bảng/lệnh khác đọc raw (entry thiếu) hiển thị sai/trống.
+        entry = float(p.get("entry") or p.get("price_open") or p.get("openPrice") or p.get("price") or 0)
+        p["entry"] = entry
+        p["openPrice"] = entry
+        p["price_open"] = entry
+        p["price"] = entry
+        p["lot"] = float(p.get("lot") or p.get("volume") or 0)
+        p["volume"] = p["lot"]
+        p["profit"] = float(p.get("profit") or 0)
+        p["current_price"] = float(p.get("current_price") or entry or 0)
+        p["sl"] = float(p.get("sl") or 0)
+        p["tp"] = float(p.get("tp") or 0)
+        p["type"] = str(p.get("type", "BUY")).upper()
+        p["symbol"] = p.get("symbol") or resolve_symbol(symbol)
+        out.append(p)
+    return out
 
 @app.get("/api/pending-orders")
 # pyrefly: ignore [bad-function-definition]
@@ -3021,6 +3051,23 @@ async def bridge_markup(req: MarkupRequest, request: Request):
         return {"status": "ERROR", "message": str(e), "objects": []}
 
 
+def _merge_candles_by_ts(existing: List[Dict[str, Any]], incoming: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Merge nến EA push theo timestamp (ts) — không trùng, không đảo thứ tự.
+    BUG FIX: EA giờ đẩy full history 40000 nến thành nhiều chunk (replace=true
+    chunk đầu, append các chunk sau) — nếu ghi đè toàn bộ mỗi chunk thì cache
+    chỉ còn 1 chunk cuối. Merge theo ts giữ lịch sử đầy đủ, sort tăng dần."""
+    if not existing:
+        return sorted(incoming, key=lambda c: str(c.get("ts") or c.get("t") or ""))
+    by_ts: Dict[str, Dict[str, Any]] = {}
+    for c in list(existing) + list(incoming):
+        key = str(c.get("ts") or c.get("t") or "")
+        if key:
+            by_ts[key] = c  # incoming thắng nếu trùng ts
+    merged = sorted(by_ts.values(), key=lambda c: str(c.get("ts") or c.get("t") or ""))
+    # Giới hạn an toàn: giữ tối đa 150000 nến mỗi TF
+    return merged[-150000:]
+
+
 class CandlePushRequest(BaseModel):
     # BUG FIX: EA (ATE_XAUUSD.mq5) gửi payload {"symbol", "timeframe", "candles"}
     # — KHÔNG gửi executor_id. Model cũ yêu cầu executor_id bắt buộc -> FastAPI
@@ -3028,6 +3075,9 @@ class CandlePushRequest(BaseModel):
     executor_id: Optional[str] = None
     symbol: str
     timeframe: str
+    # BUG FIX: replace=true ở chunk đầu tiên của lịch sử (ghi đè cache cũ),
+    # replace=false ở các chunk sau (merge theo ts). Mặc định true cho tương thích ngược.
+    replace: Optional[bool] = True
     candles: List[Dict[str, Any]] = []
 
 @app.post("/api/v1/bridge/candles")
@@ -3041,17 +3091,22 @@ async def bridge_candles(req: CandlePushRequest, request: Request):
     # _cached_candles/fetch_real_candles. Trước đây lưu raw "XAUUSDc_M1" nhưng
     # fetch đọc "XAUUSDm_M1" -> miss -> dashboard rơi về STUB dù EA đang đẩy nến.
     cache_key = f"{resolve_symbol(req.symbol)}_{req.timeframe}"
+    prev = _market_cache.get(cache_key, {}).get("candles") or []
+    # BUG FIX: replace=true (chunk đầu tiên của lịch sử EA) → GHI ĐÈ cache bằng
+    # đúng dữ liệu mới (không giữ nến cũ lỗi thời của session trước).
+    # replace=false (các chunk sau) → merge theo ts để tích lũy đủ lịch sử.
+    candles = req.candles if req.replace else _merge_candles_by_ts(prev, req.candles)
     _market_cache[cache_key] = _market_cache.get(cache_key, {})
-    _market_cache[cache_key]["candles"] = req.candles
+    _market_cache[cache_key]["candles"] = candles
     _market_cache[cache_key]["candles_updated"] = datetime.now(timezone.utc).isoformat()
     _market_cache[cache_key]["source"] = "EA"
-    if req.candles:
+    if candles:
         _bridge_data_real = True
     _account["last_ea_candles_at"] = datetime.now(timezone.utc).isoformat()
     # pyrefly: ignore [bad-assignment]
     _account["ea_symbol"] = req.symbol or _account.get("ea_symbol")
     
-    return {"status": "OK", "candles_received": len(req.candles)}
+    return {"status": "OK", "candles_received": len(req.candles), "candles_cached": len(candles)}
 
 
 def _parse_event_datetime(ev: Dict[str, Any]) -> Optional[datetime]:

@@ -88,7 +88,7 @@ export default function DashboardPage() {
 
   const [status, setStatus] = useState<any>(null);
   const [positions, setPositions] = useState<Position[]>([]);
-  const [market, setMarket] = useState<{ candles?: Candle[]; markup?: MarkupResponse } | null>(null);
+  const [market, setMarket] = useState<{ candles?: Candle[]; markup?: MarkupResponse; bid?: number; ask?: number; spread?: number } | null>(null);
   const [history, setHistory] = useState<TradeHistory[]>([]);
   const [pendingOrders, setPendingOrders] = useState<PendingOrder[]>([]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -573,7 +573,7 @@ export default function DashboardPage() {
           {showChart && (
             <div style={{ flex: showCompact ? 1 : '0 1 auto', minHeight: 0 }}>
               <Panel title={`${selectedSymbol} ${chartTf}`} live style={{ height: '100%', position: 'relative' }}>
-                <TradingChart symbol={selectedSymbol} timeframe={chartTf} candles={market?.candles} markup={market?.markup} positions={positions as any} />
+                <TradingChart symbol={selectedSymbol} timeframe={chartTf} candles={market?.candles} markup={market?.markup} positions={positions as any} pendingOrders={pendingOrders as any} bid={market?.bid} ask={market?.ask} />
               </Panel>
             </div>
 
@@ -612,7 +612,7 @@ export default function DashboardPage() {
                               <td style={{ padding: '4px 6px', fontWeight: 700 }}>{item.symbol || 'XAUUSD'}</td>
                               <td style={{ padding: '4px 6px', color: isBuy ? C.green : C.red, fontWeight: 700 }}>{isBuy ? '▲' : '▼'}</td>
                               <td style={{ padding: '4px 6px', textAlign: 'right', color: C.dim }}>{item.lot?.toFixed(2) || item.volume?.toFixed(2) || '-'}</td>
-                              <td style={{ padding: '4px 6px', textAlign: 'right', color: C.dim }}>{item.entry?.toFixed(2) || item.price?.toFixed(2) || '-'}</td>
+                              <td style={{ padding: '4px 6px', textAlign: 'right', color: C.dim }}>{item.entry?.toFixed(2) || item.price_open?.toFixed(2) || item.price?.toFixed(2) || '-'}</td>
                               <td style={{ padding: '4px 6px', textAlign: 'right', color: C.red }}>{item.sl?.toFixed(2) || '-'}</td>
                               <td style={{ padding: '4px 6px', textAlign: 'right', color: C.green }}>{item.tp?.toFixed(2) || '-'}</td>
                               <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700, color: isUp ? C.green : C.red }}>{isUp ? '+' : ''}{(item.profit || 0).toFixed(2)}</td>
