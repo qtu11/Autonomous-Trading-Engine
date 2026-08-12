@@ -19,7 +19,7 @@ Transform your Windows PC into a local cloud server that bridges MetaTrader 5 wi
 │  │  │              NGINX REVERSE PROXY (Port 80)          │    │   │
 │  │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐   │    │   │
 │  │  │  │ Next.js │ │ FastAPI │ │AI Engine│ │MT5 Bridge│   │    │   │
-│  │  │  │ (3000)  │ │ (8005)  │ │ (8006)  │ │ (8007)  │   │    │   │
+│  │  │  │ (3000)  │ │ (8848)  │ │ (8006)  │ │ (8007)  │   │    │   │
 │  │  │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘   │    │   │
 │  │  │       │         │         │         │          │    │   │
 │  │  │       ▼         ▼         ▼         ▼          │    │   │
@@ -50,7 +50,7 @@ Vercel Website (Cloud)                    Your PC (Local Cloud)
      │                                         │  Nginx (Port 80)
      │                                         │       │
      │                                         ▼       ▼
-     │                              FastAPI (8005) ──► Python Bridge (8007)
+     │                              FastAPI (8848) ──► Python Bridge (8007)
      │                                         │              │
      │                                         │         MT5 DLL
      │                                         │              │
@@ -115,7 +115,7 @@ Or manually forward these ports on your router:
 |---------------|-------------|---------------|----------|
 | 80            | YOUR_LOCAL_IP | 80          | TCP      |
 | 443           | YOUR_LOCAL_IP | 443         | TCP      |
-| 8005          | YOUR_LOCAL_IP | 8005        | TCP      |
+| 8848          | YOUR_LOCAL_IP | 8848        | TCP      |
 | 8006          | YOUR_LOCAL_IP | 8006        | TCP      |
 | 8007          | YOUR_LOCAL_IP | 8007        | TCP      |
 | 8080          | YOUR_LOCAL_IP | 8080        | TCP      |
@@ -168,7 +168,7 @@ Authorization: Bearer YOUR_QUANTAI_BRIDGE_TOKEN
 |---------|---------------|------------------|---------------|
 | Nginx | 80 | 80 | http://PUBLIC_IP:80 |
 | Next.js | 3000 | 80/ | http://PUBLIC_IP:3000 |
-| FastAPI | 8005 | 80/api/ | http://PUBLIC_IP:8005 |
+| FastAPI | 8848 | 80/api/ | http://PUBLIC_IP:8848 |
 | AI Engine | 8006 | 80/ai/ | http://PUBLIC_IP:8006 |
 | MT5 Bridge | 8007 | 80/bridge/ | http://PUBLIC_IP:8007 |
 | PostgreSQL | 5432 | - | localhost only |
@@ -226,7 +226,7 @@ docker-compose logs fastapi
 ```powershell
 # Run as Admin
 .\scripts\setup-firewall-portforward.ps1 -ShowOnly
-# Verify rules exist for ports 80, 8005, 8006, 8007, 8080
+# Verify rules exist for ports 80, 8848, 8006, 8007, 8080
 ```
 
 ## Security Notes

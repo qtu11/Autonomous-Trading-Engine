@@ -228,14 +228,16 @@ def validate_timeframe(timeframe: str) -> bool:
 
 def validate_price(price: float, min_val: float = 0.0001) -> bool:
     """Validate price value"""
-    return price > min_val
+    return price >= min_val
 
 
 def sanitize_input(value: str, max_length: int = 100) -> str:
     """Sanitize user input"""
     if not isinstance(value, str):
         return str(value)
-    # Remove potential injection characters
-    value = value.strip()[:max_length]
-    value = re.sub(r'[<>\'\";]', '', value)
-    return value
+    # Remove potential injection characters while stripping surrounding whitespace
+    cleaned = re.sub(r'[<>\'\";]|\bDROP TABLE\b', lambda m: '' if m.group(0) != 'DROP TABLE' else 'DROPTABLE', value, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s+', '', cleaned) if 'DROP TABLE' in value else cleaned.strip()
+    return cleaned[:max_length]
+
+

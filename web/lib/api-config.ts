@@ -1,7 +1,7 @@
 /// <reference types="node" />
 
 export const BACKEND_URL =
-  process.env.ATE_BACKEND_URL || 'http://113.173.192.226:8848';
+  process.env.ATE_BACKEND_URL || 'http://localhost:8005';
 
 export const ATE_MT5_API =
   process.env.ATE_MT5_API ||

@@ -1874,6 +1874,20 @@ if __name__ == "__main__":
    (nếu lệch nhiều → có bias chưa phát hiện trong bước backtest)
 ```
 
+## 12.5 Các compoment cuuar các phương pháp trade
+
+
+- **Price Action:**
+Trend, Swing, HH, HL, LH, LL, Support Resistance, Trendline, Channel, Range, Breakout, Pullback, Retest, Fake Breakout, Pin Bar, Engulfing, Inside Bar, Outside Bar, Doji, Morning Star, Evening Star, Hammer, Shooting Star, Tweezer Top, Tweezer Bottom, Marubozu, Three White Soldiers, Three Black Crows
+
+- **Smart Money Concepts (SMC):**
+Market Structure, BOS, CHoCH, MSS, Liquidity, Liquidity Sweep, Equal Highs, Equal Lows, Internal Liquidity, External Liquidity, Order Block, Breaker Block, Mitigation Block, Rejection Block, FVG, IFVG, Imbalance, Premium, Discount, Equilibrium, Dealing Range, Inducement, Stop Hunt, Supply/Demand, Volume Imbalance, Liquidity Void
+
+- **ICT (Inner Circle Trader):**
+BOS, CHoCH, MSS, OB, FVG, IFVG, BPR, PD Array, OTE, Fibonacci 62–79%, Premium/Discount, Dealing Range, Dealing Curve, Liquidity Pool, Liquidity Void, Turtle Soup, Judas Swing, SMT Divergence, AMD, PO3 (Power of Three), Kill Zone, Silver Bullet, Unicorn Model, Session High/Low, Previous Day High/Low (PDH/PDL), Weekly High/Low, Monthly High/Low
+
+- **Sniper:**
+Trend Following, EMA 9/21 Crossover, EMA Ribbon, VWAP, ADX, RSI, MACD, Momentum Confirmation, Volume Confirmation, Breakout, Breakout Confirmation, Pullback, Retest, Support/Resistance Confluence, Dynamic Support/Resistance, Supply/Demand Zone, Market Structure Confirmation, BOS Confirmation, CHoCH Confirmation, Liquidity Sweep, False Breakout, Entry Zone, Precision Entry, Stop Loss Placement, Take Profit Placement, Risk/Reward Ratio, Multi-Timeframe Confirmation, Session Filter, Volatility Filter, Spread Filter, News Filter, Trade Confirmation, Buy Setup, Sell Setup, Entry Signal, Exit Signal, Trailing Stop, Break-Even, Partial Take Profit, Trade Management, Confluence Score
 ---
 
 ## TỔNG KẾT
@@ -1903,3 +1917,6 @@ Copyright (c) 2026 QTusdev — All rights reserved.
 
 - Chỉ dùng cho mục đích nghiên cứu, backtesting, giao dịch cá nhân.
 - Nghiêm cấm sao chép toàn bộ hoặc một phần tài liệu/code để bán, phân phối thương mại, hoặc sử dụng trong sản phẩm thương mại khác mà không có sự đồng ý bằng văn bản từ tác giả.
+
+
+

@@ -96,14 +96,16 @@ export default function ControlCenter() {
   const aiLoop = status?.safeguards?.ai_auto_loop || false;
   const currentMethod = aiConfig?.trading_method || status?.safeguards?.trading_method || 'SMC';
 
-  // FIX LỖI 5: All trading methods supported - SNIPER, SMC, ICT, PRICE_ACTION
-  const methods = ['SNIPER', 'SMC', 'ICT', 'PRICE_ACTION'];
+  // All trading methods supported - SNIPER, SMC, ICT, PRICE_ACTION, ULTRA_CONFLUENCE
+  const methods = ['SNIPER', 'SMC', 'ICT', 'PRICE_ACTION', 'ULTRA_CONFLUENCE'];
   const methodLabels: Record<string, string> = {
     'SNIPER': 'SNIPER',
     'SMC': 'SMC',
     'ICT': 'ICT',
     'PRICE_ACTION': 'PA',
+    'ULTRA_CONFLUENCE': 'ULTRA',
   };
+
 
   return (
     <div style={{ fontFamily: C.sans, height: '100%', overflow: 'auto', background: 'rgba(5,7,12,0.95)' }}>

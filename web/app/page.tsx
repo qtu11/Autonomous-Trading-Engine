@@ -12,6 +12,8 @@ import {
   type LogEntry, type BrainState,
   type MarkupResponse,
 } from '../lib/api';
+import { useFetchInterval } from '../lib/hooks/useFetchInterval';
+import { C } from '../lib/design-tokens';
 import ControlCenter from './components/ControlCenter';
 import EconomicCalendar from './components/EconomicCalendar';
 import TradingChart from './components/TradingChart';
@@ -25,29 +27,6 @@ import TradeJournal from './components/TradeJournal';
 import QuickTradePanel from './components/QuickTradePanel';
 import SettingsModal from './components/SettingsModal';
 
-// Design System
-const C = {
-  bgMain: '#020305',
-  panelBg: 'rgba(8, 12, 22, 0.92)',
-  border: 'rgba(255, 255, 255, 0.06)',
-  gold: '#D4B483',
-  goldDim: 'rgba(212, 175, 55, 0.12)',
-  green: '#22d3a0',
-  greenDim: 'rgba(34, 211, 160, 0.15)',
-  red: '#f43f5e',
-  redDim: 'rgba(244, 63, 94, 0.15)',
-  blue: '#38bdf8',
-  blueDim: 'rgba(56, 189, 248, 0.12)',
-  cyan: '#06b6d4',
-  amber: '#f59e0b',
-  amberDim: 'rgba(245, 158, 11, 0.15)',
-  text: '#f8fafc',
-  dim: '#cbd5e1',
-  muted: '#64748b',
-  mono: '"JetBrains Mono", monospace',
-  sans: '"Inter", -apple-system, sans-serif',
-};
-
 // Panel Component
 function Panel({ children, title, live, style, className }: {
   children: React.ReactNode;
@@ -58,7 +37,7 @@ function Panel({ children, title, live, style, className }: {
 }) {
   return (
     <div className={className} style={{
-      background: C.panelBg, backdropFilter: 'blur(20px)',
+      background: C.bgPanel, backdropFilter: 'blur(20px)',
       borderRadius: 10, overflow: 'hidden', display: 'flex', flexDirection: 'column',
       position: 'relative', ...style,
     }}>
@@ -91,6 +70,7 @@ interface ChatMessage { role: 'user' | 'ai'; content: string; timestamp: string;
 export default function DashboardPage() {
   const router = useRouter();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
   const [activeTab, setActiveTab] = useState<'positions' | 'orders' | 'history' | 'journal'>('positions');
   const [chartTf, setChartTf] = useState('M15');
   const [showChart, setShowChart] = useState(true);
@@ -119,24 +99,36 @@ export default function DashboardPage() {
   const logsRef = useRef<HTMLDivElement>(null);
   const notifId = useRef(0);
 
-  // Auth check
+  // PHASE 1.2: Real server-side auth check
   useEffect(() => {
-    const token = localStorage.getItem('quantai_auth_token');
-    if (!token) { router.replace('/login'); return; }
-    setIsAuthenticated(true);
+    (async () => {
+      try {
+        const res = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' });
+        if (res.ok) {
+          setIsAuthenticated(true);
+        } else {
+          router.replace('/login');
+        }
+      } catch {
+        router.replace('/login');
+      } finally {
+        setAuthChecked(true);
+      }
+    })();
   }, [router]);
 
   // Add notification
   const addNotif = useCallback((message: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
     const id = ++notifId.current;
     setNotifications(prev => [...prev, { id, message, type }]);
-    setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 5000);
+    // PHASE 4: Per-type timeout (info 3s, warning 6s, error 10s, success 4s)
+    const timeout = type === 'error' ? 10000 : type === 'warning' ? 6000 : type === 'success' ? 4000 : 3000;
+    setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), timeout);
   }, []);
 
-  // Data polling
-  const loadAll = useCallback(async () => {
-    if (!isAuthenticated) return;
-    try {
+  // PHASE 1.2: Use useFetchInterval to prevent memory leak + cancel in-flight
+  useFetchInterval(
+    async () => {
       const [s, ps, m, h, po, l, b, cc] = await Promise.all([
         fetchStatus().catch(() => null),
         fetchPositions().catch(() => []),
@@ -147,36 +139,48 @@ export default function DashboardPage() {
         fetchBrain().catch(() => null),
         fetchControlCenterStatus().catch(() => null),
       ]);
-      setStatus(s); setPositions(ps || []);
-      if (m) setMarket(m);
-      setHistory(h || []);
-      setPendingOrders(po || []); setLogs(l || []); setBrain(b); setCcStatus(cc);
-    } catch { /* silent */ }
-  }, [isAuthenticated, selectedSymbol, chartTf]);
-
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    loadAll();
-    const interval = setInterval(loadAll, 2000);
-    return () => clearInterval(interval);
-  }, [isAuthenticated, loadAll]);
+      return { s, ps, m, h, po, l, b, cc };
+    },
+    2000,
+    [isAuthenticated, selectedSymbol, chartTf],
+    (data) => {
+      if (!data) return;
+      setStatus(data.s);
+      setPositions(data.ps || []);
+      if (data.m) setMarket(data.m);
+      setHistory(data.h || []);
+      setPendingOrders(data.po || []);
+      setLogs(data.l || []);
+      setBrain(data.b);
+      setCcStatus(data.cc);
+    }
+  );
 
   // Re-fetch market IMMEDIATELY when trading method changes
+  const tradingMethod = ccStatus?.safeguards?.trading_method;
+  useFetchInterval(
+    async () => fetchMarket(selectedSymbol, chartTf),
+    5000,
+    [isAuthenticated, tradingMethod, selectedSymbol, chartTf],
+    (m) => { if (m) setMarket(m); }
+  );
+
+  // PHASE 1.2: Keyboard shortcuts with Shift modifier (memoized deps, single listener)
+  const handleClosePosition = useCallback(async (ticket?: number) => {
+    if (!ticket) return;
+    try {
+      await fetch('/api/order/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket }) });
+      setPositions(prev => prev.filter(p => p.ticket !== ticket));
+      addNotif('Position closed', 'success');
+    } catch {
+      addNotif('Failed to close', 'error');
+    }
+  }, [addNotif]);
+
   useEffect(() => {
     if (!isAuthenticated) return;
-    const tm = ccStatus?.safeguards?.trading_method;
-    if (!tm) return;
-    let cancelled = false;
-    fetchMarket(selectedSymbol, chartTf).then(m => { if (!cancelled && m) setMarket(m); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [isAuthenticated, ccStatus?.safeguards?.trading_method, selectedSymbol, chartTf]);
-
-  // FIX LỖI 7: Keyboard shortcuts with Shift modifier
-  useEffect(() => {
     const handleKey = async (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-
-      // Shift + Key combos - all require Shift
       if (e.shiftKey) {
         switch (e.key.toUpperCase()) {
           case 'C':
@@ -193,26 +197,11 @@ export default function DashboardPage() {
               addNotif(`AI Auto Loop ${next ? 'ENABLED' : 'DISABLED'}`, next ? 'success' : 'info');
             } catch { addNotif('AI Loop toggle failed', 'error'); }
             break;
-          case 'K':
-            e.preventDefault();
-            addNotif('Kill Switch: Use Control Center button', 'warning');
-            break;
-          case 'E':
-            e.preventDefault();
-            setShowChart(v => !v);
-            break;
-          case 'M':
-            e.preventDefault();
-            setShowCompact(v => !v);
-            break;
-          case 'Q':
-            e.preventDefault();
-            setShowQuickTrade(v => !v);
-            break;
-          case '/':
-            e.preventDefault();
-            setShowShortcuts(v => !v);
-            break;
+          case 'K': e.preventDefault(); addNotif('Kill Switch: Use Control Center button', 'warning'); break;
+          case 'E': e.preventDefault(); setShowChart(v => !v); break;
+          case 'M': e.preventDefault(); setShowCompact(v => !v); break;
+          case 'Q': e.preventDefault(); setShowQuickTrade(v => !v); break;
+          case '/': e.preventDefault(); setShowShortcuts(v => !v); break;
           case '1': setChartTf('M1'); break;
           case '2': setChartTf('M5'); break;
           case '3': setChartTf('M15'); break;
@@ -221,61 +210,48 @@ export default function DashboardPage() {
         }
         return;
       }
-
-      // Normal keys without shift
-      switch (e.key.toLowerCase()) {
-        case 'escape':
-          setShowShortcuts(false);
-          setShowQuickTrade(false);
-          setShowSettings(false);
-          break;
-        case '?':
-          setShowShortcuts(v => !v);
-          break;
-      }
+      if (e.key === 'Escape') { setShowShortcuts(false); setShowQuickTrade(false); setShowSettings(false); }
+      if (e.key === '?') setShowShortcuts(v => !v);
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [positions, ccStatus, addNotif]);
+  }, [positions, ccStatus, isAuthenticated, addNotif, handleClosePosition]);
 
   // Auto-scroll
   useEffect(() => { if (chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight; }, [chatHistory]);
   useEffect(() => { if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight; }, [logs]);
 
-  // FIX LỖI 8: SSE stream for AI Copilot
+  // PHASE 1.2: SSE for AI Copilot (with reconnect)
   useEffect(() => {
     if (!isAuthenticated) return;
     let es: EventSource | null = null;
-    let retryTimeout: ReturnType<typeof setTimeout>;
+    let retryId: ReturnType<typeof setTimeout> | null = null;
 
     const connect = () => {
       try {
         es = new EventSource('/api/copilot/stream');
-
         es.onmessage = (ev) => {
           try {
             const raw = ev.data;
             if (!raw || raw === ': keepalive') return;
             const data = JSON.parse(raw);
-            if (!data || !data.id) return;
+            if (!data?.id) return;
             setCopilotEvents(prev => {
               const next = [...prev, data];
               return next.length > 200 ? next.slice(-200) : next;
             });
           } catch { /* keepalive */ }
         };
-
         es.onerror = () => {
           es?.close();
-          retryTimeout = setTimeout(connect, 3000);
+          retryId = setTimeout(connect, 3000);
         };
-      } catch { /* SSR or unavailable */ }
+      } catch { /* SSR */ }
     };
-
     connect();
     return () => {
-      clearTimeout(retryTimeout);
-      try { es?.close(); } catch {}
+      if (retryId) clearTimeout(retryId);
+      try { es?.close(); } catch { /* */ }
     };
   }, [isAuthenticated]);
 
@@ -292,11 +268,10 @@ export default function DashboardPage() {
       setChatHistory(prev => [...prev, { role: 'ai', content: res?.text || 'Da xu ly.', timestamp: new Date().toISOString() }]);
     } catch {
       setChatHistory(prev => [...prev, { role: 'ai', content: 'Loi. Thu lai.', timestamp: new Date().toISOString() }]);
-    }
-    finally { setCopilotTyping(false); }
+    } finally { setCopilotTyping(false); }
   };
 
-  // Metrics
+  // Derived metrics
   const openPnl = positions.reduce((s, p) => s + (p.profit || 0), 0);
   const realizedPnl = status?.today_performance?.realized_pl || 0;
   const totalPnl = openPnl + realizedPnl;
@@ -307,11 +282,9 @@ export default function DashboardPage() {
   const todayPerf = status?.today_performance;
   const winRate = todayPerf?.trades_today ? ((todayPerf.wins / todayPerf.trades_today) * 100).toFixed(0) : '65';
 
-  // FIX LỖI 3: AI Brain - Real sentiment from confluence score
   const aiSignal = brain?.recent_decisions?.[0];
   const aiBias = aiSignal?.action === 'BUY' ? 'BULLISH' : aiSignal?.action === 'SELL' ? 'BEARISH' : 'NEUTRAL';
 
-  // Real sentiment computed from confluence score (priority: markup.confluence > brain.confidence > strategy.win_rate)
   const realSentiment = (() => {
     const confluenceScore = market?.markup?.confluence?.score;
     if (typeof confluenceScore === 'number' && confluenceScore > 0) {
@@ -327,41 +300,33 @@ export default function DashboardPage() {
     return 50;
   })();
 
-  // Actions
-  const handleClosePosition = async (ticket?: number) => {
-    if (!ticket) return;
-    try {
-      await fetch('/api/order/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket }) });
-      setPositions(prev => prev.filter(p => p.ticket !== ticket));
-      addNotif('Position closed', 'success');
-    }
-    catch { addNotif('Failed to close', 'error'); }
-  };
   const handleCancelOrder = async (ticket?: number) => {
     if (!ticket) return;
     try {
       await fetch('/api/order/cancel_pending', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order_ticket: ticket }) });
       setPendingOrders(prev => prev.filter(o => o.ticket !== ticket));
       addNotif('Order cancelled', 'success');
-    }
-    catch { addNotif('Failed to cancel', 'error'); }
+    } catch { addNotif('Failed to cancel', 'error'); }
   };
   const handleQuickTrade = (order: any) => { addNotif(`Order ${order.type} sent`, 'success'); };
 
-  // FIX LỖI 4: Symbol change handler
   const handleSymbolChange = useCallback((sym: string) => {
     setSelectedSymbol(sym);
-    setMarket(null); // Clear to force re-fetch
+    setMarket(null);
   }, []);
 
-  // AI Auto state
   const aiAutoEnabled = ccStatus?.safeguards?.ai_auto_loop ?? false;
 
+  if (!authChecked) {
+    return (
+      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.muted, fontFamily: C.mono, fontSize: 12 }}>
+        AUTHENTICATING...
+      </div>
+    );
+  }
   if (!isAuthenticated) return null;
 
   const notifColors = { info: C.blue, success: C.green, warning: C.amber, error: C.red };
-
-  // Grid template - FIX LỖI 8: Proper layout for COMPACT vs EXPAND
   const gridCols = showCompact ? '240px 1fr 280px' : '280px 1fr 280px';
 
   return (
@@ -369,7 +334,7 @@ export default function DashboardPage() {
       {/* KEYBOARD SHORTCUTS MODAL */}
       {showShortcuts && (
         <div onClick={() => setShowShortcuts(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.8)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-          <div onClick={e => e.stopPropagation()} style={{ background: C.panelBg, border: `1px solid ${C.gold}`, borderRadius: 12, padding: 24, minWidth: 320 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: C.bgPanel, border: `1px solid ${C.gold}`, borderRadius: 12, padding: 24, minWidth: 320 }}>
             <div style={{ fontSize: 12, fontFamily: C.mono, fontWeight: 800, color: C.gold, marginBottom: 16, textAlign: 'center' }}>KEYBOARD SHORTCUTS</div>
             {[
               ['Shift + C', 'Close position'],
@@ -397,7 +362,7 @@ export default function DashboardPage() {
       <div style={{ position: 'fixed', top: 60, right: 16, zIndex: 999, display: 'flex', flexDirection: 'column', gap: 6 }}>
         {notifications.map(n => (
           <div key={n.id} style={{
-            padding: '8px 16px', background: C.panelBg, border: `1px solid ${notifColors[n.type]}`,
+            padding: '8px 16px', background: C.bgPanel, border: `1px solid ${notifColors[n.type]}`,
             borderRadius: 8, color: notifColors[n.type], fontSize: 9, fontFamily: C.mono, fontWeight: 700,
             boxShadow: `0 4px 16px rgba(0,0,0,0.5)`,
           }}>
@@ -444,7 +409,6 @@ export default function DashboardPage() {
 
         <div style={{ flex: 1 }} />
 
-        {/* FIX LỖI 6: AI Auto dot indicator */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div style={{
             width: 10, height: 10, borderRadius: '50%',
@@ -474,7 +438,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* MAIN CONTENT - FIX LỖI 8: Proper 3-column grid */}
+      {/* MAIN CONTENT */}
       <div style={{
         flex: 1, display: 'grid',
         gridTemplateColumns: gridCols,
@@ -493,7 +457,6 @@ export default function DashboardPage() {
                 <div style={{ width: 6, height: 6, borderRadius: '50%', background: C.green, boxShadow: `0 0 8px ${C.green}`, animation: 'pulse 2s infinite' }} />
                 <span style={{ fontSize: 9, fontFamily: C.mono, fontWeight: 700, color: C.gold, letterSpacing: '0.1em', textTransform: 'uppercase' }}>Control Center</span>
               </div>
-              {/* FIX LỖI 9: Gear icon opens Settings Modal */}
               <button
                 onClick={() => setShowSettings(true)}
                 title="Settings"
@@ -516,7 +479,6 @@ export default function DashboardPage() {
             </div>
           </Panel>
 
-          {/* Equity Curve - only in EXPAND */}
           {!showCompact && (
             <div style={{ height: 160, flexShrink: 0 }}>
               <EquityCurve currentEquity={equity} initialBalance={balance} />
@@ -539,7 +501,6 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* Positions - FIX LỖI 8: Always visible in EXPAND */}
           {!showCompact && (
             <div style={{ flex: '0 0 180px', overflow: 'hidden' }}>
               <Panel title="Positions" live style={{ height: '100%' }}>
@@ -598,18 +559,15 @@ export default function DashboardPage() {
 
         {/* RIGHT COLUMN */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0, overflow: 'hidden' }}>
-          {/* Watchlist - FIX LỖI 4: Click to change chart symbol */}
           <div style={{ flexShrink: 0, maxHeight: showCompact ? 200 : 220 }}>
             <Panel title="Watchlist" live style={{ height: '100%' }}>
               <Watchlist onSymbolSelect={handleSymbolChange} selectedSymbol={selectedSymbol} />
             </Panel>
           </div>
 
-          {/* AI Brain */}
           <div style={{ flex: showCompact ? 1 : 1, minHeight: 0, overflow: 'hidden' }}>
             <Panel title="AI Brain" live style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
               <div style={{ flex: 1, overflow: 'auto', padding: 8 }}>
-                {/* FIX LỖI 3: Sentiment from real confluence data */}
                 <SentimentGauge bullishPercent={realSentiment} label="MARKET SENTIMENT" />
 
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, margin: '12px 0' }}>
@@ -645,7 +603,6 @@ export default function DashboardPage() {
             </Panel>
           </div>
 
-          {/* Pattern Alerts - FIX LỖI 8: Always visible in EXPAND */}
           {!showCompact && (
             <div style={{ flexShrink: 0, maxHeight: 160 }}>
               <Panel title="Alerts" live style={{ height: '100%' }}>
@@ -654,7 +611,6 @@ export default function DashboardPage() {
             </div>
           )}
 
-          {/* AI Copilot - FIX LỖI 8: Always visible in EXPAND */}
           {!showCompact && (
             <div style={{ flexShrink: 0, height: 260, display: 'flex', flexDirection: 'column' }}>
               <Panel style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -755,10 +711,11 @@ export default function DashboardPage() {
 
       <QuickTradePanel isOpen={showQuickTrade} onClose={() => setShowQuickTrade(false)} onExecute={handleQuickTrade} currentPrice={market?.candles?.[market.candles.length - 1]?.c || 2845} />
 
-      {/* SETTINGS MODAL - FIX LỖI 9: Full settings with gear icon */}
-      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} onUpdated={loadAll} />
+      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} onUpdated={() => {
+        // Force refetch
+        setMarket(null);
+      }} />
 
-      {/* Risk Calculator in COMPACT */}
       {showCompact && (
         <div style={{ position: 'fixed', bottom: 90, right: showCompact ? 20 : 340, zIndex: 50 }}>
           <RiskCalculator accountBalance={balance} onQuickTrade={handleQuickTrade} />

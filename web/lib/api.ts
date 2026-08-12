@@ -95,7 +95,7 @@ export async function analyzeNewsEvent(news: { title: string; impact?: string; a
 export async function updateControlMode(mode: string) { return postJson<{ status: string }>(`${API_BASE}/api/control-center/mode`, { mode }); }
 export async function updateControlKillSwitch(active: boolean) { return postJson<{ status: string }>(`${API_BASE}/api/control-center/kill-switch`, { active }); }
 export async function updateControlDemoArm(armed: boolean) { return postJson<{ status: string }>(`${API_BASE}/api/control-center/demo-arm`, { armed }); }
-export async function updateAiAutoLoop(armed: boolean) { return postJson<{ status: string }>(`${API_BASE}/api/control-center/ai-loop`, { armed }); }
+export async function updateAiAutoLoop(enabled: boolean) { return postJson<{ status: string }>(`${API_BASE}/api/control-center/ai-loop`, { enabled }); }
 export async function updateTradingMethod(method: string) { return postJson<{ status: string; trading_method: string }>(`${API_BASE}/api/control-center/trading-method`, { trading_method: method }); }
 
 export async function loginMT5Account(login: number, password: string, server: string) {
