@@ -52,14 +52,16 @@ export default function PatternAlert({ patterns = [], onViewChart }: PatternAler
     let cancelled = false;
     const load = async () => {
       try {
-        const res = await fetch('/api/patterns?symbol=XAUUSD&tf=M15');
+        const token = localStorage.getItem('quantai_auth_token') || '';
+        const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {};
+        const res = await fetch('/api/patterns?symbol=XAUUSD&tf=M15', { headers, credentials: 'same-origin' });
         if (!res.ok || cancelled) return;
         const data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          // Show only the most recent 5 patterns (avoid spamming)
-          const fresh = data.slice(0, 5);
-          setAlerts(fresh);
+        const items = Array.isArray(data) ? data : (Array.isArray(data?.patterns) ? data.patterns : []);
+        if (items.length > 0) {
+          setAlerts(items.slice(0, 5));
         }
+
       } catch { /* silent */ }
     };
     load();

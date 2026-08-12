@@ -340,7 +340,10 @@ export default function TradingChart({
     const fetchData = async () => {
       try {
         const count = TIMEFRAME_CANDLES[localTf] || 4800;
-        const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(localTf)}&count=${count}`);
+        const token = localStorage.getItem('quantai_auth_token') || '';
+        const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {};
+        const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(localTf)}&count=${count}`, { headers, credentials: 'same-origin' });
+
         const data = await res.json();
         if (data.candles && isMountedRef.current) setCandles(data.candles);
         if (data.markup && isMountedRef.current) setMarkupData(data.markup);

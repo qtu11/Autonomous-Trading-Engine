@@ -200,10 +200,15 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                   </div>
                   <Toggle on={!!cfg.kill_switch} onChange={(v: boolean) => update({ kill_switch: v })} color="red" />
                 </div>
-                <button onClick={() => fetch('/api/order/close_all', { method: 'POST' }).then(onClose)} style={{
+                <button onClick={() => {
+                  const token = localStorage.getItem('quantai_auth_token') || '';
+                  const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {};
+                  fetch('/api/order/close_all', { method: 'POST', headers, credentials: 'same-origin' }).then(onClose);
+                }} style={{
                   width: '100%', padding: '8px', background: C.redDim, border: `1px solid ${C.red}`,
                   borderRadius: 6, color: C.red, fontSize: 9, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer',
                 }}>CLOSE ALL POSITIONS NOW</button>
+
               </Card>
             </div>
           )}

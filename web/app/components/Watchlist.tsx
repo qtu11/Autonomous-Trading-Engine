@@ -31,8 +31,10 @@ const DEFAULT_SYMBOLS = [
 
 async function fetchQuote(symbol: string): Promise<{ price: number; change: number } | null> {
   try {
-    const tf = symbol === 'XAUUSD' || symbol === 'BTCUSDT' ? 'H1' : 'H1';
-    const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${tf}&count=2`);
+    const tf = 'H1';
+    const token = typeof window !== 'undefined' ? localStorage.getItem('quantai_auth_token') || '' : '';
+    const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {};
+    const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${tf}&count=2`, { headers, credentials: 'same-origin' });
     if (!res.ok) return null;
     const data = await res.json();
     if (!data.candles || data.candles.length < 2) return null;
@@ -44,6 +46,7 @@ async function fetchQuote(symbol: string): Promise<{ price: number; change: numb
     return { price, change };
   } catch { return null; }
 }
+
 
 // Correlation data (simplified)
 const CORRELATION_MATRIX = [

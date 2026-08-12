@@ -63,24 +63,7 @@ export async function authedProxy(
 }
 
 function requireAdminOnly(req: AuthRequest, res: NextApiResponse) {
-  // Inline to avoid circular imports
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  if (!token) {
-    res.status(401).json({ error: 'Missing Bearer token' });
-    return null;
-  }
-  // Re-use requireAuth logic via internal verify
-  const { verifyToken } = require('./auth') as any;
-  const payload = verifyToken(token);
-  if (!payload) {
-    res.status(401).json({ error: 'Invalid token' });
-    return null;
-  }
-  if (payload.role !== 'admin') {
-    res.status(403).json({ error: 'Admin required' });
-    return null;
-  }
-  req.user = payload;
-  return payload;
+  const { requireAdmin } = require('./auth') as any;
+  return requireAdmin(req, res);
 }
+
