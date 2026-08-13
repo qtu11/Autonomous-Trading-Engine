@@ -6,8 +6,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).end();
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
   try {
-    const body = JSON.stringify(req.body);
+    const body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
 
     const response = await fetch(`${BACKEND_URL}/api/v1/bridge/commands/claim`, {
       method: 'POST',
@@ -16,14 +19,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         'Authorization': (req.headers.authorization as string) || '',
       },
       body,
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     const data = await response.json().catch(() => ({ raw: 'ok' }));
     return res.status(response.status).json(data);
-  } catch (error) {
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    const isAbort = error?.name === 'AbortError';
     return res.status(502).json({
       error: 'Backend unavailable',
-      details: error instanceof Error ? error.message : 'Unknown error',
+      details: isAbort
+        ? `Request timed out connecting to ${BACKEND_URL}`
+        : error instanceof Error
+        ? error.message
+        : 'Unknown error',
+      backend_target: BACKEND_URL,
     });
   }
 }
+

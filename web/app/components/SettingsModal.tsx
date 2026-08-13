@@ -168,21 +168,20 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                 <Row label="Balance" value={`$${Number(acc.balance || 0).toFixed(2)}`} />
                 <Row label="Equity" value={`$${Number(acc.equity || 0).toFixed(2)}`} />
                 <Row label="MT5 Connected" value={acc.mt5_connected ? 'YES' : 'NO'} valueColor={acc.mt5_connected ? C.green : C.red} />
-                {/* BUG FIX: hiển thị trạng thái EA thật (telemetry) + nguồn dữ liệu */}
                 <Row label="EA Telemetry" value={acc.ea_connected ? 'ONLINE' : 'NO SIGNAL'} valueColor={acc.ea_connected ? C.green : C.red} />
                 <Row label="Data Status" value={(acc.data_status || 'STUB') === 'LIVE' ? 'LIVE (MT5)' : 'STUB (fake)'} valueColor={acc.data_status === 'LIVE' ? C.green : C.gold} />
                 <Row label="Last Telemetry" value={acc.last_ea_telemetry_at ? new Date(acc.last_ea_telemetry_at).toLocaleTimeString('en-US', { hour12: false }) : 'NEVER'} valueColor={acc.last_ea_telemetry_at ? C.dim : C.red} />
                 <Row label="Execution Mode" value={cfg.execution_mode || 'DEMO'} />
                 <Row label="Active Symbol" value={cfg.symbol || 'XAUUSD'} />
                 <Row label="Timeframe" value={cfg.timeframe || 'M15'} />
+                <Row label="EA Executor ID" value={acc.ea_executor_id || 'ate-ea-local'} valueColor={C.gold} />
                 {!acc.ea_connected && (
                   <div style={{ marginTop: 8, padding: '8px 10px', background: 'rgba(244,63,94,0.06)', border: `1px solid rgba(244,63,94,0.25)`, borderRadius: 6, fontSize: 8, fontFamily: C.mono, color: C.dim, lineHeight: '15px' }}>
-                    ⚠ EA CHƯA GỬI TELEMETRY — MT5 không hiện trên web.
-                    <br />• Nguyên nhân #1: EA gửi telemetry về BACKEND A nhưng web này đang đọc BACKEND B (Docker cloudlocal vs python native 8005). Chỉ được chạy <b>MỘT backend</b>.
-                    <br />• Nếu dùng Docker/cloud: EA InpApiUrl = <b>https://autonomous-trading-engine.vercel.app/api/v1/</b> (Vercel → nginx 8848 → Docker backend). Mở dashboard ở <b>http://localhost:8848</b> (hoặc http://localhost cổng 80 / URL vercel.app) — KHÔNG phải localhost:3000 (cổng 3000 không mở ra ngoài trong Docker). KHÔNG chạy thêm python dashboard/server.py.
-                    <br />• Nếu dùng native: EA InpApiUrl = <b>http://{'<IP-LAN>'}:8005/api/v1/</b>; MT5 allowlist thêm <b>http://{'<IP-LAN>'}:8005</b>; chạy <b>python dashboard/server.py</b>; mở dashboard ở localhost:3000 (next dev).
-                    <br />• MT5 allowlist nên thêm nguyên hostname (KHÔNG kèm đường dẫn): <b>https://autonomous-trading-engine.vercel.app</b> hoặc <b>http://{'<IP-LAN>'}:8005</b> — nếu không các endpoint /api/* khác (calendar, markup...) sẽ bị chặn.
-                    <br />• Bật Algo Trading; log MT5 phải có <b>TELEMETRY_OK</b> hoặc <b>CANDLES_PUSH_OK</b>
+                    ⚠ EA CHƯA KẾT NỐI VỚI VERCEL WEB BACKEND PROXY:
+                    <br />• Cần cấu hình biến môi trường <b>ATE_BACKEND_URL</b> trong Vercel Project Settings trỏ về Public IP / Cloudflare Tunnel của PC (ví dụ: <code>https://xxxx.trycloudflare.com</code> hoặc <code>http://&lt;PUBLIC_IP&gt;:8848</code>).
+                    <br />• Trong MT5 EA cài <b>InpApiUrl = https://autonomous-trading-engine.vercel.app/api/v1/</b>
+                    <br />• MT5 WebRequest Allowlist bắt buộc thêm <b>https://autonomous-trading-engine.vercel.app</b>
+                    <br />• Đảm bảo nút <b>Algo Trading</b> trong MT5 đã bật (màu xanh).
                   </div>
                 )}
               </Card>

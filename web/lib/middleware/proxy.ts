@@ -23,13 +23,23 @@ export async function authedProxy(
   if (!user) return;
 
   const method = options.method || req.method || 'GET';
-  const url = new URL(BACKEND_URL + options.path);
+  const targetPath = options.path.startsWith('/') ? options.path : `/${options.path}`;
+  const url = new URL(`${BACKEND_URL}${targetPath}`);
 
-  // Forward query params
+  // Forward query params (excluding Next.js internal params)
   Object.entries(req.query).forEach(([key, value]) => {
-    if (key === '_next' || value === undefined || value === null) return;
+    if (
+      key === '_next' ||
+      key === 'slug' ||
+      key === 'path' ||
+      value === undefined ||
+      value === null
+    ) return;
     url.searchParams.append(key, String(value));
   });
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
   try {
     let authHeader = (req.headers.authorization as string) || '';
@@ -43,7 +53,7 @@ export async function authedProxy(
       if (token && token !== 'authenticated') {
         authHeader = `Bearer ${token}`;
       } else {
-        const bridgeToken = process.env.QUANTAI_BRIDGE_TOKEN || 'openssl_rand_hex_32';
+        const bridgeToken = process.env.QUANTAI_BRIDGE_TOKEN || '20022007@Tu';
         authHeader = `Bearer ${bridgeToken}`;
       }
     }
@@ -55,25 +65,42 @@ export async function authedProxy(
       'X-User-Role': user.role,
     };
 
+    const init: RequestInit = {
+      method,
+      headers,
+      signal: controller.signal,
+    };
 
-    const init: RequestInit = { method, headers };
-    if (method !== 'GET' && method !== 'HEAD' && req.body) {
-      init.body = JSON.stringify(req.body);
+    if (method !== 'GET' && method !== 'HEAD' && req.body !== undefined && req.body !== null) {
+      init.body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
     }
 
     const response = await fetch(url.toString(), init);
+    clearTimeout(timeoutId);
+
     const setCookie = response.headers.get('set-cookie');
     if (setCookie) res.setHeader('set-cookie', setCookie);
 
     const text = await response.text();
     let data: any;
-    try { data = JSON.parse(text); } catch { data = { raw: text }; }
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { raw: text };
+    }
 
-    res.status(response.status).json(data);
-  } catch (error) {
-    res.status(502).json({
+    return res.status(response.status).json(data);
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    const isAbort = error?.name === 'AbortError';
+    return res.status(502).json({
       error: 'Backend unavailable',
-      details: error instanceof Error ? error.message : 'Unknown error',
+      details: isAbort
+        ? `Request timed out connecting to ${BACKEND_URL}`
+        : error instanceof Error
+        ? error.message
+        : 'Unknown error',
+      backend_target: BACKEND_URL,
     });
   }
 }

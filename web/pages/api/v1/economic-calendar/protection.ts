@@ -3,20 +3,26 @@ import { BACKEND_URL } from '@/lib/api-config';
 
 /**
  * BUG FIX: EA gọi GET /api/v1/economic-calendar/protection (bridge token).
- * Route cũ /api/economic-calendar/protection dùng authedProxy -> yêu cầu web JWT
- * -> EA bị 401 "Invalid or expired token" -> news protection fallback "allow
- * entries" (AI có thể trade vào tin). Route v1 này là proxy MỞ (giống
- * v1/telemetry.ts): forward thẳng Authorization header của EA tới backend.
+ * Forward thẳng Authorization header của EA tới backend.
  */
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
     return res.status(405).end();
   }
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
   try {
     const url = new URL(`${BACKEND_URL}/api/economic-calendar/protection`);
     Object.entries(req.query).forEach(([key, value]) => {
-      if (value === undefined || value === null) return;
+      if (
+        key === '_next' ||
+        key === 'slug' ||
+        key === 'path' ||
+        value === undefined ||
+        value === null
+      ) return;
       url.searchParams.append(key, String(value));
     });
 
@@ -26,14 +32,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         'Content-Type': 'application/json',
         'Authorization': (req.headers.authorization as string) || '',
       },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     const data = await response.json().catch(() => ({ raw: 'ok' }));
     return res.status(response.status).json(data);
-  } catch (error) {
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    const isAbort = error?.name === 'AbortError';
     return res.status(502).json({
       error: 'Backend unavailable',
-      details: error instanceof Error ? error.message : 'Unknown error',
+      details: isAbort
+        ? `Request timed out connecting to ${BACKEND_URL}`
+        : error instanceof Error
+        ? error.message
+        : 'Unknown error',
+      backend_target: BACKEND_URL,
     });
   }
 }
+

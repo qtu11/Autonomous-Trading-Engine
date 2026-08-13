@@ -1686,6 +1686,8 @@ async def login(req: LoginRequest):
     _add_log("WARNING", "LOGIN_FAILED", f"Failed login: {req.login}")
     raise HTTPException(status_code=401, detail="Invalid credentials")
 
+# FIX: Public endpoint - no auth required (dashboard status is public info)
+# Only protected endpoints (order/close, config changes) require auth
 # ─── STATUS ──────────────────────────────────────────────────────────────────
 @app.get("/api/status")
 async def get_status(symbol: str = Query("XAUUSD")):
@@ -2438,6 +2440,7 @@ async def set_demo_arm(request: Request):
     return {"status": "SUCCESS", "demo_armed": armed}
 
 # ─── CONTROL CENTER STATUS ────────────────────────────────────────────────────
+# FIX: Public endpoint - no auth required (dashboard status is public info)
 @app.get("/api/control-center/status")
 async def get_control_center_status():
     """Get full control center status"""
