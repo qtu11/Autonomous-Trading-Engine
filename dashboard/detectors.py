@@ -11,6 +11,7 @@ from datetime import time as dtime
 from enum import Enum
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 
@@ -76,13 +77,16 @@ def df_to_candles(df: pd.DataFrame) -> list[Candle]:
     time_col = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
     for i, row in df.iterrows():
         candles.append(
+                # pyrefly: ignore [bad-argument-type]
             Candle(
+                # pyrefly: ignore [bad-argument-type]
                 index=i,
                 time=pd.to_datetime(row[time_col]),
                 open=float(row["open"]),
                 high=float(row["high"]),
                 low=float(row["low"]),
                 close=float(row["close"]),
+                # pyrefly: ignore [bad-argument-type]
                 volume=float(row.get("tick_volume", row.get("real_volume", row.get("volume", 0.0)))),
             )
         )
@@ -131,24 +135,33 @@ class PDArray:
 
 def find_swing_points(df: pd.DataFrame, window: int = 2) -> pd.DataFrame:
     df = df.copy()
-    df["swing_high"] = False
-    df["swing_low"] = False
-
-    highs = df["high"].values
-    lows = df["low"].values
     n = len(df)
+
+    # BUG FIX (CRITICAL - web chart 500): dùng numpy bool array theo VỊ TRÍ thay vì
+    # df.at[i, ...] theo LABEL. Khi df bị slice (vd build_chart_markup cắt
+    # m15.tail(2000) -> index 38000..39999), df.at[i, ...] với i nhỏ gán vào index
+    # KHÔNG tồn tại -> pandas thêm row mới toàn NaN -> swing_high chứa NaN ->
+    # "Cannot mask with non-boolean array containing NA" -> /api/market HTTP 500
+    # -> web không hiện chart cho M1/M5 (>=2000 nến).
+    swing_high = np.zeros(n, dtype=bool)
+    swing_low = np.zeros(n, dtype=bool)
+
+    highs = df["high"].to_numpy()
+    lows = df["low"].to_numpy()
 
     for i in range(window, n - window):
         left_h = highs[i - window:i]
         right_h = highs[i + 1:i + window + 1]
         if highs[i] > left_h.max() and highs[i] > right_h.max():
-            df.at[i, "swing_high"] = True
+            swing_high[i] = True
 
         left_l = lows[i - window:i]
         right_l = lows[i + 1:i + window + 1]
         if lows[i] < left_l.min() and lows[i] < right_l.min():
-            df.at[i, "swing_low"] = True
+            swing_low[i] = True
 
+    df["swing_high"] = swing_high
+    df["swing_low"] = swing_low
     return df
 
 
@@ -156,6 +169,7 @@ def get_last_swing_points(df: pd.DataFrame, n: int = 5) -> dict[str, list[dict[s
     time_col = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
     swing_highs = df[df["swing_high"]].tail(n)[[time_col, "high"]].to_dict("records")
     swing_lows = df[df["swing_low"]].tail(n)[[time_col, "low"]].to_dict("records")
+    # pyrefly: ignore [bad-assignment]
     return {"swing_highs": swing_highs, "swing_lows": swing_lows}
 
 
@@ -514,7 +528,9 @@ def get_asian_range(df_m15: pd.DataFrame, broker_utc_offset_hours: float = 2.0) 
     df = df_m15.copy()
     time_col = 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
     df["vn_time"] = df[time_col] - pd.Timedelta(hours=broker_utc_offset_hours) + pd.Timedelta(hours=7)
+    # pyrefly: ignore [missing-attribute]
     df["vn_date"] = df["vn_time"].dt.date
+    # pyrefly: ignore [missing-attribute]
     df["vn_hour_float"] = df["vn_time"].dt.hour + df["vn_time"].dt.minute / 60.0
 
     if df.empty:
@@ -600,7 +616,9 @@ def get_htf_bias_from_pd_zone(current_price: float, pd_zone: dict[str, float]) -
 def detect_market_structure(df: pd.DataFrame, window: int = 2, n: int = 6) -> dict[str, Any]:
     """Gán nhãn HH/HL/LH/LL cho các swing gần nhất và phân loại cấu trúc hiện tại."""
     swings = find_swing_points(df, window)
+    # pyrefly: ignore [bad-argument-type]
     h_map = {int(idx): float(row["high"]) for idx, row in swings[swings["swing_high"]].tail(n).iterrows()}
+    # pyrefly: ignore [bad-argument-type]
     l_map = {int(idx): float(row["low"]) for idx, row in swings[swings["swing_low"]].tail(n).iterrows()}
 
     events = sorted(set(h_map) | set(l_map))
@@ -642,7 +660,9 @@ def detect_bos_choch(candles: list[Candle], swing_df: pd.DataFrame, current_inde
         return {}
     current = candles[current_index]
 
+    # pyrefly: ignore [bad-argument-type]
     swing_highs = [(int(idx), float(row["high"])) for idx, row in swing_df[swing_df["swing_high"]].iterrows()]
+    # pyrefly: ignore [bad-argument-type]
     swing_lows = [(int(idx), float(row["low"])) for idx, row in swing_df[swing_df["swing_low"]].iterrows()]
 
     highs_before = [h for i, h in swing_highs if i < current_index]
@@ -685,7 +705,9 @@ def detect_trendlines(
     atr_now = float(atr_series.iloc[-1]) if atr_series is not None and len(atr_series) else 1.0
     tol = max(touch_tolerance_atr * atr_now, 1e-9)
 
+    # pyrefly: ignore [bad-argument-type]
     highs = [(int(idx), float(row["high"])) for idx, row in swing_df[swing_df["swing_high"]].tail(n).iterrows()]
+    # pyrefly: ignore [bad-argument-type]
     lows = [(int(idx), float(row["low"])) for idx, row in swing_df[swing_df["swing_low"]].tail(n).iterrows()]
 
     def _fit(points: list[tuple[int, float]], kind: str) -> dict[str, Any] | None:

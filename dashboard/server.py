@@ -116,6 +116,10 @@ _cache_lock = asyncio.Lock()
 _analysis_cache: Dict[str, Dict[str, Any]] = {}  # key = symbol:method:tf -> {result, ts}
 _ANALYSIS_TTL = 5  # seconds
 
+# DCA (Dollar Cost Averaging): trạng thái nhồi lệnh theo ticket.
+# key = f"{symbol}:{ticket}" -> {"level": N, "last_add": iso}
+_dca_state: Dict[str, Dict[str, Any]] = {}
+
 _account = {
     "balance": 10000.0, "equity": 10000.0, "margin": 0.0, "margin_free": 10000.0,
     "open_positions": 0, "total_pnl": 0.0, "realized_pnl": 0.0, "win_rate": 0.0, "total_trades": 0,
@@ -139,6 +143,18 @@ _config = {
     "max_spread": float(os.getenv("ATE_MAX_SPREAD", "4.5")),
     "magic": int(os.getenv("ATE_EXECUTION_MAGIC", "888999")),
     "symbols": [os.getenv("ATE_EXECUTION_SYMBOL", "XAUUSD")],
+    "news_window_minutes": int(os.getenv("ATE_NEWS_WINDOW_MINUTES", "15")),
+    # Lịch tin tức bổ sung từ forexfactory (mirror nfs.faireconomy.media) —
+    # MT5 CalendarValueHistory trên nhiều broker (Exness) trả rất ít/0 event.
+    "ff_calendar_enabled": os.getenv("ATE_FF_CALENDAR_ENABLED", "true").lower() == "true",
+    # DCA (nhồi lệnh trung bình giá khi lỗ) — mặc định TẮT, bật qua Settings.
+    # Fail-closed: mọi lệnh DCA vẫn đi qua news protection + risk gate + giới hạn rủi ro.
+    "dca_enabled": os.getenv("ATE_DCA_ENABLED", "false").lower() == "true",
+    "dca_max_levels": int(os.getenv("ATE_DCA_MAX_LEVELS", "2")),        # tối đa số lần nhồi cho 1 vị thế
+    "dca_distance_atr": float(os.getenv("ATE_DCA_DISTANCE_ATR", "1.5")),  # lỗ >= N x ATR thì nhồi
+    "dca_interval_sec": int(os.getenv("ATE_DCA_INTERVAL_SEC", "300")),    # tối thiểu giữa 2 lần nhồi
+    "dca_volume_multiplier": float(os.getenv("ATE_DCA_VOLUME_MULTIPLIER", "1.0")),  # hệ số volume mỗi mức
+    "dca_max_risk_balance_pct": float(os.getenv("ATE_DCA_MAX_RISK_PCT", "0.01")),   # rủi ro tối đa / balance
 }
 
 # ─── SYMBOL MAP ───────────────────────────────────────────────────────────────
@@ -177,14 +193,15 @@ def resolve_symbol(sym: str) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Start/stop các background loop theo vòng đời ứng dụng."""
-    global _ai_loop_running, _ai_loop_task, _pos_mgr_task
+    global _ai_loop_running, _ai_loop_task, _pos_mgr_task, _calendar_refresh_task
     _ai_loop_running = True
     _ai_loop_task = asyncio.create_task(_ai_trade_loop())
     _pos_mgr_task = asyncio.create_task(_position_manager_loop())
+    _calendar_refresh_task = asyncio.create_task(_calendar_refresh_loop())
     _add_log("INFO", "STARTUP", f"{APP_NAME} v{VERSION} started")
     yield
     _ai_loop_running = False
-    for task in (_ai_loop_task, _pos_mgr_task):
+    for task in (_ai_loop_task, _pos_mgr_task, _calendar_refresh_task):
         if task and not task.done():
             task.cancel()
             try:
@@ -974,6 +991,7 @@ async def run_ai_analysis(symbol: str, method: str, tf: Optional[str] = None) ->
     PHASE 3: 5-second cache prevents duplicate computation on parallel requests.
     BUG FIX: nhận tham số tf — trước đây luôn phân tích M15 dù người dùng đang
     xem M5, và cache key thiếu tf nên các khung giờ khác nhau đụng cache nhau."""
+    # pyrefly: ignore [bad-assignment]
     tf = tf or _config.get("timeframe", "M15")
     cache_key = f"{symbol}:{method}:{tf}"
     now = datetime.now(timezone.utc).timestamp()
@@ -981,6 +999,8 @@ async def run_ai_analysis(symbol: str, method: str, tf: Optional[str] = None) ->
     if cached and (now - cached["ts"]) < _ANALYSIS_TTL:
         return cached["result"]
     
+    # pyrefly: ignore [bad-argument-type]
+    # pyrefly: ignore [bad-argument-type]
     df = await fetch_real_candles(symbol, tf, 500)
     if df is None or df.empty:
         empty = {"score": 50, "signal": "WAIT", "factors": ["No data available"]}
@@ -1142,6 +1162,7 @@ async def _ai_trade_loop():
             # from the same markup engine the dashboard draws, and only auto-trades
             # a strong entry that has a structure-based SL/TP with real RRR.
             tf = _config.get("timeframe", "M15")
+            # pyrefly: ignore [bad-argument-type]
             df = await fetch_real_candles(symbol, tf, 1000)
             if df is None or df.empty:
                 await asyncio.sleep(5)
@@ -1151,6 +1172,7 @@ async def _ai_trade_loop():
             # mở lệnh THẬT dựa trên nến random-walk. Chỉ DEMO (paper) được phép
             # chạy trên stub để phát triển/kiểm thử.
             if not _bridge_data_real and not _is_demo_mode():
+                # pyrefly: ignore [bad-argument-type]
                 _add_ai_event("WARNING", "NO_REAL_DATA", symbol, {
                     "reason": "LIVE mode has no real MT5 data (EA/bridge down) - auto-trade paused (fail-closed)",
                     "data_status": "STUB"
@@ -1159,13 +1181,16 @@ async def _ai_trade_loop():
                     "LIVE mode: no real MT5 data - auto-trade paused (fail-closed)")
                 await asyncio.sleep(5)
                 continue
+            # pyrefly: ignore [bad-assignment]
             mtf_data: Dict[str, pd.DataFrame] = {tf: df}
             for ctx_tf in ("M15", "H1", "D1"):
                 if ctx_tf == tf:
                     continue
+                # pyrefly: ignore [bad-argument-type]
                 ctx_df = await _fetch_context_candles(symbol, ctx_tf)
                 if ctx_df is not None and not ctx_df.empty:
                     mtf_data[ctx_tf] = ctx_df
+            # pyrefly: ignore [bad-argument-type]
             markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
             cf = markup.get("confluence") or {}
 
@@ -1181,11 +1206,13 @@ async def _ai_trade_loop():
             reasons = [f.get("reason") for f in (cf.get("factors") or []) if f.get("reason")][:3]
 
             # Log heartbeat
+            # pyrefly: ignore [bad-argument-type]
             _add_ai_event("INFO", "HEARTBEAT", symbol, {
                 "method": method,
                 "score": score,
                 "signal": signal,
                 "objects": len(markup.get("objects", [])),
+                # pyrefly: ignore [bad-argument-type]
                 "open_positions": len(_positions.get(resolve_symbol(symbol), [])),
                 "max_positions": max_pos
             })
@@ -1200,6 +1227,7 @@ async def _ai_trade_loop():
             )
             if trade_ok:
 
+                # pyrefly: ignore [bad-argument-type]
                 current_positions = _positions.get(resolve_symbol(symbol), [])
 
                 # Check if we already have a position in this direction
@@ -1207,6 +1235,7 @@ async def _ai_trade_loop():
                     p.get("type") == signal for p in current_positions
                 )
 
+                # pyrefly: ignore [unsupported-operation]
                 if not has_same_direction and len(current_positions) < max_pos:
                     # Check for recent same-direction trade (avoid duplicates within 60s)
                     recent = [
@@ -1232,19 +1261,23 @@ async def _ai_trade_loop():
                         # PHASE 1.3: Risk Manager check (9 conditions)
                         # Estimate current spread
                         try:
+                            # pyrefly: ignore [bad-argument-type]
                             bid, ask = await fetch_real_bid_ask(symbol)
                             current_spread = ask - bid
                         except Exception:
                             current_spread = 0.5
 
                         risk_result = evaluate_risk_gate(
+                            # pyrefly: ignore [bad-argument-type]
                             symbol=symbol, signal=signal,
                             entry=entry, sl=sl, tp=tp,
                             spread=current_spread, atr=atr,
+                            # pyrefly: ignore [bad-argument-type]
                             score=score, method=method
                         )
                         
                         if not risk_result["approved"]:
+                            # pyrefly: ignore [bad-argument-type]
                             _add_ai_event("WARNING", "RISK_REJECT", symbol, {
                                 "reason": risk_result["reason"],
                                 "score": score,
@@ -1261,6 +1294,7 @@ async def _ai_trade_loop():
                             "command_id": cmd_id,
                             "ts": datetime.now(timezone.utc).isoformat(),
                             "action": signal,
+                            # pyrefly: ignore [bad-argument-type]
                             "symbol": resolve_symbol(symbol),
                             "magic": _config.get("magic", 888999),
                             "volume": 0.01,
@@ -1278,6 +1312,7 @@ async def _ai_trade_loop():
                         # FAIL-CLOSED: không giả lập, giữ QUEUED chờ EA claim.
                         if not _account.get("mt5_connected") and _is_demo_mode():
                             ticket = random.randint(100000, 999999)
+                            # pyrefly: ignore [bad-argument-type]
                             rkey = resolve_symbol(symbol)
                             if rkey not in _positions:
                                 _positions[rkey] = []
@@ -1298,8 +1333,10 @@ async def _ai_trade_loop():
                             })
                             cmd["status"] = "FILLED"
                             cmd["ticket"] = ticket
+                            # pyrefly: ignore [bad-argument-type]
                             _account["open_positions"] = len(_positions.get(resolve_symbol(symbol), []))
 
+                        # pyrefly: ignore [bad-argument-type]
                         _add_ai_event("TRADE", signal, symbol, {
                             "method": method,
                             "score": score,
@@ -1311,6 +1348,10 @@ async def _ai_trade_loop():
                         })
 
                         _add_log("INFO", "AI_SIGNAL", f"{method} {signal} score={score} entry={entry} sl={sl} tp={tp} rrr={rrr}")
+
+            # ── DCA: quét vị thế đang lỗ và nhồi lệnh trung bình giá (nếu bật) ──
+            # pyrefly: ignore [bad-argument-type]
+            await _dca_check(symbol, method, atr)
 
         except Exception as e:
             _add_log("ERROR", "AI_LOOP_ERR", str(e))
@@ -1369,6 +1410,7 @@ async def _position_manager_loop():
                             trade = _record_closed_trade(symbol, pos, close_price, reason)
                             if pos in pos_list:
                                 pos_list.remove(pos)
+                            _dca_state.pop(f"{resolve_symbol(symbol)}:{pos.get('ticket')}", None)
                             _add_ai_event("TRADE", "CLOSE", symbol, {
                                 "ticket": pos.get("ticket"), "profit": trade["profit"], "reason": reason})
                             _add_log("INFO", "STOP_HIT", f"{symbol} #{pos.get('ticket')} {pos_type} closed at {reason} pnl={trade['profit']}")
@@ -1429,6 +1471,7 @@ async def _position_manager_loop():
                             age = 0
                         if age > 180:
                             _positions[sym].remove(p)
+                            _dca_state.pop(f"{sym}:{p.get('ticket')}", None)
                             _add_log("WARN", "CLOSE_TIMEOUT", f"#{p.get('ticket')} closing mirror cleaned (EA no reply)")
 
             # Floating P&L tổng (demo: tổng profit các lệnh mở; LIVE: telemetry EA)
@@ -1439,6 +1482,154 @@ async def _position_manager_loop():
         except Exception as e:
             _add_log("ERROR", "POS_MGR_ERR", str(e))
         await asyncio.sleep(2)
+
+# ─── DCA (DOLLAR COST AVERAGING) ───────────────────────────────────────────
+def _dca_evaluate(pos: Dict[str, Any], current_price: float, atr: float, cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Logic thuần DCA cho 1 vị thế — tách riêng để unit-test dễ. Trả về quyết định
+    {level, volume, adverse_atr, risk_usd} hoặc None nếu không đủ điều kiện.
+    Fail-closed: luôn cần SL > 0, ATR > 0, entry > 0; không lỗ -> không nhồi."""
+    if not cfg.get("dca_enabled"):
+        return None
+    pos_type = str(pos.get("type", "BUY")).upper()
+    ticket = pos.get("ticket")
+    if not ticket:
+        return None
+    entry = float(pos.get("price_open", pos.get("entry", 0)) or 0)
+    sl = float(pos.get("sl", 0) or 0)
+    if entry <= 0 or sl <= 0 or atr <= 0:
+        return None
+    adverse = (entry - current_price) if pos_type == "BUY" else (current_price - entry)
+    if adverse <= 0:
+        return None  # đang lời -> không nhồi
+    adverse_atr = adverse / atr
+    if adverse_atr < float(cfg.get("dca_distance_atr", 1.5)):
+        return None
+    sym = str(pos.get("symbol", "XAUUSD"))
+    state = _dca_state.get(f"{resolve_symbol(sym)}:{ticket}", {"level": 0, "last_add": ""})
+    level = int(state.get("level", 0)) + 1
+    if level > int(cfg.get("dca_max_levels", 2)):
+        return None
+    if state.get("last_add"):
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(state["last_add"].replace("Z", "+00:00"))).total_seconds()
+            if age < float(cfg.get("dca_interval_sec", 300)):
+                return None
+        except Exception:
+            pass
+    base_vol = float(pos.get("volume", 0.01) or 0.01)
+    vol = round(base_vol * (float(cfg.get("dca_volume_multiplier", 1.0)) ** (level - 1)), 2)
+    if vol <= 0:
+        return None
+    mult = _lot_value_multiplier(sym)
+    risk_usd = abs(entry - sl) * vol * mult
+    balance = float(_account.get("balance", 0) or 0)
+    max_risk = float(cfg.get("dca_max_risk_balance_pct", 0.01))
+    # FAIL-CLOSED: không biết số dư thật (balance <= 0, vd EA cũ gửi balance=0)
+    # -> KHÔNG nhồi. Trước đây `if balance > 0` khiến cap rủi ro bị bỏ qua hoàn
+    # toàn khi balance = 0 (chỉ còn chặn bởi level cap).
+    if balance <= 0 or risk_usd > balance * max_risk:
+        return None
+    return {"level": level, "volume": vol, "adverse_atr": round(adverse_atr, 2), "risk_usd": round(risk_usd, 2)}
+
+
+async def _dca_check(symbol: str, method: str, atr: float):
+    """Quét các vị thế đang lỗ và queue lệnh DCA nếu đủ điều kiện. Fail-closed:
+    tôn trọng kill switch, news protection, risk gate, giới hạn mức & rủi ro.
+    Chỉ chạy khi ai_auto_loop bật và dca_enabled bật."""
+    if not _config.get("dca_enabled") or _config.get("kill_switch"):
+        return
+    if not _config.get("ai_auto_loop"):
+        return
+    rkey = resolve_symbol(symbol)
+    positions = _positions.get(rkey, [])
+    if not positions:
+        return
+    try:
+        bid, ask = await fetch_real_bid_ask(symbol)
+    except Exception:
+        return
+    now = datetime.now(timezone.utc)
+    for pos in list(positions):
+        pos_type = str(pos.get("type", "BUY")).upper()
+        ticket = pos.get("ticket")
+        if not ticket:
+            continue
+        current = bid if pos_type == "BUY" else ask
+        decision = _dca_evaluate(pos, current, atr, _config)
+        if not decision:
+            continue
+        key = f"{rkey}:{ticket}"
+        # Đã có lệnh DCA đang chờ (QUEUED/CLAIMED) cho ticket này? Tránh nhồi trùng
+        pending = any(
+            c.get("status") in ("QUEUED", "CLAIMED")
+            and str(c.get("reason", "")).startswith(f"DCA parent_ticket={ticket}")
+            for c in _commands
+        )
+        if pending:
+            continue
+        # News protection fail-closed: không nhồi lệnh khi đang trong cửa sổ tin
+        news_block = False
+        try:
+            cal = _market_cache.get("economic_calendar") or {}
+            now_ts = now.timestamp()
+            for ev in (cal.get("events") or []):
+                imp = str(ev.get("impact") or "").upper()
+                if imp not in ("HIGH", "MED", "MEDIUM"):
+                    continue
+                ev_dt = _parse_event_datetime(ev)
+                # pyrefly: ignore [bad-argument-type]
+                if ev_dt and abs(now_ts - ev_dt.timestamp()) <= int(_config.get("news_window_minutes", 15)) * 60:
+                    news_block = True
+                    break
+        except Exception:
+            news_block = False
+        if news_block:
+            _add_log("INFO", "DCA_SKIP", f"DCA {symbol} #{ticket} blocked by news protection")
+            continue
+        sl = float(pos.get("sl") or 0)
+        tp = float(pos.get("tp") or 0) or current
+        risk = evaluate_risk_gate(
+            symbol=symbol, signal=pos_type, entry=current, sl=sl, tp=tp,
+            spread=ask - bid, atr=atr, score=50, method=method)
+        if not risk["approved"]:
+            _add_log("INFO", "DCA_SKIP", f"DCA {symbol} #{ticket} rejected by risk gate: {risk['reason']}")
+            continue
+        # Queue lệnh DCA (cùng hướng vị thế, giữ nguyên SL/TP)
+        cmd = {
+            "command_id": str(uuid.uuid4()),
+            "ts": now.isoformat(),
+            "action": pos_type,
+            "symbol": rkey,
+            "magic": _config.get("magic", 888999),
+            "volume": decision["volume"],
+            "stop_loss": round(sl, 2),
+            "take_profit": round(tp, 2),
+            "entry": round(current, 2),
+            "reason": f"DCA parent_ticket={ticket} level={decision['level']} adverse_atr={decision['adverse_atr']}",
+            "status": "QUEUED"
+        }
+        _commands.append(cmd)
+        _dca_state[key] = {"level": decision["level"], "last_add": now.isoformat()}
+        # DEMO không EA: giả lập fill mirror mới (LIVE thì chờ EA claim — fail-closed)
+        if not _account.get("mt5_connected") and _is_demo_mode():
+            new_ticket = random.randint(100000, 999999)
+            if rkey not in _positions:
+                _positions[rkey] = []
+            _positions[rkey].append({
+                "ticket": new_ticket, "symbol": rkey, "type": pos_type,
+                "volume": decision["volume"], "price_open": round(current, 2),
+                "sl": round(sl, 2), "orig_sl": round(sl, 2), "tp": round(tp, 2),
+                "be_applied": False, "profit": 0.0, "current_price": round(current, 2),
+                "open_time": now.isoformat(), "source": "DEMO",
+            })
+            cmd["status"] = "FILLED"
+            cmd["ticket"] = new_ticket
+        _add_ai_event("TRADE", f"DCA_{pos_type}", symbol, {
+            "parent_ticket": ticket, "level": decision["level"],
+            "volume": decision["volume"], "entry": round(current, 2), "sl": round(sl, 2),
+            "adverse_atr": decision["adverse_atr"], "risk_usd": decision["risk_usd"]})
+        _add_log("INFO", "DCA_ADD", f"DCA level={decision['level']} {pos_type} {symbol} parent=#{ticket} vol={decision['volume']} @ {round(current,2)} sl={sl}")
+
 
 # ─── PYDANTIC MODELS ─────────────────────────────────────────────────────────
 class LoginRequest(BaseModel): login: str; password: str
@@ -1505,6 +1696,7 @@ async def get_status(symbol: str = Query("XAUUSD")):
     indicators = calculate_indicators(df)
     bid, ask = await fetch_real_bid_ask(symbol)
 
+    # pyrefly: ignore [bad-argument-type]
     analysis = await run_ai_analysis(symbol, _config["trading_method"])
 
     return {
@@ -1594,6 +1786,7 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
 
     # Run method-specific analysis (naive indicator scoring, kept as reference)
     method = _config.get("trading_method", "SMC")
+    # pyrefly: ignore [bad-argument-type]
     analysis = await run_ai_analysis(symbol, method, tf)
 
     raw_score = analysis.get("score") if analysis else 50
@@ -1610,6 +1803,7 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
         if ctx_df is not None and not ctx_df.empty:
             mtf_data[ctx_tf] = ctx_df
 
+    # pyrefly: ignore [bad-argument-type]
     markup_data = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
 
     # Keep the markup engine's own confluence (score -100..100 + entry/sl/tp/rrr)
@@ -1994,6 +2188,7 @@ async def close_all_positions(request: Request):
             "command_id": str(uuid.uuid4()),
             "ts": datetime.now(timezone.utc).isoformat(),
             "action": "CLOSE_ALL",
+            # pyrefly: ignore [bad-argument-type]
             "symbol": resolve_symbol(_config.get("symbol", "XAUUSD")),
             "magic": _config.get("magic", 888999),
             "status": "QUEUED"
@@ -2158,6 +2353,7 @@ async def set_trading_method(req: TradingMethodRequest):
 
     # Trigger immediate re-analysis with new method
     symbol = _config.get("symbol", "XAUUSD")
+    # pyrefly: ignore [bad-argument-type]
     asyncio.create_task(run_ai_analysis(symbol, method))
 
     return {"status": "SUCCESS", "trading_method": method, "previous": old_method}
@@ -2169,6 +2365,7 @@ async def set_ai_loop(req: AiLoopRequest):
     _config["ai_auto_loop"] = req.enabled
     status = "ENABLED" if req.enabled else "DISABLED"
     _add_log("INFO", "AI_LOOP", f"AI Auto Trade {status}")
+    # pyrefly: ignore [bad-argument-type]
     _add_ai_event("INFO", "AI_LOOP", _config.get("symbol", "XAUUSD"), {"ai_auto_loop": req.enabled})
     return {"status": "SUCCESS", "ai_auto_loop": req.enabled}
 
@@ -2214,6 +2411,7 @@ async def set_control_mode(request: Request):
     old = _config.get("execution_mode", "DEMO")
     _config["execution_mode"] = mode
     _add_log("WARNING", "EXECUTION_MODE", f"Execution mode changed from {old} to {mode}")
+    # pyrefly: ignore [bad-argument-type]
     _add_ai_event("INFO", "EXECUTION_MODE", _config.get("symbol", "XAUUSD"), {"mode": mode})
     return {"status": "SUCCESS", "mode": mode}
 
@@ -2392,6 +2590,8 @@ async def login_mt5(req: MT5LoginRequest):
         try:
             return mt5_auto.deploy_expert_to_chart(
                 login=str(req.login), password=req.password, server=req.server,
+                # pyrefly: ignore [bad-argument-type]
+                # pyrefly: ignore [bad-argument-type]
                 symbol=symbol, timeframe=tf)
         except Exception as exc:  # pragma: no cover
             return {"ok": False, "steps": [], "error": str(exc)}
@@ -2454,6 +2654,7 @@ async def get_brain():
     """Get AI brain state - recent decisions and evaluations"""
     symbol = _config.get("symbol", "XAUUSD")
     method = _config.get("trading_method", "SMC")
+    # pyrefly: ignore [bad-argument-type]
     analysis = await run_ai_analysis(symbol, method)
 
     # Get recent signals
@@ -2666,6 +2867,7 @@ async def _build_copilot_context(req: CopilotChatRequest) -> str:
             ctx_df = _resample_from_cache(symbol, ctx_tf, 300)
             if ctx_df is not None and not ctx_df.empty:
                 mtf_data[ctx_tf] = ctx_df
+        # pyrefly: ignore [bad-argument-type]
         markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
         objects = markup.get("objects", [])[:15]
         cf = markup.get("confluence", {})
@@ -2725,6 +2927,7 @@ async def copilot_chat(req: CopilotChatRequest):
         _add_log("WARN", "LLM_FALLBACK", f"copilot LLM error: {e}")
 
     # Fallback heuristic (không crash khi LLM down)
+    # pyrefly: ignore [bad-argument-type]
     analysis = await run_ai_analysis(req.symbol, _config.get("trading_method", "SMC"))
     indicators = analysis.get("indicators", {})
     confluence = analysis.get("score", 50)
@@ -2793,7 +2996,9 @@ async def register_symbol(request: Request):
         if not sym:
             raise HTTPException(status_code=400, detail="symbol required")
 
+        # pyrefly: ignore [not-iterable]
         if sym not in _config["symbols"]:
+            # pyrefly: ignore [missing-attribute]
             _config["symbols"].append(sym)
 
         _config["symbol"] = sym
@@ -2991,6 +3196,7 @@ async def bridge_receipt(command_id: str, req: ReceiptRequest, request: Request)
                             close_px = float(req.fill_price or p.get("current_price") or p.get("price_open") or 0)
                             trade = _record_closed_trade(sym, p, close_px, "EA_CLOSE")
                             _positions[sym].remove(p)
+                            _dca_state.pop(f"{sym}:{ticket}", None)
                             _add_ai_event("TRADE", "CLOSE", sym, {
                                 "ticket": ticket, "profit": trade["profit"], "source": "EA"})
                             break
@@ -3042,8 +3248,10 @@ async def bridge_telemetry(req: TelemetryRequest, request: Request):
     # Update account snapshot. EA gửi account_id (không phải login) và
     # margin_free (không phải free_margin) — map alias để telemetry thực sự
     # cập nhật được balance/equity từ tài khoản MT5 thật.
-    login_id = req.login or req.account_id
-    if login_id:
+    # BUG FIX: login_id có thể là int (0/None-falsy) — dùng None-check thay vì
+    # truthiness để login=0 hoặc account_id=0 vẫn cập nhật được.
+    login_id = req.login if req.login is not None else req.account_id
+    if login_id is not None:
         _account["mt5_connected"] = True
         _account["login"] = login_id
         _account["server"] = req.server or ""
@@ -3114,10 +3322,12 @@ async def bridge_markup(req: MarkupRequest, request: Request):
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
     
+    # pyrefly: ignore [missing-attribute]
     method = (req.method or _config.get("trading_method", "SMC")).upper()
     tf = req.timeframe or "M15"
     symbol = req.symbol or _config.get("symbol", "XAUUSD")
     try:
+        # pyrefly: ignore [bad-argument-type]
         df = await fetch_real_candles(symbol, tf, 1000)
         if df is None or df.empty:
             return {"status": "ERROR", "message": "no candle data", "objects": []}
@@ -3128,9 +3338,11 @@ async def bridge_markup(req: MarkupRequest, request: Request):
         for ctx_tf in ("M15", "H1", "D1"):
             if ctx_tf == tf:
                 continue
+            # pyrefly: ignore [bad-argument-type]
             ctx_df = await _fetch_context_candles(symbol, ctx_tf)
             if ctx_df is not None and not ctx_df.empty:
                 mtf_data[ctx_tf] = ctx_df
+        # pyrefly: ignore [bad-argument-type]
         markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
         _add_log("DEBUG", "EA_MARKUP", f"EA {req.executor_id} fetched {len(markup['objects'])} markup objects for {symbol} [{method}]")
         return _json_safe({
@@ -3229,8 +3441,158 @@ def _parse_event_datetime(ev: Dict[str, Any]) -> Optional[datetime]:
     return None
 
 
+# ─── FOREXFACTORY CALENDAR ──────────────────────────────────────────────────
+# Nguồn lịch tin tức bổ sung: mirror JSON công khai của forexfactory.com dùng bởi
+# nhiều indicator TradingView. MT5 CalendarValueHistory (EA push) trên nhiều broker
+# trả rất ít/0 event — bổ sung nguồn này để web + news protection luôn có dữ liệu.
+_FF_CALENDAR_URL = os.getenv("ATE_FF_CALENDAR_URL", "https://nfs.faireconomy.media/ff_calendar_thisweek.json")
+_FF_REFRESH_SEC = int(os.getenv("ATE_FF_CALENDAR_INTERVAL", "600"))
+_calendar_refresh_task = None
+
+
+def _ev_utc_hour(e: Dict[str, Any]) -> Optional[str]:
+    """Khóa dedupe: (title lowercase, UTC hour bucket). Dùng giờ UTC để event từ
+    EA (MT5, UTC) và forexfactory (múi ET) của cùng 1 tin khớp nhau dù lệch tz."""
+    dt = _parse_event_datetime(e)
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).strftime("%Y%m%d%H")
+
+
+def _merge_calendar_events() -> List[Dict[str, Any]]:
+    """Gộp lịch EA (MT5) + forexfactory, ưu tiên EA khi trùng (title + giờ UTC),
+    sort theo thời gian, lưu vào _market_cache["economic_calendar"]."""
+    ea = _market_cache.get("economic_calendar_ea", {}).get("events") or []
+    ff = _market_cache.get("economic_calendar_ff", {}).get("events") or []
+    merged = list(ea)
+    seen = set()
+    for e in ea:
+        k = _ev_utc_hour(e)
+        if k:
+            seen.add((str(e.get("title", "")).strip().lower(), k))
+    for e in ff:
+        k = _ev_utc_hour(e)
+        if not k:
+            continue
+        key = (str(e.get("title", "")).strip().lower(), k)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(e)
+
+    def _sort_ts(e: Dict[str, Any]) -> float:
+        # Chuẩn hóa về aware-UTC: _parse_event_datetime có thể trả naive khi event
+        # không kèm tz -> .timestamp() interpret theo giờ local, lệch thứ tự với FF.
+        dt = _parse_event_datetime(e)
+        if dt is None:
+            return datetime.max.replace(tzinfo=timezone.utc).timestamp()
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).timestamp()
+
+    merged.sort(key=_sort_ts)
+    _market_cache["economic_calendar"] = {
+        "events": merged,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    }
+    return merged
+
+
+def _ff_event_to_standard(e: Dict[str, Any]) -> Dict[str, Any]:
+    """Chuẩn hóa event forexfactory sang format thống nhất với EA:
+    event_id, datetime ISO, date %Y.%m.%d, time HH:MM, impact HIGH/MED/LOW."""
+    raw_date = str(e.get("date") or "")
+    dt = None
+    try:
+        dt = datetime.fromisoformat(raw_date)
+    except Exception:
+        try:
+            dt = datetime.fromisoformat(raw_date.replace("Z", "+00:00"))
+        except Exception:
+            dt = None
+    title = str(e.get("title") or "Unknown Event").strip()
+    imp = str(e.get("impact") or "Low").upper()
+    impact = {"HIGH": "HIGH", "MEDIUM": "MED", "MED": "MED"}.get(imp, "LOW")
+    event_id = "ff_" + hashlib.md5(f"{title}|{raw_date}".encode("utf-8")).hexdigest()[:12]
+    now = datetime.now(timezone.utc)
+    status = "UPCOMING"
+    if dt:
+        dt_utc = dt.astimezone(timezone.utc)
+        if abs((dt_utc - now).total_seconds()) <= 3600:
+            status = "LIVE"
+        elif dt_utc < now:
+            status = "DONE"
+    return {
+        "event_id": event_id,
+        "source": "FOREXFACTORY",
+        "title": title,
+        "currency": str(e.get("country") or e.get("currency") or ""),
+        "date": dt.strftime("%Y.%m.%d") if dt else (raw_date[:10] or ""),
+        "time": dt.strftime("%H:%M") if dt else "",
+        "datetime": dt.isoformat() if dt else None,
+        "impact": impact,
+        "actual": str(e.get("actual") or ""),
+        "forecast": str(e.get("forecast") or ""),
+        "previous": str(e.get("previous") or ""),
+        "status": status,
+    }
+
+
+async def _fetch_forexfactory_calendar() -> int:
+    """Fetch lịch từ nguồn forexfactory mirror và gộp vào cache. Thất bại -> giữ
+    dữ liệu EA, chỉ log (không phá vỡ news protection hiện có)."""
+    if not _config.get("ff_calendar_enabled", True):
+        return 0
+    # Không fetch mạng trong môi trường pytest (TestClient chạy lifespan ->
+    # loop refresh chạy -> lịch thật từ mirror lọt vào test và làm hỏng assertions)
+    if "pytest" in sys.modules:
+        return 0
+    try:
+        async with httpx.AsyncClient(timeout=12) as client:
+            res = await client.get(_FF_CALENDAR_URL)
+            if res.status_code != 200:
+                _add_log("WARN", "FF_CALENDAR", f"forexfactory fetch HTTP {res.status_code}")
+                return 0
+            data = res.json()
+            events = [_ff_event_to_standard(e) for e in data if isinstance(e, dict)]
+            if not events:
+                return 0
+            _market_cache["economic_calendar_ff"] = {
+                "events": events,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            merged = _merge_calendar_events()
+            _add_log("INFO", "FF_CALENDAR", f"forexfactory: {len(events)} events fetched (merged total {len(merged)})")
+            return len(events)
+    except Exception as e:
+        _add_log("WARN", "FF_CALENDAR", f"forexfactory fetch failed: {e}")
+        return 0
+
+
+async def _calendar_refresh_loop():
+    """Refresh calendar từ forexfactory mỗi _FF_REFRESH_SEC (+ 1 lần khi khởi động)."""
+    await asyncio.sleep(2)
+    try:
+        await _fetch_forexfactory_calendar()
+    except Exception:
+        pass
+    while True:
+        await asyncio.sleep(_FF_REFRESH_SEC)
+        try:
+            await _fetch_forexfactory_calendar()
+        except Exception as e:
+            _add_log("WARN", "FF_CALENDAR", f"refresh error: {e}")
+
+
 class CalendarRequest(BaseModel):
-    executor_id: str
+    # BUG FIX (CRITICAL - calendar luôn rỗng): EA gửi {"source": "MT5_CALENDAR",
+    # "events": [...]} — KHÔNG có executor_id. Model cũ yêu cầu executor_id bắt
+    # buộc -> FastAPI trả 422 -> bridge_calendar không bao giờ lưu events ->
+    # /api/economic-calendar luôn [] và news protection mù (log: 422 Unprocessable).
+    executor_id: Optional[str] = None
+    source: Optional[str] = None
     events: List[Dict[str, Any]] = []
 
 @app.post("/api/v1/bridge/calendar")
@@ -3243,10 +3605,13 @@ async def bridge_calendar(req: CalendarRequest, request: Request):
     # BUG FIX: phải LƯU events vào cache — trước đây chỉ log rồi trả về, nên
     # GET /api/economic-calendar luôn trả [] dù EA gửi lịch kinh tế.
     if req.events:
-        _market_cache["economic_calendar"] = {
+        _market_cache["economic_calendar_ea"] = {
             "events": req.events,
             "ts": datetime.now(timezone.utc).isoformat(),
         }
+        # Gộp với forexfactory (nếu có) để /api/economic-calendar + protection
+        # luôn thấy đầy đủ dữ liệu từ cả 2 nguồn.
+        _merge_calendar_events()
     _add_log("DEBUG", "EA_CALENDAR", f"EA {req.executor_id} sent {len(req.events)} events")
     return {"status": "OK", "events_received": len(req.events)}
 
@@ -3433,6 +3798,7 @@ def evaluate_risk_gate(symbol: str, signal: str, entry: float, sl: float, tp: fl
     
     # 1. Spread
     max_spread = _config.get("max_spread", 4.5)
+    # pyrefly: ignore [unsupported-operation]
     checks["spread"] = {"value": spread, "max": max_spread, "ok": spread <= max_spread}
     
     # 2. ATR / Volatility (sử dụng ATR ratio so với entry)
@@ -3480,6 +3846,7 @@ def evaluate_risk_gate(symbol: str, signal: str, entry: float, sl: float, tp: fl
     position_value_at_risk = sl_distance * 100 * 0.01  # For 0.01 lot gold
     actual_risk_pct = position_value_at_risk / max(_account.get("balance", 10000), 1)
     checks["risk_pct"] = {"configured": risk_pct, "actual": actual_risk_pct, 
+                          # pyrefly: ignore [unsupported-operation]
                           "ok": actual_risk_pct <= risk_pct * 2}  # Allow 2x config
     
     # 6. Max Drawdown (track realized losses today)

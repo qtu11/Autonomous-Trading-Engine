@@ -20,6 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+import server  # noqa: E402
+
 from server import _account, _commands, _config, _market_cache, _positions, app  # noqa: E402
 
 _AUTH = {"Authorization": "Bearer test-token"}
@@ -300,3 +302,60 @@ def test_telemetry_updates_account_and_tick():
     finally:
         for k, v in snap.items():
             _account[k] = v
+
+
+# ─── FOREXFACTORY CALENDAR MERGE ──────────────────────────────────────────────
+def test_ff_event_to_standard_normalizes_impact_and_datetime():
+    """Event forexfactory (nfs.faireconomy.media) phải được chuẩn hóa: impact
+    High -> HIGH, giữ currency/forecast/previous, sinh datetime ISO + event_id."""
+    raw = {
+        "title": "Non-Farm Payrolls", "country": "USD",
+        "date": "2026-08-14T12:30:00-04:00", "impact": "High",
+        "forecast": "200K", "previous": "180K",
+    }
+    ev = server._ff_event_to_standard(raw)
+    assert ev["impact"] == "HIGH"
+    assert ev["currency"] == "USD"
+    assert ev["source"] == "FOREXFACTORY"
+    assert ev["event_id"].startswith("ff_")
+    assert ev["datetime"] is not None
+    assert ev["forecast"] == "200K"
+    assert ev["previous"] == "180K"
+
+
+def test_merge_calendar_ea_priority_and_dedupe():
+    """Gộp lịch EA (MT5) + forexfactory: event trùng (title + cùng giờ UTC) thì
+    giữ EA; event riêng của forexfactory vẫn được thêm; sort theo thời gian."""
+    ea_ev = [{
+        "event_id": "mt5-1", "title": "NFP", "currency": "USD",
+        "date": "2026.08.14", "time": "16:30", "impact": "HIGH",
+        "forecast": "200K", "previous": "180K",
+    }]
+    # FF events phải qua _ff_event_to_standard (đúng path thực tế) để có datetime
+    ff_ev = [
+        server._ff_event_to_standard({  # cùng UTC hour 16:30 với NFP EA (12:30 -04:00 = 16:30 UTC) -> dedupe
+            "event_id": "ff-dup", "title": "NFP", "country": "USD",
+            "date": "2026-08-14T12:30:00-04:00", "impact": "High",
+        }),
+        server._ff_event_to_standard({  # event riêng -> giữ
+            "event_id": "ff-uniq", "title": "Unemployment Claims", "country": "USD",
+            "date": "2026-08-14T08:30:00-04:00", "impact": "Medium",
+        }),
+    ]
+    _market_cache["economic_calendar_ea"] = {"events": ea_ev, "ts": datetime.now(timezone.utc).isoformat()}
+    _market_cache["economic_calendar_ff"] = {"events": ff_ev, "ts": datetime.now(timezone.utc).isoformat()}
+    try:
+        merged = server._merge_calendar_events()
+        titles = [e["title"] for e in merged]
+        assert titles.count("NFP") == 1          # forexfactory trùng bị loại
+        assert "Unemployment Claims" in titles    # forexfactory riêng được giữ
+        nfp = next(e for e in merged if e["title"] == "NFP")
+        assert nfp["event_id"] == "mt5-1"        # EA ưu tiên khi trùng
+        # sort theo thời gian: Unemployment 12:30 UTC trước NFP 16:30 UTC
+        times = [server._parse_event_datetime(e) for e in merged]
+        assert times == sorted(times)
+        # cache merged có ts mới -> protection endpoint thấy data tươi
+        assert _market_cache["economic_calendar"]["events"]
+    finally:
+        for k in ("economic_calendar_ea", "economic_calendar_ff", "economic_calendar"):
+            _market_cache.pop(k, None)

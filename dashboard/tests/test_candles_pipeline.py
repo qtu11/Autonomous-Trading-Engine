@@ -42,6 +42,66 @@ def test_sweep_above_highs_is_bearish_not_bullish():
     assert res == "BEARISH_SWEEP"
 
 
+def test_find_swing_points_with_offset_index_no_nan():
+    """BUG FIX (CRITICAL): /api/market trả 500 'Cannot mask with non-boolean
+    array containing NA' khi build_chart_markup cắt df.tail(2000) làm index
+    không còn 0..n-1. find_swing_points cũ dùng df.at[i, ...] theo LABEL -> gán
+    vào index không tồn tại -> thêm row NaN -> chart web không hiển thị cho
+    M1/M5 (>=2000 nến). Fix: numpy bool array theo vị trí."""
+    import numpy as np
+
+    n = 40000
+    df = pd.DataFrame({
+        "high": np.linspace(3300.0, 3400.0, n),
+        "low": np.linspace(3290.0, 3390.0, n),
+    })
+    # build_chart_markup: m15 = mtf_data[primary_tf].tail(2000) giữ index gốc
+    df.index = pd.RangeIndex(0, n)
+    df = df.tail(2000)  # -> index 38000..39999
+
+    from detectors import detect_market_structure, find_swing_points
+
+    s = find_swing_points(df, window=2)
+    assert len(s) == 2000
+    assert s["swing_high"].isna().sum() == 0, "swing_high không được chứa NaN"
+    assert s["swing_low"].isna().sum() == 0, "swing_low không được chứa NaN"
+    assert s["swing_high"].dtype == bool
+
+    # detect_market_structure (mắt xích crash gốc) phải chạy được
+    r = detect_market_structure(df, window=2, n=6)
+    assert r["structure"] in ("UPTREND", "DOWNTREND", "RANGE")
+
+
+def test_build_chart_markup_with_40000_m1_bars_no_crash():
+    """BUG FIX (CRITICAL): /api/market?tf=M1 trả 500 vì (1) find_swing_points
+    df.at theo label tạo NaN rows, (2) sau m15.tail(2000) label 38000+ dùng với
+    .iloc -> IndexError. Đây là path THẬT web gọi (40000 nến M1 từ EA push)."""
+    import numpy as np
+
+    n = 40000
+    df = pd.DataFrame({
+        "timestamp": pd.date_range("2026-01-01", periods=n, freq="1min"),
+        "open": np.linspace(3300.0, 3400.0, n),
+        "high": np.linspace(3300.5, 3400.5, n),
+        "low": np.linspace(3299.5, 3399.5, n),
+        "close": np.linspace(3300.2, 3400.2, n),
+        "volume": np.full(n, 100.0),
+    })
+
+    from chart_markup import build_chart_markup
+
+    for method in ("SMC", "ICT", "ULTRA_CONFLUENCE", "PRICE_ACTION", "SNIPER"):
+        out = build_chart_markup(
+            symbol="XAUUSD",
+            mtf_data={"M1": df},
+            method=method,
+            primary_tf="M1",
+        )
+        assert out["objects"] is not None, method
+        assert "confluence" in out, method
+    print("build_chart_markup M1 40000 bars: OK")
+
+
 def test_sweep_below_lows_is_bullish_not_bearish():
     """Stop-hunt BELOW previous lows đóng cửa trên = BULLISH (không đảo ngược)."""
     # 10 nến quanh 100; nến cuối spike xuống 98 (thủng min_low 99) rồi đóng

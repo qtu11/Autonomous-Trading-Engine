@@ -273,6 +273,35 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                 </Field>
               </Card>
 
+              <Card title="DCA — NHỒI LỆNH TRUNG BÌNH GIÁ">
+                <div style={{ fontSize: 9, color: C.muted, marginBottom: 10 }}>
+                  Tự thêm lệnh cùng hướng khi vị thế đang lỗ &gt;= N x ATR (luôn qua RiskGate + news protection)
+                </div>
+                <Field label="DCA Enabled">
+                  <Toggle on={!!cfg.dca_enabled} onChange={(v: boolean) => update({ dca_enabled: v })} />
+                </Field>
+                <Field label="Max DCA Levels">
+                  <NumInput value={cfg.dca_max_levels ?? 2} step={1} min={1} max={5} int
+                    onCommit={(v: number) => update({ dca_max_levels: v })} />
+                </Field>
+                <Field label="Distance (x ATR)">
+                  <NumInput value={cfg.dca_distance_atr ?? 1.5} step={0.5} min={0.5} max={10}
+                    onCommit={(v: number) => update({ dca_distance_atr: v })} />
+                </Field>
+                <Field label="Volume Multiplier / Level">
+                  <NumInput value={cfg.dca_volume_multiplier ?? 1.0} step={0.5} min={0.5} max={3}
+                    onCommit={(v: number) => update({ dca_volume_multiplier: v })} />
+                </Field>
+                <Field label="Min Interval (s)">
+                  <NumInput value={cfg.dca_interval_sec ?? 300} step={60} min={60} max={3600} int
+                    onCommit={(v: number) => update({ dca_interval_sec: v })} />
+                </Field>
+                <Field label="Max Risk / Balance">
+                  <NumInput value={cfg.dca_max_risk_balance_pct ?? 0.01} step={0.005} min={0.001} max={0.05}
+                    onCommit={(v: number) => update({ dca_max_risk_balance_pct: v })} />
+                </Field>
+              </Card>
+
               <Card title="EMERGENCY CONTROLS" highlight>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                   <div>

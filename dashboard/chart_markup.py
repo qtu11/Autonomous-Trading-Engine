@@ -185,6 +185,12 @@ def build_chart_markup(
     # Cap the detection window so huge frames (e.g. 72k M1 bars) stay fast.
     if len(m15) > 2000:
         m15 = m15.tail(2000)
+        # BUG FIX (CRITICAL - web chart 500): sau tail(), index vẫn là label gốc
+        # (vd 38000..39999) nhưng mọi detector + chart_markup dùng .iloc[vị trí]
+        # và int(idx) — label 38000+ với df 2000 dòng -> "single positional indexer
+        # is out-of-bounds" IndexError trên /api/market M1/M5. Reset index để
+        # label == vị trí 0..n-1, nhất quán với mọi nhánh.
+        m15 = m15.reset_index(drop=True)
     time_col = 'time'
     m15_candles = df_to_candles(m15)
     m15_swings = find_swing_points(m15, window=2)
