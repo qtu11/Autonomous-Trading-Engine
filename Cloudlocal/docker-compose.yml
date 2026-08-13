@@ -109,6 +109,9 @@ services:
       - FIREBASE_ENABLE_SYNC=${FIREBASE_ENABLE_SYNC:-false}
       - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID}
       - FIREBASE_API_KEY=${FIREBASE_API_KEY}
+      # Bridge Token Authentication (MT5 EA)
+      - QUANTAI_BRIDGE_TOKEN=${QUANTAI_BRIDGE_TOKEN:-20022007@Tu}
+      - MT5_BRIDGE_TOKEN=${MT5_BRIDGE_TOKEN:-20022007@Tu}
     volumes:
       - ../dashboard:/app
       - ./volumes/logs/fastapi:/app/logs

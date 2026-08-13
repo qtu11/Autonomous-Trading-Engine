@@ -6,6 +6,10 @@
     {
       "source": "/api/v1/(.*)",
       "destination": "http://113.173.192.226:8848/api/v1/$1"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "http://113.173.192.226:8848/api/$1"
     }
   ],    "env": {
       "ATE_BACKEND_URL": "http://113.173.192.226:8848",
