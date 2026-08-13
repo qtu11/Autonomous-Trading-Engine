@@ -22,12 +22,18 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 import threading
 import time
 from typing import Any
 
 import requests
+
+# BUG FIX: trước đây mọi lỗi cloud đều bị nuốt im lặng (except Exception: return
+# False/None) nên operator không bao giờ biết Firestore sync đang chết. Giờ log
+# warning ở tầng public để chẩn đoán.
+logger = logging.getLogger("firebase_sync")
 
 # ── Public helpers (all auth styles) ────────────────────────────────────────────
 
@@ -67,7 +73,8 @@ def pull_config() -> dict[str, Any] | None:
             result = _pull_with_oauth_user()
         else:
             result = _pull_with_rest_anonymous()
-    except Exception:
+    except Exception as exc:
+        logger.warning("pull_config failed: %s", exc)
         result = None
     _pull_cache["ts"] = time.time()
     _pull_cache["data"] = result
@@ -86,7 +93,8 @@ def push_config(data: dict[str, Any]) -> bool:
             elif oauth_user_ready():
                 return _push_with_oauth_user(data)
             return _push_with_rest_anonymous(data)
-        except Exception:
+        except Exception as exc:
+            logger.warning("push_config failed: %s", exc)
             return False
 
 
@@ -129,7 +137,8 @@ def _read_firebase_configstore() -> dict[str, Any]:
     path = pathlib.Path.home() / ".config" / "configstore" / "firebase-tools.json"
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except Exception as exc:
+        logger.debug("firebase-tools configstore not readable: %s", exc)
         return {}
 
 
@@ -200,7 +209,8 @@ def _id_token_via_anonymous() -> str | None:
         else:
             data = resp.json()
         return data.get("idToken")
-    except Exception:
+    except Exception as exc:
+        logger.warning("anonymous sign-in failed: %s", exc)
         return None
 
 

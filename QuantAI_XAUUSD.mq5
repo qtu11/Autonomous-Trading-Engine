@@ -53,7 +53,10 @@ double         m_last_live_candle_close = 0.0;
 datetime       m_last_live_tf_time = 0;
 double         m_last_live_tf_close = 0.0;
 string         g_symbol;
-string         g_protection_level = "none";
+// FAIL-CLOSED: khởi tạo "unknown" thay vì "none" — trước khi xác nhận được
+// trạng thái news protection (fetch đầu tiên sau ~30s) thì KHÔNG mở entry mới.
+// Trước đây "none" -> EA có thể mở lệnh trong 30s đầu mà không có bảo vệ tin.
+string         g_protection_level = "unknown";
 int            g_protection_live_seconds = 0;
 string         g_trading_method = "SNIPER";
 datetime       g_last_config_fetch = 0;
@@ -529,6 +532,7 @@ void SendCalendar()
    char result[];
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
+   ResetLastError();
    WebRequest("POST", ATEApiBase() + "/api/v1/bridge/calendar", headers, 1000, data, result, result_headers);
 }
 
@@ -544,13 +548,20 @@ void CheckNewsProtection()
    char result[];
    string result_headers;
    char empty[];
-   int res = WebRequest("GET", ATEApiBase() + "/api/economic-calendar/protection", headers, 3000, empty, result, result_headers);
+   // BUG FIX: phải dùng /api/v1/economic-calendar/protection — đường /api/...
+   // (không v1) qua Vercel đi qua authedProxy yêu cầu web JWT -> 401 -> news
+   // protection luôn fallback "allow entries". v1 là proxy mở cho bridge token.
+   ResetLastError(); // GetLastError() chỉ phản ánh lỗi của RIÊNG lần gọi này
+   int res = WebRequest("GET", ATEApiBase() + "/api/v1/economic-calendar/protection", headers, 3000, empty, result, result_headers);
    if(res != 200 || ArraySize(result) == 0)
    {
       if(g_protection_level != "unknown")
       {
          g_protection_level = "unknown";
-         ATELogThrottled("PROTECTION_UNREACHABLE", StringFormat("News protection state unreachable (HTTP %d, err=%d). Falling back to: allow entries.", res, GetLastError()));
+         // FAIL-CLOSED: không xác nhận được trạng thái bảo vệ thì CHẶN entry mới.
+         // Trước đây "allow entries" — EA mở lệnh mù vào tin HIGH impact khi backend
+         // trả 401/404/5xx (news protection âm thầm bị tắt). Chỉ CLOSE/MODIFY được phép.
+         ATELogThrottled("PROTECTION_UNREACHABLE", StringFormat("News protection state unreachable (HTTP %d, err=%d). FAIL-CLOSED: new BUY/SELL entries BLOCKED until protection state is confirmed.", res, GetLastError()));
       }
       return;
    }
@@ -569,7 +580,7 @@ void CheckNewsProtection()
    if(StringLen(eventTitle) == 0)
       eventTitle = ExtractJsonString(response, "\"name\":");
    if(StringLen(level) == 0)
-      level = "none";
+      level = "unknown"; // FAIL-CLOSED: response không parse được -> chặn entry (không trade mù)
 
    bool changed = (level != g_protection_level);
    g_protection_level = level;
@@ -593,12 +604,23 @@ void CheckNewsProtection()
 //+------------------------------------------------------------------+
 void UpdateProtectionComment()
 {
-   if(!InpNewsProtectionEnabled || g_protection_level == "none" || g_protection_level == "unknown")
+   if(!InpNewsProtectionEnabled || g_protection_level == "none")
    {
       if(g_protection_comment_shown)
       {
          Comment("");
          g_protection_comment_shown = false;
+      }
+      return;
+   }
+   // FAIL-CLOSED: "unknown" = không xác nhận được trạng thái -> entry bị CHẶN,
+   // phải hiển thị cảnh báo trên chart để operator biết lý do không mở lệnh mới.
+   if(g_protection_level == "unknown")
+   {
+      if(!g_protection_comment_shown)
+      {
+         Comment("NEWS PROTECTION: UNKNOWN - new entries BLOCKED\ncannot reach protection endpoint");
+         g_protection_comment_shown = true;
       }
       return;
    }
@@ -679,6 +701,10 @@ void PollAndExecuteAISignals()
    PrintFormat("CLAIM_TRY: executor=%s symbol=%s magic=%I64u url=%s",
       InpExecutorId, g_symbol, InpMagicNumber, ATEApiBase() + "/api/v1/bridge/commands/claim");
 
+   // BUG FIX: ResetLastError() trước WebRequest — GetLastError() sau một lần gọi
+   // THÀNH CÔNG vẫn giữ code lỗi từ lệnh WebRequest TRƯỚC đó trong cùng tick
+   // (vd telemetry 502), làm CLAIM_RESULT báo sai err=5203 dù HTTP=200.
+   ResetLastError();
    int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/commands/claim", headers, 3000, data, result, result_headers);
    PrintFormat("CLAIM_RESULT: HTTP=%d result_size=%d err=%d", res, ArraySize(result), GetLastError());
    if(res != 200 || ArraySize(result) == 0)
@@ -732,7 +758,9 @@ void PollAndExecuteAISignals()
    if(action == "BUY" || action == "SELL")
    {
       // News Protection: fail-closed on new entries only; CLOSE/MODIFY stay claimable.
-      if(InpNewsProtectionEnabled && (g_protection_level == "lockdown" || g_protection_level == "approaching"))
+      // BUG FIX: "unknown" (protection endpoint unreachable) cũng CHẶN entry — an toàn
+      // hơn "allow entries" (mở lệnh mù vào tin nóng) khi backend bị lỗi 401/5xx.
+      if(InpNewsProtectionEnabled && (g_protection_level == "lockdown" || g_protection_level == "approaching" || g_protection_level == "unknown"))
       {
          ATELog(StringFormat("REJECT_NEWS_PROTECTION command=%s action=%s level=%s event='%s' live_remaining=%ds", commandId, action, g_protection_level, g_protection_event, g_protection_live_seconds));
          SendCommandReceipt(commandId, "REJECTED", 0, 0, "REJECT_NEWS_PROTECTION");
@@ -867,6 +895,7 @@ void SendCommandReceipt(string commandId, string receiptStatus, ulong orderTicke
    char result[];
    string resultHeaders;
    StringToCharArray(payload, data, 0, StringLen(payload));
+   ResetLastError();
    WebRequest("POST", ATEApiBase() + "/api/v1/bridge/commands/" + commandId + "/receipt", headers, 1000, data, result, resultHeaders);
 }
 
@@ -887,6 +916,7 @@ void FetchAndRenderChartMarkup()
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
 
+   ResetLastError();
    int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/markup", headers, 4000, data, result, result_headers);
    if(res != 200 || ArraySize(result) == 0)
       return; // Retry next tick; no chart paint this cycle.
@@ -1216,6 +1246,7 @@ bool PushCandlesChunk(string tfLabel, int start, int end,
    StringToCharArray(payload, data, 0, StringLen(payload));
    
    string headers = BridgeHeaders();
+   ResetLastError();
    int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 30000, data, result, result_headers);
    if(res != 200)
    {
@@ -1307,6 +1338,7 @@ bool PushLiveCandleRequest(string tfLabel, const MqlRates &r)
    string result_headers;
    StringToCharArray(payload, data, 0, StringLen(payload));
    string headers = BridgeHeaders();
+   ResetLastError();
    int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 10000, data, result, result_headers);
    return (res == 200);
 }

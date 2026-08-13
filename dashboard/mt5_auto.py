@@ -17,11 +17,16 @@ silently pretending to succeed.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import time
 import winreg
 from pathlib import Path
+
+# BUG FIX: các lỗi registry/UI automation trước đây bị except im lặng -> không
+# debug được khi MT5 auto-deploy fail. Log warning thay vì pass.
+logger = logging.getLogger("mt5_auto")
 
 try:
     import MetaTrader5 as mt5  # type: ignore
@@ -115,10 +120,11 @@ def find_terminal64(explicit_path: str | None = None) -> tuple[bool, str | None,
                             continue
                     if tp and os.path.basename(str(tp)).lower() == "terminal64.exe" and os.path.isfile(tp):
                         return True, tp, ""
-                except OSError:
+                except OSError as exc:
+                    logger.debug("registry key read failed: %s", exc)
                     continue
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.warning("registry scan for terminal64 failed: %s", exc)
 
     # 2) Program Files scan (one level, name-based guess)
     for pf in PROGRAM_FILES_CANDIDATES:
@@ -393,10 +399,11 @@ def enable_algo_trading(terminal64: str, expert_name: str = EXPERT_FILE) -> tupl
                     btn[0].click_input()
                     time.sleep(1.5)
                     break
-            except Exception:
+            except Exception as exc:
+                logger.debug("algo button click failed (%s): %s", c, exc)
                 continue
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("UI automation for Algo Trading failed: %s", exc)
 
     # Verify truth via terminal_info.
     for _ in range(4):

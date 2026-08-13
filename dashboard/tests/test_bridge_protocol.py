@@ -88,7 +88,7 @@ def test_create_order_returns_command_id_and_logs():
     """Dead code MANUAL_ORDER bị kẹt trong news_analyze -> lệnh tay không log."""
     _commands.clear()
     with TestClient(app) as client:
-        r = client.post("/api/order/create", json={
+        r = client.post("/api/order/create", headers=_AUTH, json={
             "symbol": "XAUUSD", "direction": "BUY", "quantity": 0.10,
         })
         assert r.status_code == 200, r.text
@@ -102,6 +102,53 @@ def test_create_order_returns_command_id_and_logs():
         logs = client.get("/api/logs").json()
         assert any(l.get("event") == "MANUAL_ORDER" for l in logs), (
             "create_order phải log MANUAL_ORDER")
+
+
+def test_order_endpoints_require_bearer_token():
+    """BUG FIX (SECURITY): /api/order/create, /api/order/close, /api/order/close_all
+    trước đây KHÔNG check Bearer — ai cũng mở/đóng lệnh REAL qua backend public.
+    Giờ phải 401 khi thiếu token (giống mọi endpoint khác)."""
+    with TestClient(app) as client:
+        r = client.post("/api/order/create", json={
+            "symbol": "XAUUSD", "direction": "BUY", "quantity": 0.10,
+        })
+        assert r.status_code == 401, r.text
+        r = client.post("/api/order/close", json={"ticket": 123456})
+        assert r.status_code == 401, r.text
+        r = client.post("/api/order/close_all")
+        assert r.status_code == 401, r.text
+
+
+def test_close_profitable_queues_ticket_filtered_close_in_live():
+    """BUG FIX (HIGH): close-profitable khi EA connected trước đây gửi CLOSE_ALL
+    -> đóng TẤT CẢ lệnh kể cả đang LỖ. Giờ chỉ queue CLOSE_POSITION cho từng
+    ticket đang lời (mirror P&L cập nhật từ bid/ask thật)."""
+    _commands.clear()
+    _account["mt5_connected"] = True
+    _positions["XAUUSDm"] = [
+        {"ticket": 1001, "type": "BUY", "profit": 25.0, "symbol": "XAUUSDm",
+         "price_open": 3300.0, "volume": 0.01},
+        {"ticket": 1002, "type": "SELL", "profit": -12.0, "symbol": "XAUUSDm",
+         "price_open": 3300.0, "volume": 0.01},
+        # BUG FIX: mirror DEMO ảo (ticket rác) phải bị bỏ qua khi EA connected
+        {"ticket": 1003, "type": "BUY", "profit": 40.0, "symbol": "XAUUSDm",
+         "price_open": 3300.0, "volume": 0.01, "source": "DEMO"},
+    ]
+    try:
+        with TestClient(app) as client:
+            r = client.post("/api/orders/close-profitable", headers=_AUTH)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["queued_for_ea"] is True
+            assert body["closed"] == 1, body  # chỉ lệnh thật 1001, bỏ qua 1002 (lỗ) + 1003 (DEMO)
+            actions = [(c.get("action"), c.get("ticket")) for c in _commands]
+            assert ("CLOSE_POSITION", 1001) in actions, actions
+            assert ("CLOSE_POSITION", 1002) not in actions, actions
+            assert ("CLOSE_POSITION", 1003) not in actions, actions
+            assert not any(c.get("action") == "CLOSE_ALL" for c in _commands), actions
+    finally:
+        _account["mt5_connected"] = False
+        _positions.pop("XAUUSDm", None)
 
 
 def test_executed_receipt_adds_position_mirror():
@@ -184,15 +231,36 @@ def test_protection_lockdown_overrides_watch_regardless_of_order():
         assert body["next_event"]["title"] == "NFP Release"
 
 
-def test_economic_calendar_protection_none_without_events():
+def test_economic_calendar_protection_unknown_without_data():
+    """FAIL-CLOSED: không có dữ liệu lịch kinh tế (cache trống) -> "unknown" chứ
+    KHÔNG phải "none" — EA phải CHẶN entry khi không có thông tin tin tức nào
+    (trước đây trả "none" -> EA trade mù là FAIL-OPEN)."""
     _market_cache.pop("economic_calendar", None)
     with TestClient(app) as client:
         r = client.get("/api/v1/economic-calendar/protection", headers=_AUTH)
         assert r.status_code == 200
         body = r.json()
+        assert body["protection_level"] == "unknown"
+        assert body["level"] == "unknown"
+        assert body["next_event"] is None
+        assert body["data_available"] is False
+
+
+def test_economic_calendar_protection_none_with_fresh_empty_calendar():
+    """Calendar TƯƠI (EA vừa đẩy) nhưng không có event HIGH/MED -> "none"."""
+    now = datetime.now(timezone.utc)
+    _post_events([{
+        "event_id": "low",
+        "date": now.strftime("%Y.%m.%d"),
+        "time": now.strftime("%H:%M"),
+        "title": "Low Impact",
+        "impact": "LOW",
+    }])
+    with TestClient(app) as client:
+        body = client.get("/api/v1/economic-calendar/protection", headers=_AUTH).json()
         assert body["protection_level"] == "none"
         assert body["level"] == "none"
-        assert body["next_event"] is None
+        assert body["data_available"] is True
 
 
 def test_telemetry_updates_account_and_tick():

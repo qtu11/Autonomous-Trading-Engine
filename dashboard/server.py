@@ -53,13 +53,36 @@ class SafeJSONResponse(JSONResponse):
 
 
 def _json_safe(obj):
-    """Đệ quy thay NaN/Infinity bằng None để mọi response luôn JSON hợp lệ."""
+    """Đệ quy chuẩn hóa mọi kiểu dữ liệu (kể cả numpy/pandas) -> JSON hợp lệ.
+    BUG FIX: trước đây chỉ thay NaN/Infinity cho float; markup từ pandas/numpy
+    chứa numpy.bool_/numpy.float64 (vd OB.has_fvg_confluence, swing prices) khiến
+    FastAPI jsonable_encoder ném 500 'numpy.bool' object is not iterable trên
+    /api/market + /api/v1/bridge/markup khi EA đẩy 40000 nến."""
     if isinstance(obj, dict):
         return {k: _json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_json_safe(v) for v in obj]
+    if isinstance(obj, (list, tuple, set, np.ndarray)):
+        return [_json_safe(v) for v in list(obj)]
+    # np.bool_ là subclass của int — phải check TRƯỚC np.integer/bool
+    if isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    if isinstance(obj, np.integer):
+        return int(obj)
+    if isinstance(obj, np.floating):
+        obj = float(obj)
+        return obj if math.isfinite(obj) else None
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else None
+    # np.datetime64 (vd từ DataFrame timestamp) không thể json.dumps được —
+    # chuyển thành ISO string. pd.Timestamp cũng nằm trong nhóm datetime dưới.
+    if isinstance(obj, np.datetime64):
+        try:
+            return pd.Timestamp(obj).to_pydatetime().isoformat()
+        except Exception:
+            return str(obj)
+    if isinstance(obj, (pd.Timestamp, datetime)):
+        return obj.isoformat()
+    if obj is None:
+        return None
     return obj
 from pydantic import BaseModel, Field
 from asyncio import Queue
@@ -1026,6 +1049,18 @@ def _ea_fresh() -> bool:
         return False
 
 
+def _lot_value_multiplier(sym: str) -> float:
+    """Hệ số quy đổi giá->P&L $ cho 1 lot theo symbol.
+    BUG FIX: trước đây hardcode *100 (giả định XAU 100oz/lot) nên P&L demo của
+    EURUSD/GBPUSD... sai gấp 1000 lần (FX contract = 100000 base/lot)."""
+    s = resolve_symbol(sym).upper()
+    if "XAU" in s or s == "GOLD":
+        return 100.0    # 100 oz / lot
+    if "XAG" in s or s == "SILVER":
+        return 5000.0   # 5000 oz / lot
+    return 100000.0     # FX: 100000 base / lot
+
+
 def _record_closed_trade(sym: str, pos: Dict[str, Any], price_close: float, reason: str = "CLOSE") -> Dict[str, Any]:
     """Ghi nhận lệnh đã đóng vào lịch sử + cập nhật số liệu tài khoản.
     BUG FIX: trước đây close_position/close_all không cập nhật realized P&L,
@@ -1035,10 +1070,11 @@ def _record_closed_trade(sym: str, pos: Dict[str, Any], price_close: float, reas
     # pyrefly: ignore [bad-argument-type]
     entry = float(pos.get("price_open", pos.get("entry", 0)))
     volume = float(pos.get("volume", 0.01))
+    mult = _lot_value_multiplier(sym)
     if pos_type == "BUY":
-        profit = round((price_close - entry) * volume * 100, 2)
+        profit = round((price_close - entry) * volume * mult, 2)
     else:
-        profit = round((entry - price_close) * volume * 100, 2)
+        profit = round((entry - price_close) * volume * mult, 2)
     trade = {
         "ticket": pos.get("ticket"),
         "symbol": sym,
@@ -1258,6 +1294,7 @@ async def _ai_trade_loop():
                                 "profit": 0.0,
                                 "current_price": round(entry, 2),
                                 "open_time": datetime.now(timezone.utc).isoformat(),
+                                "source": "DEMO",  # BUG FIX: mirror ảo — BE/trailing không MODIFY ticket rác
                             })
                             cmd["status"] = "FILLED"
                             cmd["ticket"] = ticket
@@ -1304,11 +1341,12 @@ async def _position_manager_loop():
                     volume = float(pos.get("volume", 0.01))
                     current_price = bid if pos_type == "BUY" else ask
 
-                    # Cập nhật P&L floating
+                    # Cập nhật P&L floating (hệ số lot theo symbol — không hardcode *100)
+                    mult = _lot_value_multiplier(symbol)
                     if pos_type == "BUY":
-                        pos["profit"] = round((current_price - entry) * volume * 100, 2)
+                        pos["profit"] = round((current_price - entry) * volume * mult, 2)
                     else:
-                        pos["profit"] = round((entry - current_price) * volume * 100, 2)
+                        pos["profit"] = round((entry - current_price) * volume * mult, 2)
                     pos["current_price"] = current_price
 
                     # ── DEMO MODE: mô phỏng chạm SL/TP (MT5 thật tự xử lý;
@@ -1355,7 +1393,10 @@ async def _position_manager_loop():
                             pos["be_applied"] = True
                             _add_log("INFO", "BREAK_EVEN", f"SL -> BE for {pos_type} #{pos.get('ticket')} @ {new_sl}")
                             _add_ai_event("TRADE", "BREAK_EVEN", symbol, {"ticket": pos.get("ticket"), "sl": new_sl})
-                            if _account.get("mt5_connected"):
+                            # BUG FIX: không gửi MODIFY cho mirror DEMO ảo (ticket random
+                            # không tồn tại trên MT5) khi EA đã kết nối — trước đây gửi
+                            # ticket rác -> EA REJECT_TICKET_NOT_FOUND lặp mỗi 2s.
+                            if _account.get("mt5_connected") and pos.get("source") != "DEMO":
                                 _queue_modify(symbol, pos, new_sl, tp)
 
                     # ── 2) Trailing stop (sau BE, khoảng 0.5R) ──
@@ -1368,13 +1409,13 @@ async def _position_manager_loop():
                             candidate = round(current_price - trail, 2)
                             if candidate > live_sl + 0.01:
                                 pos["sl"] = candidate
-                                if _account.get("mt5_connected"):
+                                if _account.get("mt5_connected") and pos.get("source") != "DEMO":
                                     _queue_modify(symbol, pos, candidate, tp)
                         else:
                             candidate = round(current_price + trail, 2)
                             if live_sl == 0 or candidate < live_sl - 0.01:
                                 pos["sl"] = candidate
-                                if _account.get("mt5_connected"):
+                                if _account.get("mt5_connected") and pos.get("source") != "DEMO":
                                     _queue_modify(symbol, pos, candidate, tp)
 
             # Cleanup mirror có cờ closing (EA không phản hồi trong 180s)
@@ -1607,7 +1648,7 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
         })
 
 
-    return {
+    return _json_safe({
         "symbol": symbol,
         "tf": tf,
         "bid": bid,
@@ -1617,7 +1658,7 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
         "candles": candles,
         "method": method,
         "markup": markup_data
-    }
+    })
 
 
 # ─── POSITIONS ────────────────────────────────────────────────────────────────
@@ -1739,15 +1780,24 @@ async def get_patterns(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), re
         return []
 
 @app.post("/api/order/create")
-async def create_order(req: OrderCreateRequest):
-    """Create order from Web UI -> Queues command for MT5 EA to execute"""
+async def create_order(req: OrderCreateRequest, request: Request):
+    """Create order from Web UI -> Queues command for MT5 EA to execute.
+    BUG FIX (SECURITY): thiếu Bearer auth như mọi endpoint khác -> ai cũng mở
+    được lệnh REAL qua cổng backend trực tiếp (8848 public port-forward)."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
     cmd_id = str(uuid.uuid4())
     direction = req.direction.upper()
     if direction not in ("BUY", "SELL"):
         raise HTTPException(status_code=400, detail="Invalid direction (must be BUY or SELL)")
 
     bid, ask = await fetch_real_bid_ask(req.symbol)
-    entry_price = req.price if req.price and req.price > 0 else (ask if direction == "BUY" else bid)
+    # BUG FIX: EA luôn execute MARKET (m_trade.Buy/Sell) — entry phải là giá thị
+    # trường thật, không dùng req.price nhập tay (sai lệch với fill thực tế).
+    entry_price = ask if direction == "BUY" else bid
+    if not entry_price or entry_price <= 0:
+        entry_price = req.price or 0.0
 
     cmd = {
         "command_id": cmd_id,
@@ -1782,6 +1832,7 @@ async def create_order(req: OrderCreateRequest):
             "profit": 0.0,
             "current_price": entry_price,
             "open_time": datetime.now(timezone.utc).isoformat(),
+            "source": "DEMO",  # BUG FIX: đánh dấu mirror ảo để BE/trailing không gửi MODIFY ticket rác
         })
         cmd["status"] = "FILLED"
         cmd["ticket"] = ticket
@@ -1888,12 +1939,16 @@ async def news_analyze(req: NewsAnalyzeRequest, request: Request):
 
 
 @app.post("/api/order/close")
-async def close_position(req: OrderCloseRequest):
+async def close_position(req: OrderCloseRequest, request: Request):
     """Close a position by ticket.
+    BUG FIX (SECURITY): thiếu Bearer auth — đóng lệnh REAL không token.
     BUG FIX: ở chế độ MT5 connected, lệnh đóng phải gửi tới EA (CLOSE_POSITION)
     — trước đây chỉ xoá mirror local nên vị thế MT5 thật vẫn mở và bot có thể mở
     lệnh trùng hướng. Mirror giữ với cờ closing (chặn trùng), EA xác nhận qua
     receipt EXECUTED hoặc cleanup sau timeout."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
     for sym, positions in _positions.items():
         for i, pos in enumerate(positions):
             if pos.get("ticket") == req.ticket:
@@ -1925,10 +1980,14 @@ async def close_position(req: OrderCloseRequest):
     raise HTTPException(status_code=404, detail="Position not found")
 
 @app.post("/api/order/close_all")
-async def close_all_positions():
+async def close_all_positions(request: Request):
     """Close all positions across all symbols.
+    BUG FIX (SECURITY): thiếu Bearer auth — đóng TẤT CẢ lệnh REAL không token.
     BUG FIX: real mode -> queue CLOSE_ALL cho EA (không xoá mirror ngay);
     demo mode -> ghi nhận từng lệnh vào lịch sử _trades (trước đây bỏ sót)."""
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
     closed = []
     if _account.get("mt5_connected"):
         _commands.append({
@@ -1959,24 +2018,38 @@ async def close_all_positions():
 @app.post("/api/orders/close-profitable")
 async def close_profitable_positions(request: Request):
     """Close all positions currently in profit (Control Center Quick Action).
-    BUG FIX: backend thiếu route /api/orders/close-profitable -> 404.
-    LIVE mode (EA connected): queue CLOSE_ALL cho EA, KHÔNG xóa mirror local
-    (EA xác nhận qua receipt) — fail-closed, tránh dashboard/MT5 lệch nhau."""
+    BUG FIX: trước đây LIVE mode queue CLOSE_ALL -> EA đóng TẤT CẢ vị thế kể cả
+    đang LỖ. Giờ queue CLOSE_POSITION riêng cho từng ticket đang lời (mirror P&L
+    cập nhật mỗi 2s từ bid/ask thật)."""
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
     if _account.get("mt5_connected"):
-        _commands.append({
-            "command_id": str(uuid.uuid4()),
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "action": "CLOSE_ALL",
-            "symbol": resolve_symbol(_config.get("symbol", "XAUUSD")),
-            "magic": _config.get("magic", 888999),
-            "reason": "close-profitable (all positions in profit)",
-            "status": "QUEUED"
-        })
-        _add_log("INFO", "CLOSE_PROFIT", "Queued CLOSE_ALL for EA (profitable)")
-        return {"status": "SUCCESS", "queued_for_ea": True, "closed": 0}
+        queued = 0
+        for sym, positions in list(_positions.items()):
+            for pos in list(positions):
+                profit = float(pos.get("profit", 0) or 0)
+                ticket = pos.get("ticket")
+                # BUG FIX: bỏ qua mirror DEMO ảo (ticket random không tồn tại trên
+                # MT5) khi EA đã kết nối — trước đây queue CLOSE_POSITION ticket rác
+                # -> EA REJECT_TICKET_NOT_FOUND.
+                if profit <= 0 or not ticket or pos.get("closing") or pos.get("source") == "DEMO":
+                    continue
+                _commands.append({
+                    "command_id": str(uuid.uuid4()),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "action": "CLOSE_POSITION",
+                    "symbol": resolve_symbol(sym),
+                    "magic": _config.get("magic", 888999),
+                    "ticket": ticket,
+                    "reason": f"ticket={ticket}",
+                    "status": "QUEUED"
+                })
+                pos["closing"] = True
+                pos["closing_at"] = datetime.now(timezone.utc).isoformat()
+                queued += 1
+        _add_log("INFO", "CLOSE_PROFIT", f"Queued {queued} profitable position(s) for EA (ticket-filtered)")
+        return {"status": "SUCCESS", "queued_for_ea": True, "closed": queued}
     closed = []
     for sym, positions in list(_positions.items()):
         for pos in list(positions):
@@ -1996,22 +2069,36 @@ async def close_profitable_positions(request: Request):
 
 @app.post("/api/orders/close-losing")
 async def close_losing_positions(request: Request):
-    """Close all positions currently in loss."""
+    """Close all positions currently in loss.
+    BUG FIX: LIVE mode trước đây queue CLOSE_ALL -> đóng cả lệnh đang LỜI.
+    Giờ chỉ queue CLOSE_POSITION cho từng ticket đang lỗ."""
     auth = request.headers.get("authorization", "")
     if not auth.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing Bearer token")
     if _account.get("mt5_connected"):
-        _commands.append({
-            "command_id": str(uuid.uuid4()),
-            "ts": datetime.now(timezone.utc).isoformat(),
-            "action": "CLOSE_ALL",
-            "symbol": resolve_symbol(_config.get("symbol", "XAUUSD")),
-            "magic": _config.get("magic", 888999),
-            "reason": "close-losing (all positions in loss)",
-            "status": "QUEUED"
-        })
-        _add_log("INFO", "CLOSE_LOSS", "Queued CLOSE_ALL for EA (losing)")
-        return {"status": "SUCCESS", "queued_for_ea": True, "closed": 0}
+        queued = 0
+        for sym, positions in list(_positions.items()):
+            for pos in list(positions):
+                profit = float(pos.get("profit", 0) or 0)
+                ticket = pos.get("ticket")
+                # BUG FIX: bỏ qua mirror DEMO ảo (ticket rác) khi EA đã kết nối
+                if profit >= 0 or not ticket or pos.get("closing") or pos.get("source") == "DEMO":
+                    continue
+                _commands.append({
+                    "command_id": str(uuid.uuid4()),
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "action": "CLOSE_POSITION",
+                    "symbol": resolve_symbol(sym),
+                    "magic": _config.get("magic", 888999),
+                    "ticket": ticket,
+                    "reason": f"ticket={ticket}",
+                    "status": "QUEUED"
+                })
+                pos["closing"] = True
+                pos["closing_at"] = datetime.now(timezone.utc).isoformat()
+                queued += 1
+        _add_log("INFO", "CLOSE_LOSS", f"Queued {queued} losing position(s) for EA (ticket-filtered)")
+        return {"status": "SUCCESS", "queued_for_ea": True, "closed": queued}
     closed = []
     for sym, positions in list(_positions.items()):
         for pos in list(positions):
@@ -2867,23 +2954,28 @@ async def bridge_receipt(command_id: str, req: ReceiptRequest, request: Request)
 
             if is_filled and ticket:
                 if action in ("BUY", "SELL"):
-                    # EA xác nhận mở lệnh: thêm vào mirror _positions
+                    # EA xác nhận mở lệnh: thêm vào mirror _positions.
+                    # BUG FIX: chống duplicate receipt — EA retry gửi 2 lần -> trước
+                    # đây append 2 mirror trùng ticket -> đóng 1 lệnh xoá 1 còn 1.
                     if sym not in _positions:
                         _positions[sym] = []
-                    _positions[sym].append({
-                        "ticket": ticket,
-                        "symbol": sym,
-                        "type": action,
-                        "volume": req.fill_volume or cmd.get("volume"),
-                        "price_open": req.fill_price or cmd.get("entry"),
-                        "sl": req.sl or cmd.get("stop_loss"),
-                        "orig_sl": req.sl or cmd.get("stop_loss"),
-                        "tp": req.tp or cmd.get("take_profit"),
-                        "be_applied": False,
-                        "profit": 0,
-                        "current_price": req.fill_price or cmd.get("entry"),
-                        "open_time": datetime.now(timezone.utc).isoformat(),
-                    })
+                    if any(p.get("ticket") == ticket for p in _positions[sym]):
+                        _add_log("WARN", "RECEIPT_DUP", f"Duplicate receipt ticket={ticket} ignored (already mirrored)")
+                    else:
+                        _positions[sym].append({
+                            "ticket": ticket,
+                            "symbol": sym,
+                            "type": action,
+                            "volume": req.fill_volume or cmd.get("volume"),
+                            "price_open": req.fill_price or cmd.get("entry"),
+                            "sl": req.sl or cmd.get("stop_loss"),
+                            "orig_sl": req.sl or cmd.get("stop_loss"),
+                            "tp": req.tp or cmd.get("take_profit"),
+                            "be_applied": False,
+                            "profit": 0,
+                            "current_price": req.fill_price or cmd.get("entry"),
+                            "open_time": datetime.now(timezone.utc).isoformat(),
+                        })
                     _add_ai_event("TRADE", action, sym, {
                         "ticket": ticket,
                         "entry": req.fill_price or cmd.get("entry"),
@@ -3041,14 +3133,14 @@ async def bridge_markup(req: MarkupRequest, request: Request):
                 mtf_data[ctx_tf] = ctx_df
         markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
         _add_log("DEBUG", "EA_MARKUP", f"EA {req.executor_id} fetched {len(markup['objects'])} markup objects for {symbol} [{method}]")
-        return {
+        return _json_safe({
             "status": "OK",
             "symbol": symbol,
             "timeframe": tf,
             "method": markup["method"],
             "objects": markup["objects"],
             "confluence": markup.get("confluence", {}),
-        }
+        })
     except Exception as e:
         _add_log("ERROR", "BRIDGE_MARKUP", str(e))
         return {"status": "ERROR", "message": str(e), "objects": []}
@@ -3245,6 +3337,26 @@ async def economic_calendar_protection(request: Request):
     try:
         cal = _market_cache.get("economic_calendar") or {}
         now_ts = datetime.now(timezone.utc).timestamp()
+        # FAIL-CLOSED (BUG FIX): cache lịch kinh tế trống hoặc quá cũ (> 15 phút;
+        # EA đẩy mỗi 300s) -> trả "unknown" để EA CHẶN entry mới. Trước đây trả
+        # "none" khi không có dữ liệu -> EA mở lệnh mù dù chưa hề có thông tin tin.
+        cal_ts_raw = cal.get("ts") or ""
+        try:
+            cal_ts = datetime.fromisoformat(cal_ts_raw.replace("Z", "+00:00")) if cal_ts_raw else None
+            cal_fresh = cal_ts is not None and (now_ts - cal_ts.timestamp()) <= 15 * 60
+        except Exception:
+            cal_fresh = False
+        if not cal_fresh:
+            return {
+                "status": "OK",
+                "protection_level": "unknown",
+                "level": "unknown",
+                "live_seconds": 0,
+                "live_remaining_seconds": 0,
+                "next_event": None,
+                "server_time": datetime.now(timezone.utc).isoformat(),
+                "data_available": False,
+            }
         for ev in (cal.get("events") or []):
             impact = str(ev.get("impact") or "").upper()
             if impact not in ("HIGH", "MED", "MEDIUM"):
@@ -3276,8 +3388,15 @@ async def economic_calendar_protection(request: Request):
                     protection_level = "watch"
                     live_seconds = int(delta)
                     next_event = event_payload
-    except Exception:
-        protection_level = "none"
+    except Exception as e:
+        # FAIL-CLOSED: bất kỳ lỗi nào khi đọc/parse calendar -> "unknown" (chặn
+        # entry mới) chứ KHÔNG fallback "none" (FAIL-OPEN = trade mù). Trước đây
+        # except rỗng -> protection_level giữ giá trị khởi tạo "none" -> EA mở
+        # lệnh dù không xác nhận được trạng thái tin.
+        _add_log("WARN", "PROTECTION_PARSE_FAIL", f"protection parse error: {e}")
+        protection_level = "unknown"
+        live_seconds = 0
+        next_event = None
 
     return {
         "status": "OK",
@@ -3286,7 +3405,8 @@ async def economic_calendar_protection(request: Request):
         "live_seconds": live_seconds,
         "live_remaining_seconds": live_seconds,
         "next_event": next_event,
-        "server_time": datetime.now(timezone.utc).isoformat()
+        "server_time": datetime.now(timezone.utc).isoformat(),
+        "data_available": True,
     }
 
 

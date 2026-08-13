@@ -10,6 +10,7 @@ silently mutating live configuration.
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import uuid
@@ -295,11 +296,21 @@ class BrainStore:
                 "SELECT * FROM strategy_stats WHERE strategy_version=? AND trading_method=?",
                 (strategy_version, trading_method),
             ).fetchone()
+            # BUG FIX: stats có thể là None (schema migration giữa phiên) hoặc cột
+            # NULL -> int(None) ném TypeError làm chết vòng AI loop. Fail-closed:
+            # không ghi nhận kết quả trade này, log cảnh báo rồi bỏ qua.
+            if stats is None or stats["sample_size"] is None or stats["wins"] is None \
+                    or stats["losses"] is None or stats["breakevens"] is None:
+                logging.getLogger("brain").warning(
+                    "strategy_stats row missing/invalid for %s/%s — skipping update",
+                    strategy_version, trading_method,
+                )
+                return
             sample_size = int(stats["sample_size"]) + 1
             wins = int(stats["wins"]) + delta_wins
             losses = int(stats["losses"]) + delta_losses
             breakevens = int(stats["breakevens"]) + delta_be
-            total_pnl = float(stats["total_pnl"]) + net_profit
+            total_pnl = float(stats["total_pnl"] or 0) + net_profit
             win_rate = round((wins / sample_size) * 100.0, 2) if sample_size else None
             gross_profit = max(0.0, total_pnl) if total_pnl > 0 else 0.0
             gross_loss = max(0.0, -total_pnl)

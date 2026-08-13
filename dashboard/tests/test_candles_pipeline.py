@@ -8,6 +8,7 @@ import os
 import sys
 from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -50,6 +51,34 @@ def test_sweep_below_lows_is_bullish_not_bearish():
     closes = [100] * 9 + [101.5]
     res = server.detect_liquidity_sweep(_sweep_df(highs, lows, closes))
     assert res == "BULLISH_SWEEP"
+
+
+def test_json_safe_handles_numpy_scalars():
+    """BUG FIX: markup từ pandas/numpy (np.bool_, np.float64...) phải serialize
+    được qua json.dumps — trước đây FastAPI jsonable_encoder ném 500 trên
+    /api/market với dữ liệu EA 40000 nến."""
+    import json
+
+    payload = {
+        "ok": np.bool_(True),
+        "score": np.float64(87.5),
+        "count": np.int64(3),
+        "arr": np.array([np.float64(1.1), np.float64(2.2)]),
+        "nan": np.float64("nan"),
+        "inf": np.float64("inf"),
+        "plain": "x",
+        "nested": {"fvg": np.bool_(False), "price": np.float64(3370.25)},
+    }
+    out = server._json_safe(payload)
+    assert out["ok"] is True
+    assert out["score"] == 87.5
+    assert out["count"] == 3
+    assert out["arr"] == [1.1, 2.2]
+    assert out["nan"] is None
+    assert out["inf"] is None
+    assert out["nested"]["fvg"] is False
+    assert out["nested"]["price"] == 3370.25
+    json.dumps(out)  # phải không ném lỗi
 
 
 def _candle(ts: str, close: float = 4428.0) -> dict:
