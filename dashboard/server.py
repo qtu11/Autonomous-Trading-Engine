@@ -30,6 +30,7 @@ import os
 
 # pyrefly: ignore [untyped-import]
 
+# pyrefly: ignore [untyped-import]
 import psutil
 
 import sys
@@ -353,12 +354,14 @@ def get_account(login: Optional[str] = None) -> Dict[str, Any]:
     """Return account state dict for a given login (default = active)."""
     if login is None:
         return _account._active()
+    # pyrefly: ignore [unnecessary-type-conversion]
     return _accounts.setdefault(str(login), _default_account_state())
 
 
 def set_active_account(login: str) -> None:
     """Switch dashboard view to a different login."""
     global _active_login
+    # pyrefly: ignore [unnecessary-type-conversion]
     login_str = str(login)
     if login_str not in _accounts:
         _accounts[login_str] = _default_account_state()
@@ -651,6 +654,7 @@ def _normalize_candle_df(df: pd.DataFrame) -> pd.DataFrame:
 
         # pyrefly: ignore [unnecessary-type-conversion]
 
+        # pyrefly: ignore [unnecessary-type-conversion]
         c = str(col).strip()
 
         if c in ("ts", "time"):
@@ -929,6 +933,7 @@ def _resample_from_cache(symbol: str, tf: str, count: int) -> Optional[pd.DataFr
 
         # pyrefly: ignore [missing-attribute]
 
+        # pyrefly: ignore [missing-attribute]
         agg["timestamp"] = agg["timestamp"].dt.strftime("%Y-%m-%d %H:%M:%S")
 
         return agg.tail(count).reset_index(drop=True)
@@ -1527,18 +1532,22 @@ def detect_bos_choch(df: pd.DataFrame) -> Dict[str, Any]:
 
     # pyrefly: ignore [unnecessary-type-conversion]
 
+    # pyrefly: ignore [unnecessary-type-conversion]
     last_high_price = float(swing_highs[-1][1])
 
     # pyrefly: ignore [unnecessary-type-conversion]
 
+    # pyrefly: ignore [unnecessary-type-conversion]
     prev_high_price = float(swing_highs[-2][1]) if len(swing_highs) >= 2 else last_high_price
 
     # pyrefly: ignore [unnecessary-type-conversion]
 
+    # pyrefly: ignore [unnecessary-type-conversion]
     last_low_price = float(swing_lows[-1][1])
 
     # pyrefly: ignore [unnecessary-type-conversion]
 
+    # pyrefly: ignore [unnecessary-type-conversion]
     prev_low_price = float(swing_lows[-2][1]) if len(swing_lows) >= 2 else last_low_price
 
     close = float(closes[-1])
@@ -2119,6 +2128,7 @@ async def run_ai_analysis(symbol: str, method: str, tf: Optional[str] = None) ->
 
     # pyrefly: ignore [bad-assignment]
 
+    # pyrefly: ignore [bad-assignment]
     tf = tf or _config.get("timeframe", "M15")
 
     cache_key = f"{symbol}:{method}:{tf}"
@@ -2137,6 +2147,7 @@ async def run_ai_analysis(symbol: str, method: str, tf: Optional[str] = None) ->
 
     # pyrefly: ignore [bad-argument-type]
 
+    # pyrefly: ignore [bad-argument-type]
     df = await fetch_real_candles(symbol, tf, 500)
 
     if df is None or df.empty:
@@ -2322,6 +2333,7 @@ def _record_closed_trade(sym: str, pos: Dict[str, Any], price_close: float, reas
 
     # pyrefly: ignore [bad-argument-type]
 
+    # pyrefly: ignore [bad-argument-type]
     entry = float(pos.get("price_open", pos.get("entry", 0)))
 
     volume = float(pos.get("volume", 0.01))
@@ -2472,6 +2484,7 @@ async def _ai_trade_loop():
 
             # pyrefly: ignore [bad-argument-type]
 
+            # pyrefly: ignore [bad-argument-type]
             df = await fetch_real_candles(symbol, tf, 1000)
 
             if df is None or df.empty:
@@ -2492,6 +2505,8 @@ async def _ai_trade_loop():
 
                 # pyrefly: ignore [bad-argument-type]
 
+                # pyrefly: ignore [bad-argument-type]
+                # pyrefly: ignore [bad-argument-type]
                 _add_ai_event("WARNING", "NO_REAL_DATA", symbol, {
 
                     "reason": "LIVE mode has no real MT5 data (EA/bridge down) - auto-trade paused (fail-closed)",
@@ -2510,6 +2525,7 @@ async def _ai_trade_loop():
 
             # pyrefly: ignore [bad-assignment]
 
+            # pyrefly: ignore [bad-assignment]
             mtf_data: Dict[str, pd.DataFrame] = {tf: df}
 
             for ctx_tf in ("M15", "H1", "D1"):
@@ -2520,6 +2536,7 @@ async def _ai_trade_loop():
 
                 # pyrefly: ignore [bad-argument-type]
 
+                # pyrefly: ignore [bad-argument-type]
                 ctx_df = await _fetch_context_candles(symbol, ctx_tf)
 
                 if ctx_df is not None and not ctx_df.empty:
@@ -2529,6 +2546,8 @@ async def _ai_trade_loop():
             # pyrefly: ignore [bad-argument-type]
 
             mtf_data_trimmed = {k: v.tail(600) if hasattr(v, 'tail') else v for k, v in mtf_data.items()}
+            # pyrefly: ignore [bad-argument-type]
+            # pyrefly: ignore [bad-argument-type]
             markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
 
             cf = markup.get("confluence") or {}
@@ -2551,6 +2570,7 @@ async def _ai_trade_loop():
 
             # pyrefly: ignore [unnecessary-type-conversion]
 
+            # pyrefly: ignore [unnecessary-type-conversion]
             atr = float((df["high"] - df["low"]).tail(14).mean()) if len(df) >= 14 else 15.0
 
             reasons = [f.get("reason") for f in (cf.get("factors") or []) if f.get("reason")][:3]
@@ -2561,6 +2581,7 @@ async def _ai_trade_loop():
 
             # pyrefly: ignore [bad-argument-type]
 
+            # pyrefly: ignore [bad-argument-type]
             _add_ai_event("INFO", "HEARTBEAT", symbol, {
 
                 "method": method,
@@ -2573,6 +2594,7 @@ async def _ai_trade_loop():
 
                 # pyrefly: ignore [bad-argument-type]
 
+                # pyrefly: ignore [bad-argument-type]
                 "open_positions": len(_positions.get(resolve_symbol(symbol), [])),
 
                 "max_positions": max_pos
@@ -2603,6 +2625,7 @@ async def _ai_trade_loop():
 
                 # pyrefly: ignore [bad-argument-type]
 
+                # pyrefly: ignore [bad-argument-type]
                 current_positions = _positions.get(resolve_symbol(symbol), [])
 
 
@@ -2619,6 +2642,7 @@ async def _ai_trade_loop():
 
                 # pyrefly: ignore [unsupported-operation]
 
+                # pyrefly: ignore [unsupported-operation]
                 if not has_same_direction and len(current_positions) < max_pos:
 
                     # Check for recent same-direction trade (avoid duplicates within 60s)
@@ -2631,6 +2655,7 @@ async def _ai_trade_loop():
 
                         # pyrefly: ignore [bad-argument-type]
 
+                        # pyrefly: ignore [bad-argument-type]
                         and resolve_symbol(c.get("symbol")) == resolve_symbol(symbol)
 
                         and (datetime.now(timezone.utc) - datetime.fromisoformat(c["ts"].replace("Z", "+00:00"))).total_seconds() < 60
@@ -2671,6 +2696,7 @@ async def _ai_trade_loop():
 
                             # pyrefly: ignore [bad-argument-type]
 
+                            # pyrefly: ignore [bad-argument-type]
                             bid, ask = await fetch_real_bid_ask(symbol)
 
                             current_spread = ask - bid
@@ -2685,6 +2711,7 @@ async def _ai_trade_loop():
 
                             # pyrefly: ignore [bad-argument-type]
 
+                            # pyrefly: ignore [bad-argument-type]
                             symbol=symbol, signal=signal,
 
                             entry=entry, sl=sl, tp=tp,
@@ -2693,6 +2720,7 @@ async def _ai_trade_loop():
 
                             # pyrefly: ignore [bad-argument-type]
 
+                            # pyrefly: ignore [bad-argument-type]
                             score=score, method=method
 
                         )
@@ -2703,6 +2731,7 @@ async def _ai_trade_loop():
 
                             # pyrefly: ignore [bad-argument-type]
 
+                            # pyrefly: ignore [bad-argument-type]
                             _add_ai_event("WARNING", "RISK_REJECT", symbol, {
 
                                 "reason": risk_result["reason"],
@@ -2736,7 +2765,6 @@ async def _ai_trade_loop():
                             "action": signal,
 
                             # pyrefly: ignore [bad-argument-type]
-
                             "symbol": resolve_symbol(symbol),
 
                             "magic": _config.get("magic", 888999),
@@ -2772,7 +2800,6 @@ async def _ai_trade_loop():
                             ticket = random.randint(100000, 999999)
 
                             # pyrefly: ignore [bad-argument-type]
-
                             rkey = resolve_symbol(symbol)
 
                             if rkey not in _positions:
@@ -2814,13 +2841,11 @@ async def _ai_trade_loop():
                             cmd["ticket"] = ticket
 
                             # pyrefly: ignore [bad-argument-type]
-
                             _account["open_positions"] = len(_positions.get(resolve_symbol(symbol), []))
 
 
 
                         # pyrefly: ignore [bad-argument-type]
-
                         _add_ai_event("TRADE", signal, symbol, {
 
                             "method": method,
@@ -2848,7 +2873,6 @@ async def _ai_trade_loop():
             # ── DCA: quét vị thế đang lỗ và nhồi lệnh trung bình giá (nếu bật) ──
 
             # pyrefly: ignore [bad-argument-type]
-
             await _dca_check(symbol, method, atr)
 
 
@@ -2898,7 +2922,6 @@ async def _position_manager_loop():
                     pos_type = str(pos.get("type", "BUY")).upper()
 
                     # pyrefly: ignore [bad-argument-type]
-
                     entry = float(pos.get("price_open", pos.get("entry", 0)))
 
                     sl = float(pos.get("sl", 0))
@@ -2960,7 +2983,6 @@ async def _position_manager_loop():
                         if close_price is not None:
 
                             # pyrefly: ignore [bad-argument-type]
-
                             trade = _record_closed_trade(symbol, pos, close_price, reason)
 
                             if pos in pos_list:
@@ -3302,7 +3324,6 @@ async def _dca_check(symbol: str, method: str, atr: float):
                 ev_dt = _parse_event_datetime(ev)
 
                 # pyrefly: ignore [bad-argument-type]
-
                 if ev_dt and abs(now_ts - ev_dt.timestamp()) <= int(_config.get("news_window_minutes", 15)) * 60:
 
                     news_block = True
@@ -3544,7 +3565,6 @@ async def get_status(symbol: str = Query("XAUUSD")):
 
 
     # pyrefly: ignore [bad-argument-type]
-
     analysis = await run_ai_analysis(symbol, _config["trading_method"])
 
 
@@ -3755,7 +3775,6 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
     method = _config.get("trading_method", "SMC")
 
     # pyrefly: ignore [bad-argument-type]
-
     analysis = await run_ai_analysis(symbol, method, tf)
 
 
@@ -3789,8 +3808,8 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
 
 
     # pyrefly: ignore [bad-argument-type]
-
     mtf_data_trimmed = {k: v.tail(600) if hasattr(v, 'tail') else v for k, v in mtf_data.items()}
+    # pyrefly: ignore [bad-argument-type]
     markup_data = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
 
 
@@ -3858,7 +3877,6 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
             "c": float(row["close"]),
 
             # pyrefly: ignore [bad-argument-type]
-
             "v": float(row.get("volume", row.get("tick_volume", row.get("real_volume", 1000))))
 
         })
@@ -4113,6 +4131,7 @@ async def get_patterns(request: Request, symbol: str = Query("XAUUSD"), tf: str 
 
                 # pyrefly: ignore [unnecessary-type-conversion]
 
+                # pyrefly: ignore [unnecessary-type-conversion]
                 "direction": "BULLISH" if "BULLISH" in str(liq) else "BEARISH",
 
                 "symbol": symbol, "price": round(float(df["close"].iloc[-1]), 2),
@@ -4193,8 +4212,10 @@ async def create_order(req: OrderCreateRequest, request: Request):
 
                 entry=entry_price,
 
+                # pyrefly: ignore [unnecessary-type-conversion]
                 sl=float(req.stop_loss),
 
+                # pyrefly: ignore [unnecessary-type-conversion]
                 tp=float(req.take_profit),
 
                 spread=spread,
@@ -4203,6 +4224,7 @@ async def create_order(req: OrderCreateRequest, request: Request):
 
                 score=50,  # manual order — no confluence score; gate evaluates on gate params only
 
+                # pyrefly: ignore [bad-argument-type]
                 method=_config.get("trading_method", "SMC"),
 
             )
@@ -4439,6 +4461,7 @@ async def news_analyze(req: NewsAnalyzeRequest, request: Request):
 
         # pyrefly: ignore [unnecessary-type-conversion]
 
+        # pyrefly: ignore [unnecessary-type-conversion]
         t = str(s).strip().replace("%", "").replace(",", "").replace(" ", "")
 
         if not t:
@@ -4481,6 +4504,7 @@ async def news_analyze(req: NewsAnalyzeRequest, request: Request):
 
             # pyrefly: ignore [unnecessary-type-conversion]
 
+            # pyrefly: ignore [unnecessary-type-conversion]
             a, f = float(a), float(f)
 
             if "CPI" in title.upper() or "PPI" in title.upper() or "NFP" in title.upper() or "GDP" in title.upper():
@@ -4609,6 +4633,7 @@ async def close_position(req: OrderCloseRequest, request: Request):
 
                 # pyrefly: ignore [bad-argument-type]
 
+                # pyrefly: ignore [bad-argument-type]
                 price_close = float(pos.get("current_price", pos.get("price_open", 0)))
 
                 trade = _record_closed_trade(sym, pos, price_close, "MANUAL_CLOSE")
@@ -4665,6 +4690,7 @@ async def close_all_positions(request: Request):
 
             # pyrefly: ignore [bad-argument-type]
 
+            # pyrefly: ignore [bad-argument-type]
             "symbol": resolve_symbol(_config.get("symbol", "XAUUSD")),
 
             "magic": our_magic,
@@ -4715,6 +4741,7 @@ async def close_all_positions(request: Request):
 
             # pyrefly: ignore [bad-argument-type]
 
+            # pyrefly: ignore [bad-argument-type]
             price_close = float(pos.get("current_price", pos.get("price_open", 0)))
 
             trade = _record_closed_trade(sym, pos, price_close, "CLOSE_ALL")
@@ -4845,6 +4872,7 @@ async def close_profitable_positions(request: Request):
 
             # pyrefly: ignore [bad-argument-type]
 
+            # pyrefly: ignore [bad-argument-type]
             price_close = float(pos.get("current_price", pos.get("price_open", 0)))
 
             trade = _record_closed_trade(sym, pos, price_close, "CLOSE_PROFIT")
@@ -4969,6 +4997,7 @@ async def close_losing_positions(request: Request):
 
             # pyrefly: ignore [bad-argument-type]
 
+            # pyrefly: ignore [bad-argument-type]
             price_close = float(pos.get("current_price", pos.get("price_open", 0)))
 
             trade = _record_closed_trade(sym, pos, price_close, "CLOSE_LOSS")
@@ -5079,6 +5108,7 @@ async def set_trading_method(req: TradingMethodRequest):
 
     # pyrefly: ignore [bad-argument-type]
 
+    # pyrefly: ignore [bad-argument-type]
     asyncio.create_task(run_ai_analysis(symbol, method))
 
 
@@ -5102,7 +5132,6 @@ async def set_ai_loop(req: AiLoopRequest):
     _add_log("INFO", "AI_LOOP", f"AI Auto Trade {status}")
 
     # pyrefly: ignore [bad-argument-type]
-
     _add_ai_event("INFO", "AI_LOOP", _config.get("symbol", "XAUUSD"), {"ai_auto_loop": req.enabled})
 
     return {"status": "SUCCESS", "ai_auto_loop": req.enabled}
@@ -5194,7 +5223,6 @@ async def set_control_mode(request: Request):
     _add_log("WARNING", "EXECUTION_MODE", f"Execution mode changed from {old} to {mode}")
 
     # pyrefly: ignore [bad-argument-type]
-
     _add_ai_event("INFO", "EXECUTION_MODE", _config.get("symbol", "XAUUSD"), {"mode": mode})
 
     return {"status": "SUCCESS", "mode": mode}
@@ -5558,7 +5586,6 @@ async def login_mt5(req: MT5LoginRequest):
                 # pyrefly: ignore [bad-argument-type]
 
                 # pyrefly: ignore [bad-argument-type]
-
                 symbol=symbol, timeframe=tf)
 
         except Exception as exc:  # pragma: no cover
@@ -5601,36 +5628,29 @@ async def login_mt5(req: MT5LoginRequest):
 
         _account["mt5_connected"] = True
 
-        # pyrefly: ignore [missing-attribute]
-
+        # pyrefly: ignore [missing-attribute
         _account["login"] = acc.get("login") or req.login
 
         # pyrefly: ignore [missing-attribute]
 
         # pyrefly: ignore [missing-attribute]
-
         _account["server"] = acc.get("server") or req.server
 
         # pyrefly: ignore [missing-attribute]
-
         if acc.get("balance") is not None:
 
             # pyrefly: ignore [bad-index, unsupported-operation]
-
             _account["balance"] = float(acc["balance"])
 
         # pyrefly: ignore [missing-attribute]
-
         if acc.get("equity") is not None:
 
             # pyrefly: ignore [bad-index, unsupported-operation]
-
             _account["equity"] = float(acc["equity"])
 
         _add_log("INFO", "MT5_LOGIN", f"MT5 connected (python): {_account['login']}@{_account['server']}")
 
         # pyrefly: ignore [bad-argument-type]
-
         _add_ai_event("INFO", "MT5_LOGIN", symbol, {"login": _account["login"], "steps": len(steps)})
 
         # ea_attached: attach EA có thể fail (pywinauto thiếu / MT5 chạy admin) —
@@ -5642,17 +5662,14 @@ async def login_mt5(req: MT5LoginRequest):
         return {"status": "SUCCESS",
 
                 # pyrefly: ignore [missing-attribute]
-
                 "message": f"MT5 connected: {acc.get('login')} @ {acc.get('server')}",
 
                 "account": acc, "steps": steps,
 
                 # pyrefly: ignore [missing-attribute]
-
                 "ea_attached": bool(attach.get("ok")),
 
                 # pyrefly: ignore [missing-attribute]
-
                 "attach_message": attach.get("message", "")}
 
 
@@ -5684,7 +5701,6 @@ async def get_brain():
     method = _config.get("trading_method", "SMC")
 
     # pyrefly: ignore [bad-argument-type]
-
     analysis = await run_ai_analysis(symbol, method)
 
 
@@ -5960,7 +5976,6 @@ async def _call_free_llm(system: str, user: str, timeout: float = 25.0, total_de
                     async with httpx.AsyncClient(timeout=per_model) as client:
 
                         # pyrefly: ignore [bad-argument-type]
-
                         res = await client.post(gw["url"], headers=gw["headers"], json=payload)
 
                         if res.status_code != 200:
@@ -6110,8 +6125,8 @@ async def _build_copilot_context(req: CopilotChatRequest) -> str:
                 mtf_data[ctx_tf] = ctx_df
 
         # pyrefly: ignore [bad-argument-type]
-
         mtf_data_trimmed = {k: v.tail(600) if hasattr(v, 'tail') else v for k, v in mtf_data.items()}
+        # pyrefly: ignore [bad-argument-type]
         markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
 
         objects = markup.get("objects", [])[:15]
@@ -6232,6 +6247,7 @@ async def copilot_chat(req: CopilotChatRequest):
 
     # pyrefly: ignore [bad-argument-type]
 
+    # pyrefly: ignore [bad-argument-type]
     analysis = await run_ai_analysis(req.symbol, _config.get("trading_method", "SMC"))
 
     indicators = analysis.get("indicators", {})
@@ -6370,10 +6386,10 @@ async def register_symbol(request: Request):
 
         # pyrefly: ignore [not-iterable]
 
+        # pyrefly: ignore [not-iterable]
         if sym not in _config["symbols"]:
 
             # pyrefly: ignore [missing-attribute]
-
             _config["symbols"].append(sym)
 
 
@@ -6553,7 +6569,6 @@ async def bridge_claim(req: ClaimRequest, request: Request):
         # bao giờ khớp "XAUUSDm" -> không lệnh nào được claim.
 
         # pyrefly: ignore [bad-argument-type]
-
         if req.symbol and resolve_symbol(cmd.get("symbol")) != resolve_symbol(req.symbol):
 
             continue
@@ -6865,6 +6880,7 @@ async def bridge_telemetry(req: TelemetryRequest, request: Request):
     # truthiness để login=0 hoặc account_id=0 vẫn cập nhật được.
     login_id = req.login if req.login is not None else req.account_id
     if login_id is not None and login_id > 0:
+        # pyrefly: ignore [unnecessary-type-conversion]
         login_key = str(int(login_id))
     else:
         login_key = "default"
@@ -6874,6 +6890,7 @@ async def bridge_telemetry(req: TelemetryRequest, request: Request):
 
     if login_id is not None:
         acc["mt5_connected"] = True
+        # pyrefly: ignore [unnecessary-type-conversion]
         acc["login"] = int(login_id)
         acc["server"] = req.server or acc.get("server", "")
         acc["company"] = req.company or req.broker or acc.get("company", "")
@@ -6913,14 +6930,17 @@ async def bridge_telemetry(req: TelemetryRequest, request: Request):
 
             # pyrefly: ignore [unnecessary-type-conversion]
 
+            # pyrefly: ignore [unnecessary-type-conversion]
             "bid": float(req.bid),
 
             # pyrefly: ignore [unnecessary-type-conversion]
 
+            # pyrefly: ignore [unnecessary-type-conversion]
             "ask": float(req.ask),
 
             # pyrefly: ignore [unnecessary-type-conversion]
 
+            # pyrefly: ignore [unnecessary-type-conversion]
             "spread": round(float(req.ask) - float(req.bid), 2),
 
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -7000,7 +7020,6 @@ async def bridge_markup(req: MarkupRequest, request: Request):
     
 
     # pyrefly: ignore [missing-attribute]
-
     method = (req.method or _config.get("trading_method", "SMC")).upper()
 
     tf = req.timeframe or "M15"
@@ -7011,6 +7030,7 @@ async def bridge_markup(req: MarkupRequest, request: Request):
 
         # pyrefly: ignore [bad-argument-type]
 
+        # pyrefly: ignore [bad-argument-type]
         df = await fetch_real_candles(symbol, tf, 1000)
 
         if df is None or df.empty:
@@ -7033,6 +7053,7 @@ async def bridge_markup(req: MarkupRequest, request: Request):
 
             # pyrefly: ignore [bad-argument-type]
 
+            # pyrefly: ignore [bad-argument-type]
             ctx_df = await _fetch_context_candles(symbol, ctx_tf)
 
             if ctx_df is not None and not ctx_df.empty:
@@ -7042,6 +7063,7 @@ async def bridge_markup(req: MarkupRequest, request: Request):
         # pyrefly: ignore [bad-argument-type]
 
         mtf_data_trimmed = {k: v.tail(600) if hasattr(v, 'tail') else v for k, v in mtf_data.items()}
+        # pyrefly: ignore [bad-argument-type]
         markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
 
         _add_log("DEBUG", "EA_MARKUP", f"EA {req.executor_id} fetched {len(markup['objects'])} markup objects for {symbol} [{method}]")
@@ -7752,6 +7774,7 @@ async def economic_calendar_protection(request: Request):
 
     # pyrefly: ignore [bad-argument-type]
 
+    # pyrefly: ignore [bad-argument-type]
     news_window_min = int(_config.get("news_window_minutes", 15))
 
     try:
@@ -7954,6 +7977,7 @@ def evaluate_risk_gate(symbol: str, signal: str, entry: float, sl: float, tp: fl
 
     # pyrefly: ignore [unsupported-operation]
 
+    # pyrefly: ignore [unsupported-operation]
     checks["spread"] = {"value": spread, "max": max_spread, "ok": spread <= max_spread}
 
     
@@ -7978,6 +8002,7 @@ def evaluate_risk_gate(symbol: str, signal: str, entry: float, sl: float, tp: fl
 
     # pyrefly: ignore [bad-argument-type]
 
+    # pyrefly: ignore [bad-argument-type]
     news_window_min = int(_config.get("news_window_minutes", 15))
 
     try:
@@ -8020,6 +8045,7 @@ def evaluate_risk_gate(symbol: str, signal: str, entry: float, sl: float, tp: fl
 
     # pyrefly: ignore [bad-assignment]
 
+    # pyrefly: ignore [bad-assignment]
     checks["news"] = {"protected": news_block, "event": news_event, "window_min": news_window_min, "ok": not news_block}
 
     
@@ -8050,6 +8076,7 @@ def evaluate_risk_gate(symbol: str, signal: str, entry: float, sl: float, tp: fl
 
                           # pyrefly: ignore [unsupported-operation]
 
+                          # pyrefly: ignore [unsupported-operation]
                           "ok": actual_risk_pct <= risk_pct * 2}  # Allow 2x config
 
     
