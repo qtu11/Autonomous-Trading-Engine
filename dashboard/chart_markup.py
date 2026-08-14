@@ -59,6 +59,18 @@ def _dt(ts: pd.Timestamp) -> str:
     return str(ts)
 
 
+def _safe_time(df, idx, col='time'):
+    try:
+        i = int(idx)
+        if 0 <= i < len(df):
+            return _dt(df.iloc[i][col])
+        if len(df) > 0:
+            return _dt(df.iloc[-1][col])
+    except Exception:
+        pass
+    return ""
+
+
 def _time_col(df: pd.DataFrame) -> str:
     return 'time' if 'time' in df.columns else 'timestamp' if 'timestamp' in df.columns else 'time'
 
@@ -205,7 +217,7 @@ def build_chart_markup(
             "label": entry["label"],
             "price": round(float(entry["price"]), 2),
             "index": int(entry["index"]),
-            "time_start": _dt(m15.iloc[entry["index"]][time_col]),
+            "time_start": _safe_time(m15, entry["index"], time_col),
             "top": 0.0,
             "bottom": 0.0,
         })
@@ -282,7 +294,7 @@ def build_chart_markup(
             "label": f"{bos_choch['kind']}_{bos_choch['direction']}",
             "price": round(float(bos_choch["break_price"]), 2),
             "index": int(bos_choch["index"]),
-            "time_start": _dt(m15.iloc[bos_choch["index"]][time_col]),
+            "time_start": _safe_time(m15, bos_choch["index"], time_col),
             "top": 0.0,
             "bottom": 0.0,
         })

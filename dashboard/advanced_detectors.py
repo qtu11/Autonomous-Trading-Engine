@@ -1,3 +1,5 @@
+
+
 """Advanced detectors: Price Action (25), SMC (26), ICT (21) concepts for ATE.
 
 Complements dashboard/detectors.py. Every function returns plain dicts / lists
@@ -34,6 +36,19 @@ from detectors import (
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def _safe_candle_time(candles: list, idx: Any) -> str:
+    try:
+        i = int(idx)
+        if 0 <= i < len(candles):
+            c = candles[i]
+            return str(getattr(c, 'time', c.get('time', '') if isinstance(c, dict) else ''))
+        if len(candles) > 0:
+            c = candles[-1]
+            return str(getattr(c, 'time', c.get('time', '') if isinstance(c, dict) else ''))
+    except Exception:
+        pass
+    return ""
+
 def _atr_series(df: pd.DataFrame, period: int = 14) -> pd.Series:
     high, low, close = df["high"], df["low"], df["close"]
     tr = pd.concat(
@@ -55,16 +70,26 @@ def _obj(
     status: str = "",
     **extra: Any,
 ) -> dict[str, Any]:
-    c = candles[index]
+    time_start = ""
+    idx = int(index)
+    if candles:
+        if 0 <= idx < len(candles):
+            time_start = str(candles[idx].time)
+        elif -len(candles) <= idx < 0:
+            time_start = str(candles[idx].time)
+        else:
+            time_start = str(candles[-1].time)
+            idx = len(candles) - 1
+
     obj: dict[str, Any] = {
         "type": type_name,
         "direction": direction,
         "top": round(float(top), 2),
         "bottom": round(float(bottom), 2),
         "price": round(float(price), 2) if price else 0.0,
-        "time_start": str(c.time),
+        "time_start": time_start,
         "time_end": "",
-        "index": int(index),
+        "index": int(idx),
         "label": label,
         "status": status,
     }
@@ -127,7 +152,7 @@ def detect_support_resistance(
                     "price": level,
                     "label": kind,
                     "index": min(cluster_idx),
-                    "time_start": str(candles[min(cluster_idx)].time),
+                    "time_start": _safe_candle_time(candles, min(cluster_idx)),
                     "touches": len(cluster_idx),
                 }
             )
@@ -180,8 +205,8 @@ def detect_channels(
             "price": 0.0,
             "label": "CHANNEL",
             "index": i_start,
-            "time_start": str(candles[i_start].time),
-            "time_end": str(candles[i_end].time),
+            "time_start": _safe_candle_time(candles, i_start),
+            "time_end": _safe_candle_time(candles, i_end),
             "slope": round(up[0], 6),
         }
     ]
@@ -517,7 +542,7 @@ def detect_liquidity_zones(
                     "top": mid + span / 2, "bottom": mid - span / 2, "price": mid,
                     "label": label, "liquidity_kind": "EQUAL" if equal else "CLUSTER",
                     "liquidity_side": _classify(mid), "index": idx,
-                    "time_start": str(candles[idx].time), "touches": count,
+                    "time_start": _safe_candle_time(candles, idx), "touches": count,
                 })
         return out
 
@@ -548,7 +573,7 @@ def detect_dealing_range(
         "price": round(eq, 2),
         "label": "DEALING_RANGE",
         "index": int(idx),
-        "time_start": str(candles[idx].time),
+        "time_start": _safe_candle_time(candles, idx),
     }
 
 
@@ -583,9 +608,9 @@ def detect_dealing_curve(
     step = max(len(pts) // max_points, 1)
     for i in range(0, len(pts), step):
         idx, p = pts[i]
-        samples.append({"t": str(candles[idx].time), "p": round(float(p), 2)})
+        samples.append({"t": _safe_candle_time(candles, idx), "p": round(float(p), 2)})
     if samples and samples[-1]["p"] != eq:
-        samples.append({"t": str(candles[-1].time), "p": round(eq, 2)})
+        samples.append({"t": _safe_candle_time(candles, -1), "p": round(eq, 2)})
     if not samples:
         return []
 
@@ -1108,8 +1133,8 @@ def build_advanced_markup(
         if not obj:
             return obj
         obj["index"] = 0
-        obj["time_start"] = str(candles[0].time)
-        obj["time_end"] = str(candles[-1].time)
+        obj["time_start"] = _safe_candle_time(candles, 0)
+        obj["time_end"] = _safe_candle_time(candles, -1)
         return obj
 
     if include_pa:

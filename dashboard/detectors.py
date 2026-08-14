@@ -364,7 +364,7 @@ def detect_breaker_and_mitigation_blocks(
                 top=ob.top,
                 bottom=ob.bottom,
                 formed_at_index=failure_index,
-                formed_at_time=candles[failure_index].time,
+                formed_at_time=candles[failure_index].time if (0 <= failure_index < len(candles)) else (candles[-1].time if candles else None),
             )
         )
 
@@ -714,7 +714,7 @@ def detect_trendlines(
         if len(points) < 2:
             return None
         (i1, p1), (i2, p2) = points[0], points[-1]
-        if i2 == i1:
+        if i2 == i1 or not (0 <= i1 < len(candles)) or not (0 <= i2 < len(candles)):
             return None
         slope = (p2 - p1) / (i2 - i1)
         # dự đoán giá của đường tại mọi index, đếm điểm chạm trong tolerance

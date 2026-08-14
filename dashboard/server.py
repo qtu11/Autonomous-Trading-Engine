@@ -629,7 +629,7 @@ def _add_ai_event(level: str, action: str, symbol: str, details: Dict[str, Any])
 
 _bridge_data_real = False
 
-_DATA_TTL = 120.0  # seconds: EA-pushed candles coi là tươi trong 120s
+_DATA_TTL = 600.0  # seconds: EA-pushed candles coi là tươi trong 120s
 
 
 
@@ -807,7 +807,7 @@ async def fetch_real_candles(symbol: str, tf: str, count: int = 1000) -> Optiona
 
     try:
 
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=0.3) as client:
 
             res = await client.get(
 
@@ -1092,8 +1092,7 @@ async def _fetch_context_candles(symbol: str, tf: str, count: int = 600) -> Opti
     if df is None:
 
         try:
-
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=0.2) as client:
 
                 res = await client.get(
 
@@ -1164,8 +1163,7 @@ async def fetch_real_bid_ask(symbol: str) -> tuple[float, float]:
             pass
 
     try:
-
-        async with httpx.AsyncClient(timeout=5) as client:
+        async with httpx.AsyncClient(timeout=0.2) as client:
 
             res = await client.get(f"{BRIDGE_URL}/api/v1/market/tick", params={"symbol": resolve_symbol(symbol)})
 
@@ -2530,7 +2528,8 @@ async def _ai_trade_loop():
 
             # pyrefly: ignore [bad-argument-type]
 
-            markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
+            mtf_data_trimmed = {k: v.tail(600) if hasattr(v, 'tail') else v for k, v in mtf_data.items()}
+            markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
 
             cf = markup.get("confluence") or {}
 
@@ -3791,7 +3790,8 @@ async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), coun
 
     # pyrefly: ignore [bad-argument-type]
 
-    markup_data = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
+    mtf_data_trimmed = {k: v.tail(600) if hasattr(v, 'tail') else v for k, v in mtf_data.items()}
+    markup_data = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
 
 
 
@@ -5366,8 +5366,7 @@ async def mt5_diagnostics(request: Request):
     bridge_ok = False
 
     try:
-
-        async with httpx.AsyncClient(timeout=3) as client:
+        async with httpx.AsyncClient(timeout=0.2) as client:
 
             r = await client.get(f"{BRIDGE_URL}/health")
 
@@ -6112,7 +6111,8 @@ async def _build_copilot_context(req: CopilotChatRequest) -> str:
 
         # pyrefly: ignore [bad-argument-type]
 
-        markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
+        mtf_data_trimmed = {k: v.tail(600) if hasattr(v, 'tail') else v for k, v in mtf_data.items()}
+        markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
 
         objects = markup.get("objects", [])[:15]
 
@@ -7041,7 +7041,8 @@ async def bridge_markup(req: MarkupRequest, request: Request):
 
         # pyrefly: ignore [bad-argument-type]
 
-        markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data, method=method, primary_tf=tf)
+        mtf_data_trimmed = {k: v.tail(600) if hasattr(v, 'tail') else v for k, v in mtf_data.items()}
+        markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
 
         _add_log("DEBUG", "EA_MARKUP", f"EA {req.executor_id} fetched {len(markup['objects'])} markup objects for {symbol} [{method}]")
 
@@ -8286,10 +8287,12 @@ async def update_settings_endpoint(request: Request):
 # ════════════════════════════════════════════════════════════════════════════
 
 # MAIN ENTRY POINT (must be at end of file so all routes are registered)
-# ════════════════════════════════════════════════════════════════════════════
-# MAIN ENTRY POINT (must be at end of file so all routes are registered)
-# ════════════════════════════════════════════════════════════════════════════
+
+# ==============================================================================
+# MAIN ENTRY POINT
+# ==============================================================================
 if __name__ == "__main__":
+    import uvicorn
     port = int(os.getenv("DASHBOARD_PORT", os.getenv("PORT", "8848")))
     print(f"[ATE] Starting FastAPI Server on 0.0.0.0:{port}...")
-    uvicorn.run("server:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run(app, host="0.0.0.0", port=port)
