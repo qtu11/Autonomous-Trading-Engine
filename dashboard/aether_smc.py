@@ -147,6 +147,7 @@ def detect_pivots(highs: np.ndarray, lows: np.ndarray, length: int) -> Tuple[Lis
     if n <= length * 2:
         return swing_highs, swing_lows
 
+    # 1. Confirmed symmetric pivots
     for i in range(length, n - length):
         is_high = True
         for j in range(1, length + 1):
@@ -164,6 +165,21 @@ def detect_pivots(highs: np.ndarray, lows: np.ndarray, length: int) -> Tuple[Lis
         if is_low:
             swing_lows.append((i, float(lows[i])))
 
+    # 2. Developing recent pivots in the last `length` candles (lookback-only confirmation)
+    if n > length:
+        recent_h_idx = int(np.argmax(highs[-length:])) + (n - length)
+        if not swing_highs or swing_highs[-1][0] != recent_h_idx:
+            if highs[recent_h_idx] > np.max(highs[max(0, recent_h_idx - length):recent_h_idx]):
+                swing_highs.append((recent_h_idx, float(highs[recent_h_idx])))
+
+        recent_l_idx = int(np.argmin(lows[-length:])) + (n - length)
+        if not swing_lows or swing_lows[-1][0] != recent_l_idx:
+            if lows[recent_l_idx] < np.min(lows[max(0, recent_l_idx - length):recent_l_idx]):
+                swing_lows.append((recent_l_idx, float(lows[recent_l_idx])))
+
+    # Sort chronologically
+    swing_highs.sort(key=lambda x: x[0])
+    swing_lows.sort(key=lambda x: x[0])
     return swing_highs, swing_lows
 
 
@@ -280,10 +296,12 @@ def detect_smc_structure(
     for i in range(5, n):
         for idx, val in int_highs:
             if idx == i:
-                i_up, i_up_idx = val, idx
+                i_up = val
+                i_up_idx = idx
         for idx, val in int_lows:
             if idx == i:
-                i_dn, i_dn_idx = val, idx
+                i_dn = val
+                i_dn_idx = idx
 
         if i_up is not None and i_up_idx is not None and (i - i_up_idx) > 1:
             if closes[i] > i_up and closes[i - 1] <= i_up:
@@ -339,11 +357,11 @@ def detect_luxalgo_order_blocks(
     pivot_len: int = 5,
     max_bull_ob: int = 3,
     max_bear_ob: int = 3,
-) -> List[Dict[str, Any]]:
-    """Detect Volume Pivot Order Blocks with Mitigation Filtering."""
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """Detect Volume Pivot Order Blocks with Mitigation & Breaker Block Transformation."""
     n = len(df)
     if n < pivot_len * 3:
-        return []
+        return [], []
 
     highs = df["high"].values
     lows = df["low"].values
@@ -372,6 +390,10 @@ def detect_luxalgo_order_blocks(
         if is_low:
             top = max(opens[i], closes[i])
             bottom = lows[i]
+            v_val = float(vols[i])
+            v_sum = float(np.sum(vols[max(0, i - 10):i + 1]))
+            v_pct = int(min(99, max(10, (v_val / max(1.0, v_sum)) * 100)))
+            v_lbl = f"{v_val / 1000.0:.3f}K ({v_pct}%)" if v_val >= 1000 else f"{v_val:.1f} ({v_pct}%)"
             raw_obs.append({
                 "type": "OB",
                 "direction": "BULLISH",
@@ -382,13 +404,18 @@ def detect_luxalgo_order_blocks(
                 "index": int(i),
                 "time_start": _to_iso(times[i]),
                 "ts_start": _to_timestamp_sec(times[i]),
-                "volume": float(vols[i]),
+                "volume": v_val,
+                "volume_label": v_lbl,
                 "is_volume_pivot": bool(vols[i] > vol_ma[i] * 1.2),
             })
 
         if is_high:
             top = highs[i]
             bottom = min(opens[i], closes[i])
+            v_val = float(vols[i])
+            v_sum = float(np.sum(vols[max(0, i - 10):i + 1]))
+            v_pct = int(min(99, max(10, (v_val / max(1.0, v_sum)) * 100)))
+            v_lbl = f"{v_val / 1000.0:.3f}K ({v_pct}%)" if v_val >= 1000 else f"{v_val:.1f} ({v_pct}%)"
             raw_obs.append({
                 "type": "OB",
                 "direction": "BEARISH",
@@ -399,11 +426,13 @@ def detect_luxalgo_order_blocks(
                 "index": int(i),
                 "time_start": _to_iso(times[i]),
                 "ts_start": _to_timestamp_sec(times[i]),
-                "volume": float(vols[i]),
+                "volume": v_val,
+                "volume_label": v_lbl,
                 "is_volume_pivot": bool(vols[i] > vol_ma[i] * 1.2),
             })
 
     active_bull_obs, active_bear_obs = [], []
+    breaker_blocks = []
     last_iso = _to_iso(times[-1])
     last_sec = _to_timestamp_sec(times[-1])
 
@@ -413,9 +442,37 @@ def detect_luxalgo_order_blocks(
         for k in range(idx + 1, n):
             if ob["direction"] == "BULLISH" and closes[k] < ob["bottom"]:
                 mitigated = True
+                # Transformed into Bearish Breaker Block
+                breaker_blocks.append({
+                    "type": "BREAKER",
+                    "direction": "BEARISH",
+                    "label": "Breaker Bear",
+                    "top": ob["top"],
+                    "bottom": ob["bottom"],
+                    "avg": ob["avg"],
+                    "index": ob["index"],
+                    "time_start": ob["time_start"],
+                    "ts_start": ob["ts_start"],
+                    "time_end": last_iso,
+                    "ts_end": last_sec,
+                })
                 break
             elif ob["direction"] == "BEARISH" and closes[k] > ob["top"]:
                 mitigated = True
+                # Transformed into Bullish Breaker Block
+                breaker_blocks.append({
+                    "type": "BREAKER",
+                    "direction": "BULLISH",
+                    "label": "Breaker Bull",
+                    "top": ob["top"],
+                    "bottom": ob["bottom"],
+                    "avg": ob["avg"],
+                    "index": ob["index"],
+                    "time_start": ob["time_start"],
+                    "ts_start": ob["ts_start"],
+                    "time_end": last_iso,
+                    "ts_end": last_sec,
+                })
                 break
 
         if not mitigated:
@@ -427,7 +484,8 @@ def detect_luxalgo_order_blocks(
             else:
                 active_bear_obs.append(ob)
 
-    return active_bull_obs[-max_bull_ob:] + active_bear_obs[-max_bear_ob:]
+    selected_obs = active_bull_obs[-max_bull_ob:] + active_bear_obs[-max_bear_ob:]
+    return selected_obs, breaker_blocks[-2:]
 
 
 def detect_luxalgo_fvg(
@@ -551,27 +609,36 @@ def detect_ict_killzones(current_time: datetime, broker_utc_offset_hours: int = 
     }
 
 
-def calculate_ict_ote(df: pd.DataFrame, swing_high: float, swing_low: float) -> Dict[str, Any]:
-    """Calculate ICT Optimal Trade Entry (OTE 61.8% - 78.6% Fib)."""
+def calculate_ict_ote(df: pd.DataFrame, swing_high: float, swing_low: float, trend: int = 1) -> Dict[str, Any]:
+    """Calculate ICT Optimal Trade Entry (OTE 61.8% - 78.6% Fib) with bidirectional trend support."""
     diff = swing_high - swing_low
     if diff <= 0:
         return {}
 
-    # Standard OTE Levels: 0.618, 0.705, 0.786
-    ote_618 = swing_high - diff * 0.618
-    ote_705 = swing_high - diff * 0.705  # Sweet spot
-    ote_786 = swing_high - diff * 0.786
+    if trend >= 0:
+        # Bullish Uptrend: Retracement down to Discount for BUY
+        ote_618 = swing_high - diff * 0.618
+        ote_705 = swing_high - diff * 0.705
+        ote_786 = swing_high - diff * 0.786
+        eq_50 = swing_high - diff * 0.5
+    else:
+        # Bearish Downtrend: Retracement up to Premium for SELL
+        ote_618 = swing_low + diff * 0.618
+        ote_705 = swing_low + diff * 0.705
+        ote_786 = swing_low + diff * 0.786
+        eq_50 = swing_low + diff * 0.5
 
     return {
-        "ote_top": round(float(ote_618), 2),
+        "ote_top": round(float(max(ote_618, ote_786)), 2),
         "ote_sweet_spot": round(float(ote_705), 2),
-        "ote_bottom": round(float(ote_786), 2),
-        "equilibrium_50": round(float(swing_high - diff * 0.5), 2),
+        "ote_bottom": round(float(min(ote_618, ote_786)), 2),
+        "equilibrium_50": round(float(eq_50), 2),
+        "direction": "BULLISH" if trend >= 0 else "BEARISH",
     }
 
 
 def detect_ict_turtle_soup(df: pd.DataFrame, htf_df: Optional[pd.DataFrame] = None) -> Optional[Dict[str, Any]]:
-    """Detect ICT Turtle Soup (Liquidity Sweep of HTF High/Low + MSS Reversal)."""
+    """Detect ICT Turtle Soup (Liquidity Sweep of HTF High/Low + MSS Reversal) with dynamic ATR SL."""
     if len(df) < 15:
         return None
 
@@ -581,8 +648,10 @@ def detect_ict_turtle_soup(df: pd.DataFrame, htf_df: Optional[pd.DataFrame] = No
 
     last_c = df.iloc[-1]
     prev_c = df.iloc[-2]
+    atr_val = float(compute_atr(df, 14).iloc[-1]) if len(df) >= 14 else 2.0
+    sl_buffer = max(0.5, atr_val * 0.3)
 
-    # Bullish Turtle Soup: Low sweeps below recent low, but close snaps back above
+    # Bullish Turtle Soup
     if (prev_c["low"] < recent_low or last_c["low"] < recent_low) and last_c["close"] > recent_low:
         return {
             "type": "TURTLE_SOUP",
@@ -935,9 +1004,9 @@ def build_aether_flow_payload(
 
     # 1. SMC Structure & Zones
     smc_data = detect_smc_structure(df, ext_sens=25, int_sens=5)
-    obs = detect_luxalgo_order_blocks(df, pivot_len=5, max_bull_ob=3, max_bear_ob=3)
+    obs, breakers = detect_luxalgo_order_blocks(df, pivot_len=5, max_bull_ob=3, max_bear_ob=3)
     fvgs = detect_luxalgo_fvg(df, threshold_pct=0.0, max_fvg_count=3)
-    smc_data["order_blocks"] = obs
+    smc_data["order_blocks"] = obs + breakers
     smc_data["fvgs"] = fvgs
 
     # 2. Auto Fibs Retracement
@@ -968,7 +1037,7 @@ def build_aether_flow_payload(
     time_col = "time" if "time" in df.columns else df.columns[0]
     last_dt = pd.to_datetime(df[time_col].iloc[-1]).to_pydatetime()
     kz_data = detect_ict_killzones(last_dt, broker_utc_offset_hours)
-    ote_data = calculate_ict_ote(df, major_h, major_l)
+    ote_data = calculate_ict_ote(df, major_h, major_l, trend=smc_data["current_trend"])
     turtle_soup = detect_ict_turtle_soup(df, htf_h1_df)
     ict_payload = {
         "killzone": kz_data,

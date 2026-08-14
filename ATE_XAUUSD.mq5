@@ -1263,7 +1263,8 @@ bool PushCandlesChunk(string tfLabel, int start, int end,
 //+------------------------------------------------------------------+
 void PushCandlesTimeframe(ENUM_TIMEFRAMES tf, int history, string tfLabel)
 {
-   int safeHistory = MathMin(history, 3000);
+   // Hard limit: tối đa 2500 nến để tránh nghẽn hàng đợi WebRequest của MT5
+   int safeHistory = MathMin(history, 2500);
    MqlRates rates[];
    ArraySetAsSeries(rates, false); // Oldest first, newest last
    int copied = CopyRates(g_symbol, tf, 0, safeHistory, rates);
@@ -1275,16 +1276,17 @@ void PushCandlesTimeframe(ENUM_TIMEFRAMES tf, int history, string tfLabel)
    }
 
    int chunk = InpCandlesChunkSize;
-   if(chunk <= 0 || chunk > 500) chunk = 500; // Hard limit an toàn: tối đa 500 nến/request
+   if(chunk <= 0 || chunk > 500) chunk = 500; // Tối đa 500 nến/request (~35KB)
    int sent = 0;
    bool first = true;
    for(int start = 0; start < copied; start += chunk)
    {
       int end = MathMin(start + chunk, copied);
       if(!PushCandlesChunk(tfLabel, start, end, rates, first))
-         return; // Dừng các chunk còn lại nếu 1 chunk fail (mạng/token/allowlist)
+         return; // Dừng nếu 1 chunk fail
       first = false;
       sent += (end - start);
+      Sleep(20); // Nghỉ 20ms giữa các chunk để socket MT5 giải phóng buffer an toàn
    }
    PrintFormat("CANDLES_PUSH_OK: pushed %d candles for %s %s", sent, g_symbol, tfLabel);
 }

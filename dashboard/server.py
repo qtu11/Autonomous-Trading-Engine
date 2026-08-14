@@ -182,6 +182,7 @@ import math
 import uvicorn
 
 from chart_markup import build_chart_markup
+from aether_smc import build_aether_flow_payload
 
 
 
@@ -2162,78 +2163,47 @@ async def run_ai_analysis(symbol: str, method: str, tf: Optional[str] = None) ->
 
     indicators = calculate_indicators(df)
 
+    # Multi-Method Analysis via Aether Flow Engine
+    h1_df = await _fetch_context_candles(symbol, "H1")
+    m5_df = await _fetch_context_candles(symbol, "M5")
+    aether = build_aether_flow_payload(
+        symbol=symbol,
+        df=df,
+        htf_h1_df=h1_df,
+        m5_df=m5_df,
+        method=method,
+    )
 
+    conf = aether.get("confluence", {})
+    score = conf.get("score", 50)
+    sig = conf.get("signal", "WAIT")
 
-    if method == "SMC":
-
-        result = analyze_smc(df, indicators)
-
-    elif method == "ICT":
-
-        result = analyze_ict(df, indicators)
-
-    elif method == "PRICE_ACTION":
-
-        result = analyze_price_action(df, indicators)
-
-    elif method == "SNIPER":
-
-        result = analyze_sniper(df, indicators)
-
-    else:
-
-        # ULTRA_CONFLUENCE - combine all methods
-
-        smc = analyze_smc(df, indicators)
-
-        ict = analyze_ict(df, indicators)
-
-        pa = analyze_price_action(df, indicators)
-
-        sniper = analyze_sniper(df, indicators)
-
-
-
-        combined_score = (smc["score"] + ict["score"] + pa["score"] + sniper["score"]) / 4
-
-
-
-        result = {
-
-            "score": combined_score,
-
-            "signal": "BUY" if combined_score > 55 else "SELL" if combined_score < 45 else "WAIT",
-
-            "factors": smc["factors"] + ict["factors"][:2] + sniper["factors"][:1],
-
-            "objects": {
-
-                "smc": smc["objects"],
-
-                "ict": ict["objects"],
-
-                "sniper": sniper["objects"],
-
-            }
-
-        }
-
-
+    result = {
+        "score": score,
+        "signal": sig,
+        "classification": conf.get("classification", "FILTERED"),
+        "factors": [f"{k.upper()}: {v}" for k, v in conf.get("layers", {}).items()],
+        "objects": {
+            "smc": {
+                "swings": len(aether.get("swings", [])),
+                "segments": len(aether.get("segments", [])),
+                "order_blocks": len(aether.get("order_blocks", [])),
+                "fvgs": len(aether.get("fvgs", [])),
+            },
+            "ict": aether.get("ict", {}),
+            "sniper": aether.get("sniper", {}),
+            "price_action": aether.get("price_action", []),
+        },
+        "aether": aether,
+    }
 
     # Add common data
-
     result["indicators"] = indicators
-
     result["last_price"] = float(df["close"].iloc[-1])
-
     result["method"] = method
-
     result["symbol"] = symbol
 
-
-
     _analysis_cache[cache_key] = {"result": result, "ts": datetime.now(timezone.utc).timestamp()}
-
     return result
 
 

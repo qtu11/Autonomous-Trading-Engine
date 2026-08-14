@@ -51,6 +51,10 @@ interface SvgBox {
   stroke: string;
   label: string;
   direction: 'BULLISH' | 'BEARISH';
+  originWidth?: number;
+  originFill?: string;
+  volumeLabel?: string;
+  dottedLineX2?: number;
 }
 
 interface SvgSegment {
@@ -61,6 +65,7 @@ interface SvgSegment {
   y2: number;
   color: string;
   label: string;
+  level?: string;
 }
 
 interface SvgFibLevel {
@@ -623,24 +628,25 @@ export default function TradingChart({
     const segments: SvgSegment[] = [];
     const fibs: SvgFibLevel[] = [];
 
-    // A. Render Order Blocks (LuxAlgo Volume Pivot Unmitigated Boxes)
+    // A. Render Order Blocks (BigBeluga / LuxAlgo Dual Box + Dotted Ray + Volume %)
     if (aether?.order_blocks?.length) {
       aether.order_blocks.forEach((ob: any, idx: number) => {
         const x1 = timeScale.timeToCoordinate(ob.ts_start as any);
         const x2 = ob.ts_end
           ? timeScale.timeToCoordinate(ob.ts_end as any)
-          : w - 45;
+          : w - 55;
         const yTop = series.priceToCoordinate(ob.top);
         const yBottom = series.priceToCoordinate(ob.bottom);
 
         if (yTop !== null && yBottom !== null) {
           const startX = x1 !== null ? x1 : 0;
-          const endX = x2 !== null ? x2 : w - 45;
+          const endX = x2 !== null ? x2 : w - 55;
           const left = Math.min(startX, endX);
           const boxW = Math.max(20, Math.abs(endX - startX));
           const top = Math.min(yTop, yBottom);
           const boxH = Math.max(4, Math.abs(yBottom - yTop));
           const isBull = ob.direction === 'BULLISH';
+          const originW = Math.min(40, Math.max(14, boxW * 0.25));
 
           boxes.push({
             id: `ob-${idx}`,
@@ -648,10 +654,14 @@ export default function TradingChart({
             y: top,
             width: boxW,
             height: boxH,
-            fill: isBull ? 'rgba(20, 217, 144, 0.16)' : 'rgba(242, 73, 104, 0.16)',
+            fill: isBull ? 'rgba(20, 217, 144, 0.12)' : 'rgba(242, 73, 104, 0.12)',
             stroke: isBull ? '#14D990' : '#F24968',
             label: isBull ? 'OB Demand' : 'OB Supply',
             direction: ob.direction,
+            originWidth: originW,
+            originFill: isBull ? 'rgba(20, 217, 144, 0.42)' : 'rgba(242, 73, 104, 0.42)',
+            volumeLabel: ob.volume_label || (ob.volume ? `${(ob.volume / 1000).toFixed(1)}K` : undefined),
+            dottedLineX2: w - 10,
           });
         }
       });
@@ -663,13 +673,13 @@ export default function TradingChart({
         const x1 = timeScale.timeToCoordinate(fvg.ts_start as any);
         const x2 = fvg.ts_end
           ? timeScale.timeToCoordinate(fvg.ts_end as any)
-          : w - 45;
+          : w - 55;
         const yTop = series.priceToCoordinate(fvg.top);
         const yBottom = series.priceToCoordinate(fvg.bottom);
 
         if (yTop !== null && yBottom !== null) {
           const startX = x1 !== null ? x1 : 0;
-          const endX = x2 !== null ? x2 : w - 45;
+          const endX = x2 !== null ? x2 : w - 55;
           const left = Math.min(startX, endX);
           const boxW = Math.max(20, Math.abs(endX - startX));
           const top = Math.min(yTop, yBottom);
@@ -682,8 +692,8 @@ export default function TradingChart({
             y: top,
             width: boxW,
             height: boxH,
-            fill: isBull ? 'rgba(0, 188, 212, 0.15)' : 'rgba(233, 30, 99, 0.15)',
-            stroke: isBull ? 'rgba(0, 188, 212, 0.7)' : 'rgba(233, 30, 99, 0.7)',
+            fill: isBull ? 'rgba(0, 188, 212, 0.12)' : 'rgba(233, 30, 99, 0.12)',
+            stroke: isBull ? 'rgba(0, 188, 212, 0.6)' : 'rgba(233, 30, 99, 0.6)',
             label: isBull ? 'FVG Bull' : 'FVG Bear',
             direction: fvg.direction,
           });
@@ -691,7 +701,7 @@ export default function TradingChart({
       });
     }
 
-    // C. Render BoS / CHoCH Break Segments (Finite lines, not infinite rays)
+    // C. Render BoS / CHoCH Break Segments (TradingView Dotted Line + Badge)
     if (aether?.segments?.length) {
       aether.segments.forEach((seg: any, idx: number) => {
         const x1 = timeScale.timeToCoordinate(seg.ts1 as any);
@@ -707,6 +717,7 @@ export default function TradingChart({
             y2: y,
             color: seg.color || (seg.direction === 'BULLISH' ? '#14D990' : '#F24968'),
             label: seg.label || seg.type,
+            level: seg.level || 'EXTERNAL',
           });
         }
       });
@@ -1083,67 +1094,142 @@ export default function TradingChart({
           zIndex: 2,
         }}
       >
-        {/* Order Blocks & FVGs Boxes */}
-        {svgBoxes.map((box) => (
-          <g key={box.id}>
-            <rect
-              x={box.x}
-              y={box.y}
-              width={box.width}
-              height={box.height}
-              fill={box.fill}
-              stroke={box.stroke}
-              strokeWidth="1"
-              strokeDasharray="3 2"
-              rx="2"
-            />
-            <text
-              x={box.x + 6}
-              y={box.y + 11}
-              fill={box.stroke}
-              fontSize="9"
-              fontFamily="JetBrains Mono, monospace"
-              fontWeight="bold"
-            >
-              {box.label}
-            </text>
-          </g>
-        ))}
+        {/* Order Blocks & FVGs Boxes (BigBeluga / LuxAlgo Institutional Styling) */}
+        {svgBoxes.map((box) => {
+          const isOB = box.id.startsWith('ob-');
+          const isBull = box.direction === 'BULLISH';
+          const primaryCol = isBull ? '#14D990' : '#F24968';
 
-        {/* BoS & CHoCH Break Segments */}
+          return (
+            <g key={box.id}>
+              {/* 1. Extended Projection Box */}
+              <rect
+                x={box.x}
+                y={box.y}
+                width={box.width}
+                height={box.height}
+                fill={box.fill}
+                stroke="none"
+                rx="2"
+              />
+
+              {/* 2. Solid Origin Box (BigBeluga Origin Candlestick Box) */}
+              {isOB && box.originWidth && (
+                <rect
+                  x={box.x}
+                  y={box.y}
+                  width={box.originWidth}
+                  height={box.height}
+                  fill={box.originFill || (isBull ? 'rgba(20, 217, 144, 0.45)' : 'rgba(242, 73, 104, 0.45)')}
+                  stroke={primaryCol}
+                  strokeWidth="1"
+                  rx="2"
+                />
+              )}
+
+              {/* 3. Top/Bottom Boundary Border Line */}
+              <line
+                x1={box.x}
+                y1={box.y}
+                x2={box.x + box.width}
+                y2={box.y}
+                stroke={primaryCol}
+                strokeWidth="1"
+                strokeOpacity="0.75"
+              />
+              <line
+                x1={box.x}
+                y1={box.y + box.height}
+                x2={box.x + box.width}
+                y2={box.y + box.height}
+                stroke={primaryCol}
+                strokeWidth="1"
+                strokeOpacity="0.75"
+              />
+
+              {/* 4. Dotted Projection Line to Right Edge */}
+              {isOB && box.dottedLineX2 && box.dottedLineX2 > (box.x + box.width) && (
+                <line
+                  x1={box.x + box.width}
+                  y1={box.y + box.height / 2}
+                  x2={box.dottedLineX2}
+                  y2={box.y + box.height / 2}
+                  stroke={primaryCol}
+                  strokeWidth="1"
+                  strokeDasharray="2 3"
+                  strokeOpacity="0.6"
+                />
+              )}
+
+              {/* 5. Volume & Percentage Label on the Right (e.g. 15.155K (38%)) */}
+              {isOB && box.volumeLabel && (
+                <text
+                  x={box.x + box.width + 6}
+                  y={box.y + box.height / 2 + 3.5}
+                  fill={primaryCol}
+                  fontSize="8.5"
+                  fontFamily="JetBrains Mono, monospace"
+                  fontWeight="600"
+                  opacity="0.85"
+                >
+                  {box.volumeLabel}
+                </text>
+              )}
+
+              {/* Label inside the origin block if space permits */}
+              {!isOB && (
+                <text
+                  x={box.x + 6}
+                  y={box.y + Math.min(box.height - 2, 11)}
+                  fill={primaryCol}
+                  fontSize="8.5"
+                  fontFamily="JetBrains Mono, monospace"
+                  fontWeight="bold"
+                >
+                  {box.label}
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* BoS & CHoCH Break Segments (TradingView BigBeluga Circular Badge + Dotted Line) */}
         {svgSegments.map((seg) => {
-          const midX = (seg.x1 + seg.x2) / 2;
+          const isBull = seg.color.includes('14D990') || seg.color.includes('green') || seg.color.includes('Lime');
+          const badgeBg = isBull ? 'rgba(20, 217, 144, 0.15)' : 'rgba(242, 73, 104, 0.15)';
+
           return (
             <g key={seg.id}>
+              {/* Dotted Connection Line from Break Point */}
               <line
                 x1={seg.x1}
                 y1={seg.y1}
                 x2={seg.x2}
                 y2={seg.y2}
                 stroke={seg.color}
-                strokeWidth="1.5"
-                strokeDasharray="4 3"
+                strokeWidth="1"
+                strokeDasharray="3 3"
+                strokeOpacity="0.8"
               />
-              <rect
-                x={midX - 16}
-                y={seg.y1 - 7}
-                width="32"
-                height="14"
-                rx="3"
-                fill="#181a20"
+              {/* Circular Badge Marker at the Breakout Coordinate */}
+              <circle
+                cx={seg.x2}
+                cy={seg.y2}
+                r="7"
+                fill={badgeBg}
                 stroke={seg.color}
                 strokeWidth="1"
               />
               <text
-                x={midX}
-                y={seg.y1 + 3.5}
+                x={seg.x2}
+                y={seg.y2 + 2.5}
                 textAnchor="middle"
                 fill={seg.color}
-                fontSize="8.5"
+                fontSize="6.5"
                 fontFamily="JetBrains Mono, monospace"
                 fontWeight="bold"
               >
-                {seg.label}
+                {seg.label === 'CHoCH' ? 'CH' : 'BOS'}
               </text>
             </g>
           );
