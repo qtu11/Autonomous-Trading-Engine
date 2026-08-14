@@ -1,0 +1,101 @@
+# =====================================================================
+# Docker Compose for ATE Backend on VNPT VPS
+# Public endpoint expected: http://113.173.192.226:8848
+# Frontend Vercel proxy:    https://autonomous-trading-engine.vercel.app/api/*
+# EA MT5 will push directly to one of these URLs.
+#
+# Quickstart (already running on VPS):
+#   cd /opt/ate-backend
+#   cp .env.example .env   # then fill secrets
+#   docker compose up -d
+#   docker compose logs -f api
+# =====================================================================
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ate-backend:latest
+    container_name: ate-backend
+    restart: unless-stopped
+    ports:
+      # Bind directly to the public IP on port 8848.
+      # Change to "127.0.0.1:8848:8848" if the VPS firewall fronts this.
+      - "8848:8848"
+    env_file:
+      - .env
+    environment:
+      # Hard defaults (overridable via .env)
+      PYTHONUNBUFFERED: "1"
+
+      # Listening
+      ATE_DASHBOARD_HOST: "0.0.0.0"
+      ATE_DASHBOARD_PORT: "8848"
+      QUANTAI_DASHBOARD_HOST: "0.0.0.0"
+      QUANTAI_DASHBOARD_PORT: "8848"
+
+      # Execution mode — DEMO recommended unless intentionally going LIVE
+      ATE_EXECUTION_MODE: "${ATE_EXECUTION_MODE:-DEMO}"
+      QUANTAI_EXECUTION_MODE: "${QUANTAI_EXECUTION_MODE:-DEMO}"
+      QUANTAI_ENABLE_TRADING: "${QUANTAI_ENABLE_TRADING:-false}"
+      QUANTAI_DEMO_ARMED: "${QUANTAI_DEMO_ARMED:-true}"
+      QUANTAI_LIVE_ARMED: "${QUANTAI_LIVE_ARMED:-false}"
+      QUANTAI_KILL_SWITCH: "${QUANTAI_KILL_SWITCH:-true}"
+
+      # Symbol / Magic
+      QUANTAI_EXECUTION_SYMBOL: "${QUANTAI_EXECUTION_SYMBOL:-XAUUSDm}"
+      QUANTAI_EXECUTION_MAGIC: "${QUANTAI_EXECUTION_MAGIC:-888999}"
+      QUANTAI_MAGIC_NUMBER: "${QUANTAI_MAGIC_NUMBER:-888999}"
+
+      # MT5 credentials — EA logs into MT5 itself. Server only needs:
+      # Bridge token (must match MT5 EA input)
+      QUANTAI_BRIDGE_TOKEN: "${QUANTAI_BRIDGE_TOKEN:-20022007@Tu}"
+      QUANTAI_OPERATOR_TOKEN: "${QUANTAI_OPERATOR_TOKEN:-20022007@Tu}"
+      QUANTAI_DEMO_COMMAND_TTL_SECONDS: "${QUANTAI_DEMO_COMMAND_TTL_SECONDS:-10}"
+
+      # Admin / login
+      ADMIN_LOGIN: "${ADMIN_LOGIN:-admin}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:-change-me-please}"
+
+      # CORS — allow Vercel frontend
+      ATE_ALLOWED_ORIGINS: "https://autonomous-trading-engine.vercel.app,https://*.vercel.app"
+      QUANTAI_ALLOWED_ORIGINS: "https://autonomous-trading-engine.vercel.app,https://*.vercel.app"
+
+      # AI providers
+      OPENCODE_BASE_URL: "${OPENCODE_BASE_URL:-https://opencode.ai/zen/v1/chat/completions}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      ZPLAY_API_KEY: "${ZPLAY_API_KEY:-}"
+      GATEWAY_URL: "${GATEWAY_URL:-}"
+      GATEWAY_KEY: "${GATEWAY_KEY:-}"
+      QUANTAI_AI_MODEL: "${QUANTAI_AI_MODEL:-deepseek-v4-flash-free}"
+
+      # Telegram notifications
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
+      TELEGRAM_ENABLED: "${TELEGRAM_ENABLED:-true}"
+
+      # News protection
+      ATE_NEWS_PROTECTION_DEV_MODE: "${ATE_NEWS_PROTECTION_DEV_MODE:-true}"
+
+    volumes:
+      - ate-data:/app/data
+      - ate-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8848/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  ate-data:
+    driver: local
+  ate-logs:
+    driver: local

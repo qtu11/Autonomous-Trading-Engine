@@ -11,7 +11,7 @@
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
-input string   InpApiUrl           = "https://autonomous-trading-engine.vercel.app/api/v1/"; // URL Server AI Engine (Vercel Proxy Cloud Backend)
+input string   InpApiUrl           = "http://113.173.192.226:8848/api/v1"; // URL Server AI Engine (Vercel Proxy Cloud Backend)
 input ulong    InpMagicNumber      = 888999;                 // Mã nhận diện EA (Magic Number)
 // InpSymbol removed — EA ALWAYS auto-detects chart symbol via Symbol() in OnInit
 input int      InpPollIntervalSec  = 1;                      // Tần suất truy vấn AI Protocol (giây)

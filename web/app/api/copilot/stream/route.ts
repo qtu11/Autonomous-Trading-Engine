@@ -1,81 +1,81 @@
-// FIX LỖI 8: SSE stream endpoint for AI Copilot
-// This proxies to the FastAPI backend which generates real-time AI auto-trade events
+// =====================================================================
+// AI Copilot streaming endpoint (Server-Sent Events)
+// next.config.ts rewrites ALL /api/* to backend, but SSE requires
+// special handling (no buffering, proper headers) so this route stays.
+// =====================================================================
 
 import { NextRequest } from 'next/server';
-import { BACKEND_URL } from '@/lib/api-config';
 
+export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-export async function GET(request: NextRequest) {
-  const encoder = new TextEncoder();
-  
-  // BUG FIX: trước đây dùng NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
-  // — cổng 8000 sai (backend là 8005) và không đọc ATE_BACKEND_URL nên trên
-  // Vercel/Docker route này không bao giờ nối được backend. Giờ dùng chung
-  // BACKEND_URL (env ATE_BACKEND_URL) như mọi serverless proxy khác.
-  const backendUrl = BACKEND_URL;
-  
-  const stream = new ReadableStream({
-    async start(controller) {
-      let lastIdx = 0;
-      
-      const sendEvent = (data: string) => {
-        controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-      };
-      
-      const fetchEvents = async () => {
-        try {
-          const res = await fetch(`${backendUrl}/api/copilot/log?limit=50`, {
-            headers: {
-              'Authorization': request.headers.get('Authorization') || '',
-            },
-            cache: 'no-store',
-          });
-          
-          if (res.ok) {
-            const events = await res.json();
-            if (Array.isArray(events)) {
-              for (let i = lastIdx; i < events.length; i++) {
-                sendEvent(JSON.stringify(events[i]));
-              }
-              lastIdx = events.length;
-            }
-          }
-        } catch {
-          // Silent - backend might not be available
-        }
-      };
-      
-      // Send heartbeat
-      sendEvent(JSON.stringify({
-        id: 'heartbeat',
-        ts: new Date().toISOString(),
-        level: 'INFO',
-        action: 'HEARTBEAT',
-        symbol: 'XAUUSD',
-        details: { message: 'SSE connection active' },
-      }));
-      
-      // Fetch events initially
-      await fetchEvents();
-      
-      // Poll for new events every 2 seconds
-      const interval = setInterval(fetchEvents, 2000);
-      
-      // Cleanup on close
-      request.signal.addEventListener('abort', () => {
-        clearInterval(interval);
-        controller.close();
-      });
-    },
-  });
-  
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
-  });
+const BACKEND_URL = (
+  process.env.ATE_BACKEND_URL || 'http://113.173.192.226:8848'
+).replace(/\/+$/, '');
+
+export async function GET(req: NextRequest) {
+  const url = `${BACKEND_URL}/api/copilot/stream`;
+
+  // Forward all query params (e.g. ?limit=50 for log endpoint)
+  const qs = req.nextUrl.search || '';
+  const target = url + qs;
+
+  try {
+    const upstream = await fetch(target, {
+      method: 'GET',
+      headers: {
+        'Accept': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
+      cache: 'no-store',
+    });
+
+    if (!upstream.ok || !upstream.body) {
+      return new Response(
+        JSON.stringify({ error: 'UPSTREAM_ERROR', status: upstream.status }),
+        { status: upstream.status, headers: { 'Content-Type': 'application/json' } }
+      );
+    }
+
+    return new Response(upstream.body, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
+  } catch (err: any) {
+    return new Response(
+      JSON.stringify({ error: 'PROXY_ERROR', message: err?.message || 'unknown' }),
+      { status: 502, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
+}
+
+export async function POST(req: NextRequest) {
+  // Some clients POST to /api/copilot/stream as a non-streaming chat fallback
+  const body = await req.text();
+  try {
+    const upstream = await fetch(`${BACKEND_URL}/api/copilot/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': req.headers.get('content-type') || 'application/json',
+        'Authorization': req.headers.get('authorization') || '',
+      },
+      body,
+    });
+    const responseBody = await upstream.text();
+    return new Response(responseBody, {
+      status: upstream.status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  } catch (err: any) {
+    return new Response(
+      JSON.stringify({ error: 'PROXY_ERROR', message: err?.message || 'unknown' }),
+      { status: 502, headers: { 'Content-Type': 'application/json' } }
+    );
+  }
 }

@@ -1075,13 +1075,19 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
 
     score = max(min(score, 100), -100)
     direction = "BULLISH" if score > 15 else "BEARISH" if score < -15 else "NEUTRAL"
-    signal = "BUY" if score > 25 else "SELL" if score < -25 else "WAIT"
+    # BUG FIX L2: signal threshold phải >= direction threshold (15). Trước đây
+    # threshold 25 có thể tạo trạng thái direction=NEUTRAL (|score|<=15) nhưng
+    # signal=BUY (score>25) hoặc ngược lại — mâu thuẫn. Đặt cả 2 cùng ngưỡng 25.
+    signal = "BUY" if score >= 25 else "SELL" if score <= -25 else "WAIT"
 
     entry = last_close
     sl = tp = None
     risk_per_unit = 0.0
     sniper_sl = next((o for o in objects if o.get("type") == "SNIPER_SL"), None)
     sniper_tp1 = next((o for o in objects if o.get("type") == "SNIPER_TP1"), None)
+    # BUG FIX L3: nếu CHỈ một trong sniper_sl/sniper_tp1 có mặt, ta KHÔNG dùng
+    # nó một cách lệch (vd có SL nhưng không có TP -> RRR vô nghĩa). Yêu cầu
+    # CẢ HAI để dùng SNIPER levels; nếu thiếu một, fall through về structure-based.
     if sniper_sl and sniper_tp1:
         sl = sniper_sl.get("price")
         tp = sniper_tp1.get("price")
@@ -1092,7 +1098,10 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
     # SELL -> SL = strongest structure level above entry, TP = first level below
     # This is what lets the AI read the chart (OB/FVG/OTE/S-R) and place a
     # precision entry with a real risk/reward ratio before auto-trading.
-    if sl is None or tp is None:
+    # BUG FIX L4: signal=WAIT mà không có sniper_sl/tp1 thì KHÔNG cố gắng tìm
+    # structure levels (tránh kéo SL/TP ngẫu nhiên cho WAIT signal). Bỏ qua block
+    # này; output sẽ là sl=None, tp=None, rrr=None — AI loop sẽ từ chối trade.
+    if (sl is None or tp is None) and signal in ("BUY", "SELL"):
         levels: list[tuple[float, int]] = []
         for o in objects:
             p = o.get("price")

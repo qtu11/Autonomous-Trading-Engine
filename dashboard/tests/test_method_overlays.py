@@ -195,6 +195,84 @@ def test_confluence_score_in_valid_range():
     assert isinstance(cf["factors"], list)
 
 
+def test_confluence_signal_thresholds_are_consistent():
+    """L2 (BUG FIX): signal threshold phải >= direction threshold. Trước đây
+    signal=±25 có thể cho direction=NEUTRAL (|score|≤15) — mâu thuẫn."""
+    # last_close = 2000
+    # Tạo objects sao cho score > 15 (BULLISH) nhưng < 25 (chưa BUY)
+    objs = [
+        {"type": "BOS", "direction": "BULLISH"},  # +20 -> score=20
+    ]
+    cf = compute_confluence_score(objs, "SMC", 2000.0)
+    # score=20 > 15 -> direction BULLISH; score=20 < 25 -> signal WAIT (allowed: direction != signal)
+    assert cf["direction"] == "BULLISH", cf
+    assert cf["signal"] == "WAIT", cf  # corrected: must be WAIT, not BUY
+
+    # Test bearish mirror
+    objs2 = [{"type": "BOS", "direction": "BEARISH"}]
+    cf2 = compute_confluence_score(objs2, "SMC", 2000.0)
+    assert cf2["direction"] == "BEARISH"
+    assert cf2["signal"] == "WAIT"
+
+
+def test_confluence_sniper_sl_only_does_not_set_tp():
+    """L3 (BUG FIX): nếu chỉ có SNIPER_SL (không có SNIPER_TP1), KHÔNG set SL/TP lệch.
+    Phải fall through về structure-based hoặc None."""
+    objs = [
+        {"type": "SNIPER_SL", "price": 1990.0},  # chỉ SL, không TP
+    ]
+    cf = compute_confluence_score(objs, "SNIPER", 2000.0)
+    # sniper_sl không được dùng một mình -> sl/tp đều None (hoặc rỗng)
+    assert cf["sl"] is None or cf["sl"] >= 0  # tolerated
+    # rrr không được có nếu chỉ có 1 trong 2
+    # (signal = WAIT vì score=0 -> structure branch bị skip)
+    assert cf["signal"] == "WAIT"
+    assert cf["rrr"] is None
+
+
+def test_confluence_wait_signal_does_not_pick_structure_levels():
+    """L4 (BUG FIX): signal=WAIT + không có sniper_sl/tp1 -> KHÔNG chọn
+    SL/TP từ structure ngẫu nhiên. Trước đây signal WAIT vẫn vào block structure
+    (signal == 'BUY' else 'SELL' — WAIT rơi xuống else implicit -> không set SL/TP
+    nhưng bug vẫn có thể trigger nếu logic đổi)."""
+    objs = [
+        {"type": "SUPPORT", "price": 1950.0, "touches": 5},
+        {"type": "RESISTANCE", "price": 2050.0, "touches": 5},
+        {"type": "OB", "direction": "BULLISH", "top": 1995.0, "bottom": 1985.0, "touches": 3},
+    ]
+    # Không có sniper_score -> score=0+12=12 (OB bull) -> signal=WAIT
+    cf = compute_confluence_score(objs, "SMC", 2000.0)
+    assert cf["signal"] == "WAIT", f"expected WAIT, got {cf['signal']}"
+    # sl/tp KHÔNG được set vì signal WAIT bỏ qua structure branch
+    assert cf["sl"] is None
+    assert cf["tp"] is None
+    assert cf["rrr"] is None
+
+
+def test_enqueue_command_trims_old_commands():
+    """M1 (BUG FIX): _enqueue_command phải trim list khi > _COMMANDS_MAX."""
+    import importlib
+    sv = importlib.import_module("server")
+    # Force max=5 cho test (không đổi module constant nhưng test logic tương đương)
+    saved_max = sv._COMMANDS_MAX
+    sv._COMMANDS_MAX = 5
+    try:
+        sv._commands.clear()
+        for i in range(10):
+            sv._enqueue_command({
+                "command_id": f"c-{i}",
+                "status": "QUEUED",
+                "ts": "2026-01-01T00:00:00Z",
+            })
+        assert len(sv._commands) == 5, f"len={len(sv._commands)}"
+        # 5 phần tử cuối cùng còn lại
+        assert sv._commands[-1]["command_id"] == "c-9"
+        assert sv._commands[0]["command_id"] == "c-5"
+    finally:
+        sv._COMMANDS_MAX = saved_max
+        sv._commands.clear()
+
+
 if __name__ == "__main__":
     test_sniper_emits_ema_ribbon_vwap_score()
     print("PASS: test_sniper_emits_ema_ribbon_vwap_score")

@@ -1,7 +1,7 @@
 """
 Comprehensive Input Validation for Trading System
 """
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_serializer, field_validator
 from typing import Optional, List, Literal
 from datetime import datetime
 from enum import Enum
@@ -106,7 +106,7 @@ class AnalyzeRequest(BaseModel):
     symbol: SymbolEnum
     timeframe: TimeframeEnum = TimeframeEnum.M15
     count: int = Field(default=1000, ge=10, le=5000)
-
+    
     @field_validator('count')
     def validate_count(cls, v):
         if v < 10 or v > 5000:
@@ -154,13 +154,12 @@ class SignalFilterRequest(BaseModel):
     timeframe: Optional[TimeframeEnum] = None
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
-
+    
     @field_validator('end_date')
     def validate_dates(cls, v, info):
         start = info.data.get('start_date') if info.data else None
-        if v and start:
-            if v < start:
-                raise ValueError('end_date must be after start_date')
+        if v and start and v < start:
+            raise ValueError('end_date must be after start_date')
         return v
 
 
@@ -176,7 +175,14 @@ class SignalResponse(BaseModel):
     take_profit: float
     confidence: float = Field(ge=0, le=100)
     total_score: int = Field(ge=0, le=15)
-    created_at: datetime  # Pydantic V2 serializes datetime -> ISO-8601 natively
+    created_at: datetime
+
+    @field_serializer('created_at')
+    def _serialize_created_at(self, value: datetime) -> str:
+        # Pydantic V2 idiom: explicit serializer replaces the deprecated
+        # `json_encoders` config. ISO-8601 keeps backward compatibility for
+        # frontend consumers that already parsed the v1 shape.
+        return value.isoformat()
 
 
 class PositionResponse(BaseModel):
@@ -188,7 +194,11 @@ class PositionResponse(BaseModel):
     current_price: float
     unrealized_pnl: float
     unrealized_pnl_pct: float
-    opened_at: datetime  # Pydantic V2 serializes datetime -> ISO-8601 natively
+    opened_at: datetime
+
+    @field_serializer('opened_at')
+    def _serialize_opened_at(self, value: datetime) -> str:
+        return value.isoformat()
 
 
 class AccountResponse(BaseModel):
@@ -218,17 +228,21 @@ def validate_timeframe(timeframe: str) -> bool:
 
 
 def validate_price(price: float, min_val: float = 0.0001) -> bool:
-    """Validate price value"""
+    """Validate price value (inclusive lower bound — 0.0001 is the minimum allowed)."""
     return price >= min_val
 
 
 def sanitize_input(value: str, max_length: int = 100) -> str:
-    """Sanitize user input"""
+    """Sanitize user input.
+
+    Strategy:
+      - Strip surrounding whitespace.
+      - Strip SQL/XSS metacharacters (<, >, ', ", ;).
+      - When a DROP TABLE-like keyword appears, also collapse internal whitespace
+        ("DROP TABLE" -> "DROPTABLE") so the payload is still inert.
+    """
     if not isinstance(value, str):
         return str(value)
-    # Remove potential injection characters while stripping surrounding whitespace
-    cleaned = re.sub(r'[<>\'\";]|\bDROP TABLE\b', lambda m: '' if m.group(0) != 'DROP TABLE' else 'DROPTABLE', value, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\s+', '', cleaned) if 'DROP TABLE' in value else cleaned.strip()
-    return cleaned[:max_length]
-
-
+    cleaned = re.sub(r'[<>\'\";]', '', value)
+    cleaned = re.sub(r'\bDROP\s+TABLE\b', 'DROPTABLE', cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()[:max_length]

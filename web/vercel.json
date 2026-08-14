@@ -2,9 +2,16 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "framework": "nextjs",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "/api/:path*"
+    }
+  ],
   "env": {
     "ATE_FRONTEND_URL": "https://autonomous-trading-engine.vercel.app",
     "NEXT_PUBLIC_ATE_API_ORIGIN": "https://autonomous-trading-engine.vercel.app",
+    "ATE_BACKEND_URL": "http://113.173.192.226:8848",
     "ATE_BRIDGE_TOKEN": "20022007@Tu",
     "ATE_EXECUTION_MODE": "LIVE",
     "ATE_LIVE_ARMED": "true",
@@ -13,4 +20,3 @@
     "VERCEL_ENV": "production"
   }
 }
-
