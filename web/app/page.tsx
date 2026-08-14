@@ -695,7 +695,7 @@ export default function DashboardPage() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minHeight: 0, overflow: showCompact ? 'auto' : 'hidden' }}>
           <div style={{ flexShrink: 0, maxHeight: showCompact ? 160 : 220 }}>
             <Panel title="Watchlist" live style={{ height: '100%' }}>
-              <Watchlist onSymbolSelect={handleSymbolChange} selectedSymbol={selectedSymbol} />
+              <Watchlist onSymbolSelect={handleSymbolChange} selectedSymbol={selectedSymbol} currentPrice={(market as any)?.last_price || market?.bid || status?.current_bid} />
             </Panel>
           </div>
 

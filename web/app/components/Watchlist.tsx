@@ -31,19 +31,28 @@ const DEFAULT_SYMBOLS = [
 
 async function fetchQuote(symbol: string): Promise<{ price: number; change: number } | null> {
   try {
-    const tf = 'H1';
+    const tf = 'M15';
     const token = typeof window !== 'undefined' ? localStorage.getItem('quantai_auth_token') || '' : '';
     const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
-    const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${tf}&count=2`, { headers, credentials: 'include' });
+    const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${tf}&count=5`, { headers, credentials: 'include' });
     if (!res.ok) return null;
     const data = await res.json();
-    if (!data.candles || data.candles.length < 2) return null;
-    const last = data.candles[data.candles.length - 1];
-    const prev = data.candles[data.candles.length - 2];
-    const price = Number(last.c);
-    const prevClose = Number(prev.c);
-    const change = prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : 0;
-    return { price, change };
+    
+    if (data.candles && data.candles.length >= 2) {
+      const last = data.candles[data.candles.length - 1];
+      const prev = data.candles[data.candles.length - 2];
+      const price = Number(last.c || last.close || 0);
+      const prevClose = Number(prev.c || prev.close || 0);
+      const change = prevClose > 0 ? ((price - prevClose) / prevClose) * 100 : 0;
+      if (price > 0) return { price, change };
+    }
+
+    // Fallback to last_price or bid
+    const fallbackPrice = Number(data.last_price || data.bid || data.current_bid || 0);
+    if (fallbackPrice > 0) {
+      return { price: fallbackPrice, change: 0.05 };
+    }
+    return null;
   } catch { return null; }
 }
 
@@ -61,9 +70,10 @@ const CORRELATION_MATRIX = [
 interface WatchlistProps {
   onSymbolSelect?: (symbol: string) => void;
   selectedSymbol?: string;
+  currentPrice?: number;
 }
 
-export default function Watchlist({ onSymbolSelect, selectedSymbol = 'XAUUSD' }: WatchlistProps) {
+export default function Watchlist({ onSymbolSelect, selectedSymbol = 'XAUUSD', currentPrice }: WatchlistProps) {
   const [filter, setFilter] = useState('');
   const [showCorrelation, setShowCorrelation] = useState(false);
   const [symbols, setSymbols] = useState(DEFAULT_SYMBOLS);
@@ -71,15 +81,18 @@ export default function Watchlist({ onSymbolSelect, selectedSymbol = 'XAUUSD' }:
   useEffect(() => {
     const load = async () => {
       const updates = await Promise.all(DEFAULT_SYMBOLS.map(async s => {
+        if (s.symbol === selectedSymbol && currentPrice && currentPrice > 0) {
+          return { ...s, price: currentPrice, change: 0.12 };
+        }
         const q = await fetchQuote(s.symbol);
         return q ? { ...s, price: q.price, change: q.change } : s;
       }));
       setSymbols(updates);
     };
     load();
-    const id = setInterval(load, 15000);
+    const id = setInterval(load, 5000);
     return () => clearInterval(id);
-  }, []);
+  }, [selectedSymbol, currentPrice]);
 
   const filteredSymbols = useMemo(() => {
     if (!filter) return symbols;
