@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { BACKEND_URL } from '@/lib/api-config';
-import { requireAuth, optionalAuth, type AuthRequest } from './auth';
+import { requireAuth, requireAdmin, optionalAuth, type AuthRequest } from './auth';
 
 /**
  * PHASE 2: Authenticated proxy helper.
@@ -18,9 +18,10 @@ export async function authedProxy(
 ) {
   // Auth check
   const user = options.requireAdmin
-    ? requireAdminOnly(req, res)
+    ? requireAdmin(req, res)
     : requireAuth(req, res);
   if (!user) return;
+
 
   const method = options.method || req.method || 'GET';
   const targetPath = options.path.startsWith('/') ? options.path : `/${options.path}`;
@@ -105,8 +106,4 @@ export async function authedProxy(
   }
 }
 
-function requireAdminOnly(req: AuthRequest, res: NextApiResponse) {
-  const { requireAdmin } = require('./auth') as any;
-  return requireAdmin(req, res);
-}
 
