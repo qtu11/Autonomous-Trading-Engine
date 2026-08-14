@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
+from aether_smc import build_aether_flow_payload
 from advanced_detectors import build_advanced_markup
 from detectors import (
     calculate_ote_zone,
@@ -442,6 +443,27 @@ def build_chart_markup(
     last_close = float(m15["close"].iloc[-1])
     confluence = compute_confluence_score(objects, method_upper, last_close)
 
+    # 14. Aether Flow Engine (TradingView Pine Script parity for LuxAlgo OB, FVG, Swings, UT Bot, Auto Fibs, Sniper)
+    try:
+        aether_payload = build_aether_flow_payload(
+            symbol=symbol,
+            df=m15,
+            htf_h1_df=mtf_data.get("H1"),
+            m5_df=mtf_data.get("M5"),
+            method=method_upper,
+        )
+    except Exception:
+        aether_payload = {
+            "swings": [],
+            "segments": [],
+            "order_blocks": [],
+            "fvgs": [],
+            "auto_fibs": None,
+            "ut_signals": [],
+            "sniper": {},
+            "indicators": {},
+        }
+
     return {
         "symbol": symbol,
         "method": method_upper,
@@ -449,4 +471,5 @@ def build_chart_markup(
         "objects": objects,
         "advanced_counts": advanced["counts"],
         "confluence": confluence,
+        "aether": aether_payload,
     }

@@ -1,0 +1,166 @@
+
+//@version=6
+indicator("Sniper Entry/Exit with SL&TP", overlay=true, max_labels_count=500, max_boxes_count=500, max_bars_back=1000)
+
+// --- COLORS ---
+color c_turquoise = #40E0D0
+
+// --- INPUTS ---
+groupVis         = "Visuals & UI"
+dashTextSize     = input.string("small", "Dashboard Font Size", options=["tiny", "small", "normal", "large", "huge"], group=groupVis)
+tradeTextSize    = input.string("small", "Trade Label Size", options=["tiny", "small", "normal", "large", "huge"], group=groupVis)
+ribbonOpacity    = input.int(75, "EMA Ribbon Opacity", minval=0, maxval=100, group=groupVis)
+labelOffset      = input.int(12, "Label Right Offset (Bars)", minval=1, group=groupVis)
+
+groupRisk        = "Risk Management"
+atrMultiplier    = input.float(1.5, "SL ATR Multiplier", minval=0.1, step=0.1, group=groupRisk)
+
+// --- GLOBAL FUNCTIONS ---
+f_addDashRow(_table, _row, _title, _val, _col, _size) =>
+    table.cell(_table, 0, _row, _title, text_color=color.black, text_halign=text.align_left, text_size=_size)
+    table.cell(_table, 1, _row, _val, text_color=_col, text_size=_size, text_halign=text.align_right)
+
+// --- GLOBAL INDICATORS ---
+ema9    = ta.ema(close, 9)
+ema21   = ta.ema(close, 21)
+vwapV   = ta.vwap(hlc3)
+atr     = ta.atr(14)
+rsiVal  = ta.rsi(close, 14)
+rsi5m   = request.security(syminfo.tickerid, "5", ta.rsi(close, 14))
+[m, s, _] = ta.macd(close, 12, 26, 9)
+[_, _, adx] = ta.dmi(14, 14)
+volAvg  = ta.sma(volume, 20)
+
+// --- DUAL SCORE LOGIC ---
+float bScore = 0
+bScore += (close > vwapV ? 1 : 0), bScore += (rsiVal > 50 ? 1 : 0), bScore += (m > s ? 1 : 0)
+bScore += (ema9 > ema21 ? 1 : 0), bScore += (adx > 25 and close > ema9 ? 1 : 0)
+bScore += (volume > volAvg and close > open ? 1 : 0), bScore += (rsi5m > 50 ? 1 : 0)
+float bullPct = (bScore / 7) * 100
+
+float rScore = 0
+rScore += (close < vwapV ? 1 : 0), rScore += (rsiVal < 50 ? 1 : 0), rScore += (m < s ? 1 : 0)
+rScore += (ema9 < ema21 ? 1 : 0), rScore += (adx > 25 and close < ema9 ? 1 : 0)
+rScore += (volume > volAvg and close < open ? 1 : 0), rScore += (rsi5m < 50 ? 1 : 0)
+float bearPct = (rScore / 7) * 100
+
+// --- BIAS LOGIC ---
+string biasText = (bullPct - bearPct) >= 40 ? "STRONG BULL" : (bearPct - bullPct) >= 40 ? "STRONG BEAR" : bullPct > bearPct ? "MILD BULL" : "MILD BEAR"
+color biasCol = biasText == "STRONG BULL" ? color.green : biasText == "STRONG BEAR" ? color.red : color.gray
+
+// --- SIGNAL LOGIC & TRADE SETUP ---
+var int lastSignalState = 0 
+var float entryP = 0.0, var float slP = 0.0, var float t1 = 0.0, var float t2 = 0.0, var float t3 = 0.0, var float t4 = 0.0, var float t5 = 0.0
+var bool t1Hit = false, var bool t2Hit = false, var bool t3Hit = false, var bool t4Hit = false, var bool t5Hit = false
+
+buyCond  = ta.crossover(ema9, ema21)
+sellCond = ta.crossunder(ema9, ema21)
+triggerBuy = buyCond and lastSignalState <= 0
+triggerSell = sellCond and lastSignalState >= 0
+
+if triggerBuy or triggerSell
+    lastSignalState := triggerBuy ? 1 : -1
+    entryP := close
+    float risk = atr * atrMultiplier
+    slP := triggerBuy ? entryP - risk : entryP + risk
+    t1  := triggerBuy ? entryP + risk : entryP - risk
+    t2  := triggerBuy ? entryP + (risk * 2) : entryP - (risk * 2)
+    t3  := triggerBuy ? entryP + (risk * 3) : entryP - (risk * 3)
+    t4  := triggerBuy ? entryP + (risk * 4) : entryP - (risk * 4)
+    t5  := triggerBuy ? entryP + (risk * 5) : entryP - (risk * 5)
+    t1Hit := false, t2Hit := false, t3Hit := false, t4Hit := false, t5Hit := false
+
+// --- TARGET HIT DETECTION ---
+if lastSignalState == 1
+    if high >= t1 
+        t1Hit := true
+    if high >= t2 
+        t2Hit := true
+    if high >= t3 
+        t3Hit := true
+    if high >= t4 
+        t4Hit := true
+    if high >= t5 
+        t5Hit := true
+if lastSignalState == -1
+    if low <= t1 
+        t1Hit := true
+    if low <= t2 
+        t2Hit := true
+    if low <= t3 
+        t3Hit := true
+    if low <= t4 
+        t4Hit := true
+    if low <= t5 
+        t5Hit := true
+
+// --- DASHBOARD ---
+var table d = table.new(position.middle_left, 2, 17, bgcolor=color.new(#FFF9C4, 10), border_width=1, border_color=color.new(color.gray, 60))
+if barstate.islast
+    table.cell(d, 0, 0, "BULL SCORE", text_color=color.white, bgcolor=color.green, text_size=dashTextSize)
+    table.cell(d, 1, 0, str.tostring(bullPct, "#") + "%", text_color=color.white, bgcolor=color.green, text_size=dashTextSize)
+    table.cell(d, 0, 1, "BEAR SCORE", text_color=color.white, bgcolor=color.red, text_size=dashTextSize)
+    table.cell(d, 1, 1, str.tostring(bearPct, "#") + "%", text_color=color.white, bgcolor=color.red, text_size=dashTextSize)
+    table.cell(d, 0, 2, "MARKET BIAS", text_color=color.white, bgcolor=color.black, text_size=dashTextSize)
+    table.cell(d, 1, 2, biasText, text_color=color.white, bgcolor=biasCol, text_size=dashTextSize)
+    f_addDashRow(d, 3,  "Price/VWAP",  close > vwapV ? "ABOVE" : "BELOW", close > vwapV ? color.green : color.red, dashTextSize)
+    f_addDashRow(d, 4,  "RSI (14)",    str.tostring(rsiVal, "#.#"), rsiVal > 50 ? color.green : color.red, dashTextSize)
+    f_addDashRow(d, 5,  "MACD Trend",  m > s ? "BULL" : "BEAR", m > s ? color.green : color.red, dashTextSize)
+    f_addDashRow(d, 6,  "ADX Power",   str.tostring(adx, "#.#"), adx > 25 ? color.green : color.gray, dashTextSize)
+    f_addDashRow(d, 7,  "EMA Cross",   ema9 > ema21 ? "BULL" : "BEAR", ema9 > ema21 ? color.green : color.red, dashTextSize)
+    f_addDashRow(d, 8,  "ATR 14",      str.tostring(atr, "#.##"), color.black, dashTextSize)
+    f_addDashRow(d, 9,  "Vol Status",  volume > volAvg ? "HIGH" : "LOW", volume > volAvg ? color.green : color.gray, dashTextSize)
+    f_addDashRow(d, 10, "5m RSI",      str.tostring(rsi5m, "#.#"), rsi5m > 50 ? color.green : color.red, dashTextSize)
+    f_addDashRow(d, 11, "MACD Main",   str.tostring(m, "#.##"), color.black, dashTextSize)
+    f_addDashRow(d, 12, "MACD Sig",    str.tostring(s, "#.##"), color.black, dashTextSize)
+    f_addDashRow(d, 13, "Trend Str",   adx > 25 ? "STRONG" : "WEAK", adx > 25 ? color.green : color.red, dashTextSize)
+    f_addDashRow(d, 14, "Status",      triggerBuy or triggerSell ? "NEW" : "WAIT", color.black, dashTextSize)
+    f_addDashRow(d, 15, "Sniper Mode", "Qtus V.02", color.blue, dashTextSize)
+
+// --- VISUALS: RIBBON & PLOTS ---
+p9 = plot(ema9, color=color.new(color.green, 20), title="EMA 9")
+p21 = plot(ema21, color=color.new(color.red, 20), title="EMA 21")
+fill(p9, p21, color = ema9 > ema21 ? color.new(color.green, 100 - ribbonOpacity) : color.new(color.red, 100 - ribbonOpacity))
+
+// --- CANDLE COLORS ---
+isRetest = (lastSignalState == 1 and low <= ema9 and low > ema21) or (lastSignalState == -1 and high >= ema9 and high < ema21)
+barcolor((triggerBuy or triggerSell) ? color.black : isRetest ? color.orange : na)
+plotshape(triggerBuy, text="BUY", style=shape.labelup, location=location.belowbar, color=color.green, textcolor=color.white, size=size.small)
+plotshape(triggerSell, text="SELL", style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, size=size.small)
+
+// --- TP LINES & LABELS ---
+var line lE = na, var line lSL = na, var line lT1 = na, var line lT2 = na, var line lT3 = na, var line lT4 = na, var line lT5 = na
+var label lbE = label.new(na, na, "", color=color.blue, textcolor=color.white, style=label.style_label_left, size=tradeTextSize)
+var label lbT1 = label.new(na, na, "", color=color.green, textcolor=color.white, style=label.style_label_left, size=tradeTextSize)
+var label lbT2 = label.new(na, na, "", color=color.green, textcolor=color.white, style=label.style_label_left, size=tradeTextSize)
+var label lbT3 = label.new(na, na, "", color=color.green, textcolor=color.white, style=label.style_label_left, size=tradeTextSize)
+var label lbT4 = label.new(na, na, "", color=color.rgb(0, 100, 0), textcolor=color.white, style=label.style_label_left, size=tradeTextSize)
+var label lbT5 = label.new(na, na, "", color=color.rgb(0, 70, 0), textcolor=color.white, style=label.style_label_left, size=tradeTextSize)
+
+if triggerBuy or triggerSell
+    line.delete(lE), line.delete(lSL), line.delete(lT1), line.delete(lT2), line.delete(lT3), line.delete(lT4), line.delete(lT5)
+    lE  := line.new(bar_index, entryP, bar_index + 20, entryP, color=color.blue, width=2, extend=extend.right)
+    lSL := line.new(bar_index, slP,    bar_index + 20, slP,    color=color.red,  width=2, extend=extend.right)
+    lT1 := line.new(bar_index, t1,     bar_index + 20, t1,     color=color.green, style=line.style_dashed, extend=extend.right)
+    lT2 := line.new(bar_index, t2,     bar_index + 20, t2,     color=color.green, style=line.style_dashed, extend=extend.right)
+    lT3 := line.new(bar_index, t3,     bar_index + 20, t3,     color=color.green, style=line.style_dashed, extend=extend.right)
+    lT4 := line.new(bar_index, t4,     bar_index + 20, t4,     color=color.rgb(0, 100, 0), width=2, extend=extend.right)
+    lT5 := line.new(bar_index, t5,     bar_index + 20, t5,     color=color.rgb(0, 70, 0),  width=3, extend=extend.right)
+
+if lastSignalState != 0
+    int tX = bar_index + labelOffset
+    line.set_color(lT1, t1Hit ? c_turquoise : color.green)
+    line.set_color(lT2, t2Hit ? c_turquoise : color.green)
+    line.set_color(lT3, t3Hit ? c_turquoise : color.green)
+    line.set_color(lT4, t4Hit ? c_turquoise : color.rgb(0, 100, 0))
+    line.set_color(lT5, t5Hit ? c_turquoise : color.rgb(0, 70, 0))
+    
+    label.set_xy(lbE, tX, entryP), label.set_text(lbE, "ENTRY: " + str.tostring(entryP, "#.##"))
+    label.set_xy(lbT1, tX, t1), label.set_text(lbT1, "TP1: " + str.tostring(t1, "#.##") + (t1Hit ? " 🔥" : ""))
+    label.set_xy(lbT2, tX, t2), label.set_text(lbT2, "TP2: " + str.tostring(t2, "#.##") + (t2Hit ? " 🔥" : ""))
+    label.set_xy(lbT3, tX, t3), label.set_text(lbT3, "TP3: " + str.tostring(t3, "#.##") + (t3Hit ? " 🔥" : ""))
+    label.set_xy(lbT4, tX, t4), label.set_text(lbT4, "TP4: " + str.tostring(t4, "#.##") + (t4Hit ? " 🔥" : ""))
+    label.set_xy(lbT5, tX, t5), label.set_text(lbT5, "TP5: " + str.tostring(t5, "#.##") + (t5Hit ? " 🔥" : ""))
+
+plot(vwapV, color=close > vwapV ? color.green : color.red, linewidth=2, title="VWAP")
+

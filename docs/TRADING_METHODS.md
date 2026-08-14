@@ -1,6 +1,13 @@
 # QuantAI - 5 Phương Pháp Giao Dịch & Pattern Detection Engines
 
-Tài liệu này giải thích chi tiết cách QuantAI hiện thực hóa 5 phương pháp giao dịch và các công cụ phát hiện mẫu hình thị trường (72+ concepts), cùng logic và điều kiện validate phía sau.
+Tài liệu này giải thích tổng quan và chi tiết cách TradeAI ATE hiện thực hóa 5 phương pháp giao dịch định lượng từ các file Pine Script (`smc.pine`, `structureengine.pine`, `sniper.pine`, `ict.pine`, `priceaction.pine`).
+
+## DANH MỤC ĐẶC TẢ CHI TIẾT TỪNG PHƯƠNG PHÁP:
+- [01. SMC - Smart Money Concepts](file:///c:/Users/KIMPC/AppData/Roaming/MetaQuotes/Terminal/C3DCCD4DFDD81FF8F00FFC310CAC0FD8/MQL5/Experts/tradeAI/docs/methods/01_SMC_SMART_MONEY_CONCEPTS.md)
+- [02. ICT - Inner Circle Trader](file:///c:/Users/KIMPC/AppData/Roaming/MetaQuotes/Terminal/C3DCCD4DFDD81FF8F00FFC310CAC0FD8/MQL5/Experts/tradeAI/docs/methods/02_ICT_INNER_CIRCLE_TRADER.md)
+- [03. Sniper Momentum Flow](file:///c:/Users/KIMPC/AppData/Roaming/MetaQuotes/Terminal/C3DCCD4DFDD81FF8F00FFC310CAC0FD8/MQL5/Experts/tradeAI/docs/methods/03_SNIPER_MOMENTUM_FLOW.md)
+- [04. Price Action & Candle Dynamics](file:///c:/Users/KIMPC/AppData/Roaming/MetaQuotes/Terminal/C3DCCD4DFDD81FF8F00FFC310CAC0FD8/MQL5/Experts/tradeAI/docs/methods/04_PRICE_ACTION_CANDLE_DYNAMICS.md)
+- [05. Ultra Confluence Matrix](file:///c:/Users/KIMPC/AppData/Roaming/MetaQuotes/Terminal/C3DCCD4DFDD81FF8F00FFC310CAC0FD8/MQL5/Experts/tradeAI/docs/methods/05_ULTRA_CONFLUENCE_MATRIX.md)
 
 ## Kiến Trúc Pattern Detection
 

@@ -70,9 +70,12 @@ class KillzoneDetector:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
         
         # Convert to UTC for comparison
+        # pyrefly: ignore [missing-attribute]
         df['hour'] = df['timestamp'].dt.hour
+        # pyrefly: ignore [missing-attribute]
         df['minute'] = df['timestamp'].dt.minute
         df['minute_of_day'] = df['hour'] * 60 + df['minute']
+        # pyrefly: ignore [missing-attribute]
         df['day_of_week'] = df['timestamp'].dt.dayofweek  # 0=Monday
         
         # Midnight-Midnight Range (00:00-08:00 UTC) - Asian Session High/Low
@@ -214,6 +217,7 @@ class OTECalculator:
             val = last.get(key)
             if pd.isna(val) if isinstance(val, float) else val is None:
                 return default if default is not None else close
+            # pyrefly: ignore [bad-argument-type]
             return float(val)
         
         swing_high = safe_val('swing_high')
@@ -521,6 +525,7 @@ class DailyLevelsCalculator:
         if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
             df['timestamp'] = pd.to_datetime(df['timestamp'])
         
+        # pyrefly: ignore [missing-attribute]
         df['date'] = df['timestamp'].dt.date
         
         # Daily levels
@@ -611,6 +616,7 @@ class VWAPCalculator:
         if not pd.api.types.is_datetime64_any_dtype(df['timestamp']):
             df['timestamp'] = pd.to_datetime(df['timestamp'])
         
+        # pyrefly: ignore [missing-attribute]
         df['date'] = df['timestamp'].dt.date
         
         # Typical Price

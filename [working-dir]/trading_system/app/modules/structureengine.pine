@@ -1,0 +1,2424 @@
+
+// © Viprasol
+// Based on concepts from TradeOS by KyleAlgo — significantly enhanced and rebranded.
+
+//@version=6
+indicator("[Viprasol] Institutional Structure Engine", "VP - ISE", overlay = true,
+  max_lines_count  = 500,
+  max_labels_count = 500,
+  max_boxes_count  = 500)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  CONSTANTS
+// ═══════════════════════════════════════════════════════════════════════
+
+int   DECAY_BARS          = 10
+int   MAX_CONFLUENCE       = 10
+int   VOLUME_MA_LEN        = 20
+float BAND_LAYERS          = 5.0
+int   TRAIL_NONE           = 0
+int   TRAIL_INITIAL        = 1
+int   TRAIL_BREAKEVEN      = 2
+int   TRAIL_AT_TP1         = 3
+int   TRAIL_COMPLETE       = 4
+
+// ═══════════════════════════════════════════════════════════════════════
+//  INPUTS
+// ═══════════════════════════════════════════════════════════════════════
+
+// --- Chart Mode ---
+string GRP_MODE = "Chart Mode"
+chartModeInput = input.string("Execution (5m-15m)", "Chart Mode",
+               options = ["Auto", "Execution (5m-15m)", "Entry Timing (1m-5m)", "Structure & Bias (4H)", "Session Flow (1H)", "Context (Daily)", "Macro (Weekly)", "Custom"],
+               tooltip = "'Auto' detects from chart timeframe and selects the best mode. 'Custom' gives full manual control.",
+               group = GRP_MODE)
+
+visualDensityInput = input.string("Clean", "Visual Density",
+               options = ["Clean", "Balanced", "Full"],
+               tooltip = "Controls visual detail level. Clean = signals + trend only. Balanced = key zones + compact labels. Full = all details visible.",
+               group = GRP_MODE)
+
+// --- Structure Detection ---
+string GRP_STRUCT = "Structure Detection"
+swingDetectionLenInput = input.int(5, "Swing Detection Sensitivity", minval = 1, maxval = 50,
+               tooltip = "Bars to look back for swing confirmation. Lower (2-4) = more swings + noise. Higher (8-15) = major pivots only.",
+               group = GRP_STRUCT)
+showTrendBreaksInput = input.bool(true, "Show Trend Continuation Breaks",
+               tooltip = "Draw lines when price breaks structure in the direction of the existing trend (BOS).",
+               group = GRP_STRUCT)
+showReversalBreaksInput = input.bool(true, "Show Trend Reversal Breaks",
+               tooltip = "Draw lines when price breaks structure against the prior trend (CHoCH), signaling a potential reversal.",
+               group = GRP_STRUCT)
+showSwingLabelsInput = input.bool(false, "Show Swing Point Labels",
+               tooltip = "Label each confirmed swing as HH (Higher High), HL (Higher Low), LH (Lower High), or LL (Lower Low).",
+               group = GRP_STRUCT)
+structureLineStyleInput = input.string("Dashed", "Structure Line Style",
+               options = ["Solid", "Dashed", "Dotted"], group = GRP_STRUCT)
+
+// --- Trend Baseline ---
+string GRP_TREND = "Trend Baseline"
+baselinePeriodInput = input.int(50, "Baseline Period", minval = 10, maxval = 200,
+               tooltip = "Period for the central trend line. Lower = more responsive. Higher = smoother. 50 is good for intraday.",
+               group = GRP_TREND)
+volatilityPeriodInput = input.int(14, "Volatility Measurement Period", minval = 5, maxval = 50,
+               tooltip = "Period for ATR (Average True Range), which measures how much price moves per bar. 14 is standard.",
+               group = GRP_TREND)
+volatilitySmoothInput = input.int(5, "Volatility Smoothing", minval = 1, maxval = 20,
+               tooltip = "Smooths the volatility measurement to reduce band jitter. Higher = smoother bands.",
+               group = GRP_TREND)
+bandWidthMultInput = input.float(2.0, "Band Width Multiplier", minval = 0.5, maxval = 5.0, step = 0.1,
+               tooltip = "How far bands spread from the trend line. Higher = wider bands, fewer signals. 2.0 is standard.",
+               group = GRP_TREND)
+useAdaptiveBaselineInput = input.bool(false, "Adaptive Baseline (Efficiency Ratio)",
+               tooltip = "Dynamically adjust the baseline period using Kaufman's Efficiency Ratio. Faster in trends, slower in chop.",
+               group = GRP_TREND)
+adaptiveMinInput = input.int(20, "Adaptive Min Period", minval = 5, maxval = 100,
+               tooltip = "Shortest baseline period when market is highly efficient (strong trend).",
+               group = GRP_TREND)
+adaptiveMaxInput = input.int(100, "Adaptive Max Period", minval = 20, maxval = 300,
+               tooltip = "Longest baseline period when market is noisy (choppy).",
+               group = GRP_TREND)
+
+// --- Volatility Envelope ---
+string GRP_ENVELOPE = "Volatility Envelope"
+showEnvelopeInput = input.bool(true, "Show Volatility Envelope",
+               tooltip = "Display the multi-layer volatility envelope around the trend line.",
+               group = GRP_ENVELOPE)
+
+// --- Signal Confidence ---
+string GRP_CONFIDENCE = "Signal Confidence"
+requireMomentumInput = input.bool(false, "Require Strong Break Candle",
+               tooltip = "Only fire BUY/SELL when the break candle shows real momentum (volume + body size + displacement). Filters weak breaks.",
+               group = GRP_CONFIDENCE)
+momentumVolThreshInput = input.float(1.0, "Volume Surge Threshold", minval = 1.0, maxval = 3.0, step = 0.1,
+               tooltip = "Break candle volume must exceed this multiple of the 20-bar average. 1.5x = moderate filter.",
+               group = GRP_CONFIDENCE)
+momentumBodyRatioInput = input.float(0.5, "Minimum Body Ratio", minval = 0.3, maxval = 0.8, step = 0.05,
+               tooltip = "Break candle body must be at least this fraction of its total range. Filters dojis/wicks.",
+               group = GRP_CONFIDENCE)
+momentumDisplacementInput = input.float(0.75, "Minimum Displacement (ATR)", minval = 0.3, maxval = 2.0, step = 0.1,
+               tooltip = "Break candle body must exceed this multiple of ATR. Ensures institutional-level aggression.",
+               group = GRP_CONFIDENCE)
+momentumChecksInput = input.int(2, "Checks Required (of 4)", minval = 1, maxval = 4,
+               tooltip = "How many of the 4 momentum checks must pass. 2 = balanced, 4 = very strict.",
+               group = GRP_CONFIDENCE)
+antiWhipsawBarsInput = input.int(0, "Min Bars Between Opposing Signals", minval = 0, maxval = 30,
+               tooltip = "Minimum bars between a BUY and SELL (or vice versa). Prevents whipsaw in choppy markets. 0 = disabled.",
+               group = GRP_CONFIDENCE)
+showConfluenceScoreInput = input.bool(true, "Show Confluence Score on Signals",
+               tooltip = "Display a 0-10 quality rating on each BUY/SELL label based on how many factors agree.",
+               group = GRP_CONFIDENCE)
+minConfluenceScoreInput = input.int(2, "Minimum Score to Show Signal", minval = 0, maxval = 10,
+               tooltip = "Only display BUY/SELL labels when confluence score meets this threshold. 0 = show all. Scale: 0-10.",
+               group = GRP_CONFIDENCE)
+
+// --- Divergence ---
+string GRP_DIV = "Divergence"
+showDivergenceInput = input.bool(true, "Show RSI Divergence",
+               tooltip = "Detect and draw when price and momentum disagree (divergence), warning of potential reversals.",
+               group = GRP_DIV)
+rsiPeriodInput = input.int(14, "RSI Period", minval = 7, maxval = 30,
+               tooltip = "Period for the RSI momentum oscillator. 14 is standard.",
+               group = GRP_DIV)
+requireDivergenceInput = input.bool(false, "Require Divergence for Signals",
+               tooltip = "When enabled, BUY/SELL signals only fire if RSI divergence confirms the reversal.",
+               group = GRP_DIV)
+
+// --- Price Imbalances (FVG) ---
+string GRP_FVG = "Price Imbalances"
+showImbalancesInput = input.bool(true, "Show Price Imbalances",
+               tooltip = "Detect Fair Value Gaps — 3-candle patterns where price leaves an unfilled gap. High-probability revisit zones.",
+               group = GRP_FVG)
+bullishGapColorInput = input.color(color.new(#00bcd4, 85), "Bullish Gap Color", group = GRP_FVG)
+bearishGapColorInput = input.color(color.new(#e91e63, 85), "Bearish Gap Color", group = GRP_FVG)
+gapFillThresholdInput = input.float(0.5, "Fill Threshold", minval = 0.25, maxval = 1.0, step = 0.05,
+               tooltip = "Fraction of the gap that must be filled before it's considered mitigated. 0.5 = 50% fill.",
+               group = GRP_FVG)
+maxVisibleGapsInput = input.int(10, "Max Visible Gaps", minval = 3, maxval = 20, group = GRP_FVG)
+
+// --- Liquidity ---
+string GRP_LIQ = "Liquidity"
+showLiquidityInput = input.bool(true, "Show Liquidity Levels",
+               tooltip = "Detect equal highs/lows where stop orders cluster. Price tends to target these levels.",
+               group = GRP_LIQ)
+showSweepEventsInput = input.bool(true, "Show Sweep Events",
+               tooltip = "Mark when price wicks beyond a key level then reverses back — a liquidity grab.",
+               group = GRP_LIQ)
+equalLevelToleranceInput = input.float(0.15, "Equal Level Tolerance (ATR)", minval = 0.05, maxval = 0.5, step = 0.05,
+               tooltip = "How close two swing levels must be to count as equal. Measured as fraction of ATR.",
+               group = GRP_LIQ)
+equalLevelLookbackInput = input.int(50, "Level Lookback (bars)", minval = 20, maxval = 200,
+               tooltip = "How far back to scan for equal highs/lows.",
+               group = GRP_LIQ)
+requireSweepInput = input.bool(false, "Require Sweep for Signals",
+               tooltip = "When enabled, BUY/SELL only fires if a liquidity sweep preceded the structural break.",
+               group = GRP_LIQ)
+
+// --- Supply / Demand Zones ---
+string GRP_SD = "Supply / Demand Zones"
+showSupplyDemandInput = input.bool(true, "Show Supply / Demand Zones",
+               tooltip = "Draw institutional order block zones at structure break origins. Graded A-D by quality.",
+               group = GRP_SD)
+demandZoneColorInput = input.color(color.new(#00bcd4, 80), "Demand Zone Color", group = GRP_SD)
+supplyZoneColorInput = input.color(color.new(#e91e63, 80), "Supply Zone Color", group = GRP_SD)
+maxVisibleZonesInput = input.int(5, "Max Visible Zones", minval = 1, maxval = 20, group = GRP_SD)
+
+// --- Support / Resistance ---
+string GRP_SR = "Support / Resistance"
+showSupportResistInput = input.bool(true, "Show Support / Resistance Zones",
+               tooltip = "Draw pivot-derived S/R zones with ATR-scaled thickness.",
+               group = GRP_SR)
+zoneDetectionStrengthInput = input.int(50, "Zone Detection Sensitivity", minval = 3, maxval = 50,
+               tooltip = "Pivot strength for S/R detection. Higher = fewer, more significant zones.",
+               group = GRP_SR)
+minZoneGapInput = input.float(0.1, "Minimum Gap Between Zones (%)", minval = 0.1, maxval = 5.0, step = 0.1,
+               group = GRP_SR)
+zoneHeightInput = input.float(1.0, "Zone Height (ATR)", minval = 0.1, maxval = 3.0, step = 0.1,
+               group = GRP_SR)
+maxSRZonesInput = input.int(7, "Max Zones", minval = 1, maxval = 20, group = GRP_SR)
+zoneExtensionBarsInput = input.int(50, "Zone Forward Extension (bars)", minval = 10, maxval = 200,
+               group = GRP_SR)
+
+// --- Continuation Signals ---
+string GRP_CONT = "Continuation Signals"
+showContinuationInput = input.bool(true, "Show Continuation Arrows",
+               tooltip = "Triangles when price taps the volatility band in the trend direction — potential re-entry points.",
+               group = GRP_CONT)
+continuationSpacingInput = input.int(5, "Minimum Bars Between Arrows", minval = 1, maxval = 20,
+               tooltip = "Prevents arrow clustering. Arrows must be at least this many bars apart.",
+               group = GRP_CONT)
+
+// --- Trend Reversal Reference ---
+string GRP_REV = "Trend Reversal Reference"
+showReversalRefInput = input.bool(true, "Show Trend Reversal Reference",
+               tooltip = "Marks the swing level that triggered the reversal with a reference line — your invalidation level.",
+               group = GRP_REV)
+reversalLineLenInput = input.int(20, "Reference Line Length (bars)", minval = 5, maxval = 100,
+               group = GRP_REV)
+
+// --- Take Profit / Stop Loss ---
+string GRP_TPSL = "Take Profit / Stop Loss"
+showTargetsStopInput = input.bool(false, "Show Take Profit / Stop Loss",
+               tooltip = "Auto-plot TP and SL levels when a new signal fires.",
+               group = GRP_TPSL)
+target1MultInput = input.float(1.0, "Target 1 (Risk Multiple)", minval = 0.5, maxval = 10.0, step = 0.5,
+               tooltip = "First profit target as a multiple of risk. 1.0 = reward equals risk.",
+               group = GRP_TPSL)
+target2MultInput = input.float(2.0, "Target 2 (Risk Multiple)", minval = 0.5, maxval = 10.0, step = 0.5,
+               group = GRP_TPSL)
+target3MultInput = input.float(3.0, "Target 3 (Risk Multiple)", minval = 0.5, maxval = 10.0, step = 0.5,
+               group = GRP_TPSL)
+stopBufferMultInput = input.float(0.3, "Stop Loss Buffer (ATR)", minval = 0.0, maxval = 1.0, step = 0.1,
+               tooltip = "Extra space below/above the swing for your stop loss. Avoids the obvious liquidity grab at the exact swing.",
+               group = GRP_TPSL)
+stopLossModeInput = input.string("Swing + Buffer", "Stop Loss Mode",
+               options = ["Swing + Buffer", "Below Zone"],
+               tooltip = "Swing + Buffer places SL below the swing with ATR padding. Below Zone places SL below the nearest order block.",
+               group = GRP_TPSL)
+useSmartTargetsInput = input.bool(false, "Use Structure-Aware Targets",
+               tooltip = "Replace fixed R:R targets with nearby imbalances, liquidity levels, and S/R zones when available.",
+               group = GRP_TPSL)
+enableTrailingInput = input.bool(false, "Enable Trailing Stop",
+               tooltip = "After a signal, dynamically move the stop loss as price reaches profit targets.",
+               group = GRP_TPSL)
+trailingModeInput = input.string("Stepped", "Trailing Mode",
+               options = ["Stepped", "ATR"],
+               tooltip = "Stepped: SL moves to entry at TP1, to TP1 at TP2. ATR: Chandelier-style trailing that ratchets with price.",
+               group = GRP_TPSL)
+trailingAtrMultInput = input.float(2.0, "ATR Trail Multiplier", minval = 1.0, maxval = 4.0, step = 0.5,
+               group = GRP_TPSL)
+
+// --- Higher Timeframes ---
+string GRP_HTF = "Higher Timeframes"
+higherTF1Input = input.timeframe("60", "Higher Timeframe 1",
+               tooltip = "First higher timeframe for trend alignment check.",
+               group = GRP_HTF)
+higherTF2Input = input.timeframe("240", "Higher Timeframe 2", group = GRP_HTF)
+higherTF3Input = input.timeframe("D", "Higher Timeframe 3", group = GRP_HTF)
+
+// --- Signal Filters ---
+string GRP_FILTER = "Signal Filters"
+enableFiltersInput = input.bool(false, "Enable Signal Filters",
+               tooltip = "Apply additional requirements to BUY/SELL signals. Rejected signals turn candles gray.",
+               group = GRP_FILTER)
+filteredColorInput = input.color(color.gray, "Color When Signal Suppressed", group = GRP_FILTER)
+requireHTF1Input = input.bool(false, "Require Higher TF 1 Agreement", group = GRP_FILTER)
+requireHTF2Input = input.bool(false, "Require Higher TF 2 Agreement", group = GRP_FILTER)
+requireHTF3Input = input.bool(false, "Require Higher TF 3 Agreement", group = GRP_FILTER)
+requireTrendStrengthInput = input.bool(false, "Require Minimum Trend Strength",
+               tooltip = "Signal only fires when ADX indicates a trending market (not ranging).",
+               group = GRP_FILTER)
+minTrendStrengthInput = input.float(20.0, "Minimum Trend Strength Value", minval = 5.0, maxval = 50.0, step = 1.0,
+               group = GRP_FILTER)
+requireVolatilityInput = input.bool(false, "Require Volatility Within Range", group = GRP_FILTER)
+minVolScoreInput = input.int(3, "Minimum Volatility Score", minval = 0, maxval = 10, group = GRP_FILTER)
+maxVolScoreInput = input.int(8, "Maximum Volatility Score", minval = 0, maxval = 10, group = GRP_FILTER)
+
+// --- Dashboard ---
+string GRP_DASH = "Dashboard"
+showDashboardInput = input.bool(true, "Show Dashboard", group = GRP_DASH)
+dashboardPositionInput = input.string("Bottom Left", "Position",
+               options = ["Top Left", "Top Right", "Bottom Left", "Bottom Right"], group = GRP_DASH)
+dashboardSizeInput = input.string("Small", "Size",
+               options = ["Tiny", "Small", "Normal"], group = GRP_DASH)
+trendStrengthPeriodInput = input.int(14, "Trend Strength Period", minval = 5, maxval = 50,
+               tooltip = "ADX period — measures how strongly price is trending. Below 20 = weak. Above 25 = strong.",
+               group = GRP_DASH)
+volumeAvgPeriodInput = input.int(20, "Volume Average Period", minval = 5, maxval = 100, group = GRP_DASH)
+
+// --- Volatility Index (VIX) ---
+string GRP_VIX = "Volatility Index"
+enableVixInput = input.bool(true, "Enable VIX Awareness",
+               tooltip = "Pull in VIX data to assess market fear. Affects confluence scoring and can filter signals during extreme volatility.",
+               group = GRP_VIX)
+vixSymbolInput = input.string("VIX", "VIX Symbol",
+               tooltip = "Use 'VIX' for spot VIX, 'VX1!' for front-month VIX futures.",
+               group = GRP_VIX)
+vixFearThreshInput = input.float(25.0, "High Fear Threshold", minval = 15.0, maxval = 50.0, step = 1.0,
+               tooltip = "VIX above this = elevated fear. Sell signals get +1 confluence, buy signals get penalized.",
+               group = GRP_VIX)
+vixComplacencyThreshInput = input.float(15.0, "Complacency Threshold", minval = 8.0, maxval = 25.0, step = 1.0,
+               tooltip = "VIX below this = low fear / complacency. Signals in both directions are less reliable.",
+               group = GRP_VIX)
+blockBuysVixSpikeInput = input.bool(false, "Block Buys During VIX Spike",
+               tooltip = "When enabled, suppresses BUY signals when VIX is above the high fear threshold and rising.",
+               group = GRP_VIX)
+
+// --- VWAP ---
+string GRP_VWAP = "VWAP"
+enableVwapInput = input.bool(true, "Enable VWAP Confluence",
+               tooltip = "Add session VWAP as a confluence factor. BUY near/below VWAP or SELL near/above VWAP gets +1 confluence score.",
+               group = GRP_VWAP)
+showVwapLineInput = input.bool(true, "Show VWAP Line",
+               tooltip = "Display the session VWAP line on chart when VWAP module is enabled.",
+               group = GRP_VWAP)
+
+// --- Range Detection ---
+string GRP_RANGE = "Range Detection"
+enableRangeDetectInput = input.bool(true, "Enable Range Detection",
+               tooltip = "Detect sideways/ranging markets using ADX + Bollinger squeeze. Raises the confluence bar for signals in chop.",
+               group = GRP_RANGE)
+suppressInRangeInput = input.bool(false, "Suppress Signals When Ranging",
+               tooltip = "When enabled, completely blocks BUY/SELL signals during detected ranging conditions.",
+               group = GRP_RANGE)
+
+// --- Session / Killzones ---
+string GRP_SESSION = "Session / Killzones"
+showSessionZonesInput = input.bool(false, "Show Session Killzones",
+               tooltip = "Highlight key trading sessions (London, New York, Asia) as background shading. Helps identify high-volume windows.",
+               group = GRP_SESSION)
+londonSessionInput = input.session("0200-0500", "London Killzone (UTC)",
+               tooltip = "London open killzone — high volatility, institutional order flow.",
+               group = GRP_SESSION)
+nySessionInput = input.session("0700-1000", "New York Killzone (UTC)",
+               tooltip = "New York open killzone — overlap with London, peak liquidity.",
+               group = GRP_SESSION)
+asiaSessionInput = input.session("2000-0000", "Asia Killzone (UTC)",
+               tooltip = "Asian session — accumulation/distribution phase, lower volatility.",
+               group = GRP_SESSION)
+londonSessionColorInput = input.color(color.new(#42a5f5, 92), "London Color", group = GRP_SESSION)
+nySessionColorInput = input.color(color.new(#ff9800, 92), "New York Color", group = GRP_SESSION)
+asiaSessionColorInput = input.color(color.new(#ab47bc, 92), "Asia Color", group = GRP_SESSION)
+requireSessionInput = input.bool(false, "Only Signal During Killzones",
+               tooltip = "When enabled, BUY/SELL signals only fire during active killzone sessions.",
+               group = GRP_SESSION)
+
+// --- Premium / Discount ---
+string GRP_PD = "Premium / Discount"
+showPremiumDiscountInput = input.bool(false, "Show Premium / Discount Zones",
+               tooltip = "Draw equilibrium line and shade premium (above) / discount (below) zones based on the current swing range.",
+               group = GRP_PD)
+premiumColorInput = input.color(color.new(#e91e63, 93), "Premium Zone Color", group = GRP_PD)
+discountColorInput = input.color(color.new(#00bcd4, 93), "Discount Zone Color", group = GRP_PD)
+
+// --- Colors ---
+string GRP_COLORS = "Colors"
+bullishColorInput = input.color(#00bcd4, "Bullish Color", group = GRP_COLORS)
+bearishColorInput = input.color(#e91e63, "Bearish Color", group = GRP_COLORS)
+showTrendBackgroundInput = input.bool(true, "Shade Background by Trend", group = GRP_COLORS)
+colorCandlesByTrendInput = input.bool(true, "Color Candles by Trend",
+               tooltip = "Override candle colors to match the current structural trend direction.",
+               group = GRP_COLORS)
+
+// --- Breaker Blocks ---
+string GRP_BREAKER = "Breaker Blocks"
+showBreakerBlocksInput = input.bool(true, "Show Breaker Blocks",
+               tooltip = "When a supply/demand zone is mitigated, it flips into a breaker block — trapped-trader reaction zone.",
+               group = GRP_BREAKER)
+bullBreakerColorInput = input.color(color.new(#4fc3f7, 80), "Bullish Breaker Color", group = GRP_BREAKER)
+bearBreakerColorInput = input.color(color.new(#f06292, 80), "Bearish Breaker Color", group = GRP_BREAKER)
+maxBreakersInput = input.int(5, "Max Visible Breakers", minval = 1, maxval = 10, group = GRP_BREAKER)
+
+// --- Key Levels ---
+string GRP_KEY = "Key Levels"
+showKeyLevelsInput = input.bool(true, "Show Previous D/W/M Levels",
+               tooltip = "Draw previous day, week, and month high/low — major institutional reference levels.",
+               group = GRP_KEY)
+showDailyLevelsInput = input.bool(true, "Previous Day High/Low", group = GRP_KEY)
+showWeeklyLevelsInput = input.bool(false, "Previous Week High/Low", group = GRP_KEY)
+showMonthlyLevelsInput = input.bool(true, "Previous Month High/Low", group = GRP_KEY)
+
+// --- OTE Zone ---
+string GRP_OTE = "OTE Zone"
+showOptimalEntryInput = input.bool(true, "Show Optimal Trade Entry Zone",
+               tooltip = "After a trend reversal (CHoCH), draw the 62-79% Fibonacci retracement zone — the ideal pullback entry.",
+               group = GRP_OTE)
+oteFibUpperInput = input.float(0.79, "Upper Fib Level", minval = 0.5, maxval = 0.95, step = 0.01,
+               group = GRP_OTE)
+oteFibLowerInput = input.float(0.62, "Lower Fib Level", minval = 0.5, maxval = 0.95, step = 0.01,
+               group = GRP_OTE)
+oteExtensionBarsInput = input.int(30, "Zone Forward Extension (bars)", minval = 10, maxval = 100,
+               group = GRP_OTE)
+
+// --- Performance Tracker ---
+string GRP_PERF = "Performance Tracker"
+showPerformanceInput = input.bool(false, "Show Signal Performance",
+               tooltip = "Track historical signal outcomes. Shows win rate and average R multiple in the dashboard.",
+               group = GRP_PERF)
+maxTrackedSignalsInput = input.int(20, "Signals to Track", minval = 5, maxval = 50,
+               group = GRP_PERF)
+
+// --- Displacement Candles ---
+string GRP_DISP = "Displacement Candles"
+showDisplacementInput = input.bool(true, "Show Displacement Candles",
+               tooltip = "Mark high-momentum institutional candles (large body, high volume, low wicks). Order flow initiation.",
+               group = GRP_DISP)
+displacementAtrMultInput = input.float(1.5, "Body > ATR Multiple", minval = 1.0, maxval = 3.0, step = 0.1,
+               tooltip = "Candle body must exceed this multiple of ATR to qualify as displacement.",
+               group = GRP_DISP)
+displacementBodyRatioInput = input.float(0.7, "Min Body Ratio", minval = 0.5, maxval = 0.9, step = 0.05,
+               tooltip = "Body must be at least this fraction of the total range.",
+               group = GRP_DISP)
+displacementVolMultInput = input.float(1.5, "Volume > Average Multiple", minval = 1.0, maxval = 3.0, step = 0.1,
+               tooltip = "Volume must exceed this multiple of the 20-bar average.",
+               group = GRP_DISP)
+
+// --- Volume Delta ---
+string GRP_DELTA = "Volume Delta"
+showVolumeDeltaInput = input.bool(false, "Show Volume Delta",
+               tooltip = "Approximate buy/sell pressure from candle position weighted by volume.",
+               group = GRP_DELTA)
+deltaSmoothPeriodInput = input.int(14, "Delta Smoothing Period", minval = 5, maxval = 50,
+               group = GRP_DELTA)
+
+// --- HTF Zones ---
+string GRP_HTFZ = "HTF Zones"
+showHTFZonesInput = input.bool(false, "Show Higher TF Zones",
+               tooltip = "Project supply/demand zones from a higher timeframe onto the current chart.",
+               group = GRP_HTFZ)
+htfZoneTimeframeInput = input.timeframe("240", "Zone Timeframe",
+               tooltip = "The higher timeframe to pull supply/demand zones from.",
+               group = GRP_HTFZ)
+htfDemandColorInput = input.color(color.new(#00bcd4, 90), "HTF Demand Color", group = GRP_HTFZ)
+htfSupplyColorInput = input.color(color.new(#e91e63, 90), "HTF Supply Color", group = GRP_HTFZ)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  CHART MODE RESOLUTION
+// ═══════════════════════════════════════════════════════════════════════
+
+string activeChartMode = chartModeInput
+if chartModeInput == "Auto"
+	string currentTF = timeframe.period
+	if currentTF == "1" or currentTF == "2" or currentTF == "3"
+		activeChartMode := "Entry Timing (1m-5m)"
+	else if currentTF == "5" or currentTF == "10" or currentTF == "15"
+		activeChartMode := "Execution (5m-15m)"
+	else if currentTF == "30" or currentTF == "60"
+		activeChartMode := "Session Flow (1H)"
+	else if currentTF == "120" or currentTF == "240"
+		activeChartMode := "Structure & Bias (4H)"
+	else if currentTF == "D" or currentTF == "1D"
+		activeChartMode := "Context (Daily)"
+	else if currentTF == "W" or currentTF == "1W" or currentTF == "M" or currentTF == "1M"
+		activeChartMode := "Macro (Weekly)"
+	else
+		activeChartMode := "Execution (5m-15m)"
+
+// ═══════════════════════════════════════════════════════════════════════
+//  PRESET VISIBILITY OVERRIDES
+// ═══════════════════════════════════════════════════════════════════════
+
+bool isCustomMode = activeChartMode == "Custom"
+
+bool _showTrendBreaks    = isCustomMode ? showTrendBreaksInput    : true
+bool _showReversalBreaks = isCustomMode ? showReversalBreaksInput : true
+bool _showSwingLabels    = isCustomMode ? showSwingLabelsInput    : (activeChartMode == "Context (Daily)" or activeChartMode == "Macro (Weekly)")
+bool _showEnvelope       = isCustomMode ? showEnvelopeInput       : (activeChartMode != "Context (Daily)" and activeChartMode != "Macro (Weekly)")
+bool _showSupplyDemand   = isCustomMode ? showSupplyDemandInput   : (activeChartMode != "Macro (Weekly)")
+bool _showImbalances     = isCustomMode ? showImbalancesInput     : (activeChartMode != "Entry Timing (1m-5m)" and activeChartMode != "Macro (Weekly)")
+bool _showLiquidity      = isCustomMode ? showLiquidityInput      : (activeChartMode != "Entry Timing (1m-5m)")
+bool _showSweepEvents    = isCustomMode ? showSweepEventsInput    : _showLiquidity
+bool _showDivergence     = showDivergenceInput
+bool _showContinuation   = isCustomMode ? showContinuationInput   : (activeChartMode == "Execution (5m-15m)" or activeChartMode == "Entry Timing (1m-5m)")
+bool _showReversalRef    = isCustomMode ? showReversalRefInput    : (activeChartMode == "Execution (5m-15m)" or activeChartMode == "Entry Timing (1m-5m)")
+bool _showTargetsStop    = isCustomMode ? showTargetsStopInput    : (activeChartMode == "Execution (5m-15m)")
+bool _showTrailing       = isCustomMode ? enableTrailingInput     : (activeChartMode == "Execution (5m-15m)")
+bool _showDashboard      = showDashboardInput
+bool _showCandleColor    = isCustomMode ? colorCandlesByTrendInput : (activeChartMode != "Macro (Weekly)" and activeChartMode != "Context (Daily)")
+bool _showSupportResist  = showSupportResistInput
+bool _showConfluence     = isCustomMode ? showConfluenceScoreInput : (activeChartMode == "Execution (5m-15m)" or activeChartMode == "Entry Timing (1m-5m)" or activeChartMode == "Structure & Bias (4H)" or activeChartMode == "Session Flow (1H)")
+bool _requireMomentum    = isCustomMode ? requireMomentumInput    : (activeChartMode == "Execution (5m-15m)" or activeChartMode == "Entry Timing (1m-5m)")
+bool _showBreakerBlocks  = isCustomMode ? showBreakerBlocksInput  : _showSupplyDemand
+bool _showKeyLevels      = showKeyLevelsInput
+bool _showDailyLevels    = showDailyLevelsInput
+bool _showWeeklyLevels   = showWeeklyLevelsInput
+bool _showMonthlyLevels  = showMonthlyLevelsInput
+bool _showOptimalEntry   = isCustomMode ? showOptimalEntryInput   : (activeChartMode == "Execution (5m-15m)" or activeChartMode == "Entry Timing (1m-5m)")
+bool _showPerformance    = isCustomMode ? showPerformanceInput    : false
+bool _showDisplacement   = isCustomMode ? showDisplacementInput   : (activeChartMode != "Macro (Weekly)" and activeChartMode != "Context (Daily)")
+bool _showVolumeDelta    = isCustomMode ? showVolumeDeltaInput    : false
+bool _showHTFZones       = isCustomMode ? showHTFZonesInput       : (activeChartMode == "Execution (5m-15m)")
+
+// Visual density layer
+bool isDensityClean = visualDensityInput == "Clean"
+bool isDensityFull  = visualDensityInput == "Full"
+
+if isDensityClean
+	_showSwingLabels    := false
+	_showSupplyDemand   := false
+	_showImbalances     := false
+	_showLiquidity      := false
+	_showSweepEvents    := false
+	_showContinuation   := false
+	_showReversalRef    := false
+	_showBreakerBlocks  := false
+	_showOptimalEntry   := false
+	_showDisplacement   := false
+	_showHTFZones       := false
+
+bool _compactLabels     = not isDensityFull
+bool _showStructLabels  = not isDensityClean
+bool _fullBands         = isDensityFull
+bool _miniDashboard     = not isDensityFull
+
+// ═══════════════════════════════════════════════════════════════════════
+//  HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════
+
+formatVolume(float vol) =>
+	if na(vol) or vol == 0
+		"0"
+	else if vol >= 1e9
+		str.tostring(vol / 1e9, "#.##") + "B"
+	else if vol >= 1e6
+		str.tostring(vol / 1e6, "#.##") + "M"
+	else if vol >= 1e3
+		str.tostring(vol / 1e3, "#.##") + "K"
+	else
+		str.tostring(vol, "#")
+
+formatTimeframe(string tf) =>
+	switch tf
+		"1"   => "1m"
+		"3"   => "3m"
+		"5"   => "5m"
+		"15"  => "15m"
+		"30"  => "30m"
+		"60"  => "H1"
+		"120" => "H2"
+		"240" => "H4"
+		"D"   => "D1"
+		"W"   => "W1"
+		"M"   => "M1"
+		=> tf
+
+resolveLineStyle() =>
+	switch structureLineStyleInput
+		"Solid"  => line.style_solid
+		"Dashed" => line.style_dashed
+		=> line.style_dotted
+
+renderStars(int rating) =>
+	switch rating
+		1 => "★"
+		2 => "★★"
+		3 => "★★★"
+		4 => "★★★★"
+		5 => "★★★★★"
+		6 => "★★★★★★"
+		7 => "★★★★★★★"
+		8 => "★★★★★★★★"
+		9 => "★★★★★★★★★"
+		10 => "★★★★★★★★★★"
+		=> ""
+
+computeEfficiency(float source, int period) =>
+	float netChange = math.abs(source - source[period])
+	float totalPath = math.sum(math.abs(source - source[1]), period)
+	totalPath > 0 ? netChange / totalPath : 0.0
+
+// ═══════════════════════════════════════════════════════════════════════
+//  CORE CALCULATIONS
+// ═══════════════════════════════════════════════════════════════════════
+
+// Adaptive baseline period
+float priceEfficiency = useAdaptiveBaselineInput ? computeEfficiency(close, baselinePeriodInput) : 0.0
+int activePeriod = useAdaptiveBaselineInput ? math.max(adaptiveMinInput, math.min(math.round(adaptiveMaxInput - priceEfficiency * (adaptiveMaxInput - adaptiveMinInput)), adaptiveMaxInput)) : baselinePeriodInput
+
+// Trend baseline (WMA accepts series int)
+float trendBaseline = ta.wma(close, activePeriod)
+float atrValue      = ta.atr(volatilityPeriodInput)
+float smoothedAtr   = ta.ema(atrValue, volatilitySmoothInput)
+float volatilityBand = bandWidthMultInput * smoothedAtr
+
+float bandStep = volatilityBand / BAND_LAYERS
+float upperBand1 = trendBaseline + bandStep,       float upperBand2 = trendBaseline + bandStep * 2
+float upperBand3 = trendBaseline + bandStep * 3,    float upperBand4 = trendBaseline + bandStep * 4
+float upperBand5 = trendBaseline + bandStep * 5
+float lowerBand1 = trendBaseline - bandStep,        float lowerBand2 = trendBaseline - bandStep * 2
+float lowerBand3 = trendBaseline - bandStep * 3,    float lowerBand4 = trendBaseline - bandStep * 4
+float lowerBand5 = trendBaseline - bandStep * 5
+
+// ADX / Trend Strength
+[directionalPlus, directionalMinus, trendStrength] = ta.dmi(trendStrengthPeriodInput, trendStrengthPeriodInput)
+
+// Volume average
+float volumeAverage = ta.sma(volume, VOLUME_MA_LEN)
+
+// Volatility score 0-10
+float atrMean = ta.sma(atrValue, volumeAvgPeriodInput)
+int volatilityScore = int(math.min(10, math.max(0, math.round(nz(atrValue / nz(atrMean, atrValue), 1.0) * 5.0))))
+
+// RSI
+float rsiValue = ta.rsi(close, rsiPeriodInput)
+
+// VIX data
+float vixCurrentClose  = enableVixInput ? request.security(vixSymbolInput, "D", close, lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true) : na
+float vixPreviousClose = enableVixInput ? request.security(vixSymbolInput, "D", close[1], lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true) : na
+bool  isVixRising      = enableVixInput and not na(vixCurrentClose) and not na(vixPreviousClose) and vixCurrentClose > vixPreviousClose
+bool  isVixFalling     = enableVixInput and not na(vixCurrentClose) and not na(vixPreviousClose) and vixCurrentClose < vixPreviousClose
+bool  isVixElevated    = enableVixInput and not na(vixCurrentClose) and vixCurrentClose >= vixFearThreshInput
+bool  isVixComplacent  = enableVixInput and not na(vixCurrentClose) and vixCurrentClose <= vixComplacencyThreshInput
+bool  isVixSpiking     = isVixElevated and isVixRising
+
+// Bollinger squeeze detection (range detection)
+float bbMidline      = ta.sma(close, 20)
+float bbDeviation    = ta.stdev(close, 20) * 2
+float bbBandWidth    = nz(bbMidline, 1) > 0 ? (bbDeviation * 2) / bbMidline : 0
+float bbWidthAverage = ta.sma(bbBandWidth, 50)
+bool  isSqueezing    = bbBandWidth < nz(bbWidthAverage, bbBandWidth) * 0.8
+bool  isRangingMarket = enableRangeDetectInput and trendStrength < 18 and isSqueezing
+
+// VWAP
+float sessionVwap = enableVwapInput ? ta.vwap(hlc3) : na
+
+// Key Levels (previous period data — [1] with lookahead_on is standard non-repainting pattern)
+float prevDayHigh   = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_on)
+float prevDayLow    = request.security(syminfo.tickerid, "D", low[1],  lookahead = barmerge.lookahead_on)
+float prevWeekHigh  = request.security(syminfo.tickerid, "W", high[1], lookahead = barmerge.lookahead_on)
+float prevWeekLow   = request.security(syminfo.tickerid, "W", low[1],  lookahead = barmerge.lookahead_on)
+float prevMonthHigh = request.security(syminfo.tickerid, "M", high[1], lookahead = barmerge.lookahead_on)
+float prevMonthLow  = request.security(syminfo.tickerid, "M", low[1],  lookahead = barmerge.lookahead_on)
+
+// Volume Delta Approximation
+float candleRange    = high - low
+float volumeDelta    = candleRange > 0 ? volume * ((close - low) - (high - close)) / candleRange : 0
+float deltaAverage   = ta.sma(volumeDelta, deltaSmoothPeriodInput)
+float cumulativeDelta = ta.cum(volumeDelta)
+
+// Displacement Candle Detection
+float displacementBody  = math.abs(close - open)
+float displacementRange = high - low
+bool  isDisplacementCandle = displacementRange > 0 and
+  displacementBody > nz(atrValue, 1) * displacementAtrMultInput and
+  displacementBody > displacementRange * displacementBodyRatioInput and
+  volume > nz(volumeAverage, volume) * displacementVolMultInput
+bool  isBullishDisplacement = isDisplacementCandle and close > open
+bool  isBearishDisplacement = isDisplacementCandle and close < open
+
+// Session / Killzone Detection
+bool isLondonActive = not na(time(timeframe.period, londonSessionInput))
+bool isNewYorkActive = not na(time(timeframe.period, nySessionInput))
+bool isAsiaActive = not na(time(timeframe.period, asiaSessionInput))
+bool isAnySessionActive = isLondonActive or isNewYorkActive or isAsiaActive
+
+// HTF Supply/Demand Zone Projection
+computeHTFDemandTop() =>
+	float _atr = ta.atr(14)
+	bool impulsiveUp = close > open and (close - open) > _atr * 1.2
+	var float demTop = na
+	if impulsiveUp and close[1] < open[1]
+		demTop := high[1]
+	if not na(demTop) and close < demTop - _atr * 0.5
+		demTop := na
+	demTop
+
+computeHTFDemandBot() =>
+	float _atr = ta.atr(14)
+	bool impulsiveUp = close > open and (close - open) > _atr * 1.2
+	var float demBot = na
+	if impulsiveUp and close[1] < open[1]
+		demBot := low[1]
+	if not na(demBot) and close < demBot
+		demBot := na
+	demBot
+
+computeHTFSupplyTop() =>
+	float _atr = ta.atr(14)
+	bool impulsiveDown = close < open and (open - close) > _atr * 1.2
+	var float supTop = na
+	if impulsiveDown and close[1] > open[1]
+		supTop := high[1]
+	if not na(supTop) and close > supTop
+		supTop := na
+	supTop
+
+computeHTFSupplyBot() =>
+	float _atr = ta.atr(14)
+	bool impulsiveDown = close < open and (open - close) > _atr * 1.2
+	var float supBot = na
+	if impulsiveDown and close[1] > open[1]
+		supBot := low[1]
+	if not na(supBot) and close > supBot + _atr * 0.5
+		supBot := na
+	supBot
+
+float htfDemandTop = showHTFZonesInput ? request.security(syminfo.tickerid, htfZoneTimeframeInput, computeHTFDemandTop(), lookahead = barmerge.lookahead_off) : na
+float htfDemandBot = showHTFZonesInput ? request.security(syminfo.tickerid, htfZoneTimeframeInput, computeHTFDemandBot(), lookahead = barmerge.lookahead_off) : na
+float htfSupplyTop = showHTFZonesInput ? request.security(syminfo.tickerid, htfZoneTimeframeInput, computeHTFSupplyTop(), lookahead = barmerge.lookahead_off) : na
+float htfSupplyBot = showHTFZonesInput ? request.security(syminfo.tickerid, htfZoneTimeframeInput, computeHTFSupplyBot(), lookahead = barmerge.lookahead_off) : na
+
+// MTF Trend Scoring
+computeMTFScore() =>
+	float fastMA  = ta.ema(close, 9)
+	float slowMA  = ta.ema(close, 21)
+	float mtfRsi  = ta.rsi(close, 14)
+	float mtfBase = ta.wma(close, baselinePeriodInput)
+	int score = 0
+	score += fastMA > slowMA ? 1 : fastMA < slowMA ? -1 : 0
+	score += mtfRsi > 55 ? 1 : mtfRsi < 45 ? -1 : 0
+	score += close > mtfBase ? 1 : close < mtfBase ? -1 : 0
+	score
+
+int htf1Score = request.security(syminfo.tickerid, higherTF1Input, computeMTFScore(), lookahead = barmerge.lookahead_off)
+int htf2Score = request.security(syminfo.tickerid, higherTF2Input, computeMTFScore(), lookahead = barmerge.lookahead_off)
+int htf3Score = request.security(syminfo.tickerid, higherTF3Input, computeMTFScore(), lookahead = barmerge.lookahead_off)
+
+resolvedStyle = resolveLineStyle()
+
+// ═══════════════════════════════════════════════════════════════════════
+//  MARKET STRUCTURE + SWEEP DETECTION
+// ═══════════════════════════════════════════════════════════════════════
+
+float swingHigh = ta.pivothigh(high, swingDetectionLenInput, swingDetectionLenInput)
+float swingLow  = ta.pivotlow(low,  swingDetectionLenInput, swingDetectionLenInput)
+
+// Persistent swing tracking
+var int   marketTrend        = 0
+var float lastSwingHigh      = na
+var int   lastSwingHighBar   = na
+var float lastSwingLow       = na
+var int   lastSwingLowBar    = na
+var bool  swingHighBroken    = true
+var bool  swingLowBroken     = true
+var int   trendBarsAge       = 0
+var bool  signalFiltered     = false
+
+trendBarsAge += 1
+
+// Sweep Detection
+var bool  recentBullishSweep  = false
+var bool  recentBearishSweep  = false
+var int   lastBullSweepBar    = 0
+var int   lastBearSweepBar    = 0
+
+// Bullish sweep: wick below swing low, close above
+bool bullishSweepNow = not swingLowBroken and not na(lastSwingLow) and low < lastSwingLow and close >= lastSwingLow
+// Bearish sweep: wick above swing high, close below
+bool bearishSweepNow = not swingHighBroken and not na(lastSwingHigh) and high > lastSwingHigh and close <= lastSwingHigh
+
+if bullishSweepNow
+	recentBullishSweep := true
+	lastBullSweepBar   := bar_index
+	if _showSweepEvents and _showLiquidity
+		label.new(bar_index, low - nz(atrValue, 0) * 1.0, "Liquidity Sweep",
+		  style = label.style_label_up, color = color.new(#ff9800, 30),
+		  textcolor = color.white, size = size.small)
+if bearishSweepNow
+	recentBearishSweep := true
+	lastBearSweepBar   := bar_index
+	if _showSweepEvents and _showLiquidity
+		label.new(bar_index, high + nz(atrValue, 0) * 1.0, "Liquidity Sweep",
+		  style = label.style_label_down, color = color.new(#ff9800, 30),
+		  textcolor = color.white, size = size.small)
+
+// Decay sweeps after N bars
+if bar_index - lastBullSweepBar > DECAY_BARS
+	recentBullishSweep := false
+if bar_index - lastBearSweepBar > DECAY_BARS
+	recentBearishSweep := false
+
+// Break Detection
+bool bullishBreak = not swingHighBroken and not na(lastSwingHigh) and close > lastSwingHigh
+bool bearishBreak = not swingLowBroken and not na(lastSwingLow) and close < lastSwingLow
+
+bool isBullishBOS         = false
+bool isBullishCHoCH       = false
+bool isBearishBOS         = false
+bool isBearishCHoCH       = false
+bool bullishTrendChange   = false
+bool bearishTrendChange   = false
+
+var float reversalHighLevel = na
+var int   reversalHighBar   = na
+var float reversalLowLevel  = na
+var int   reversalLowBar    = na
+
+// Process bullish break
+if bullishBreak
+	swingHighBroken := true
+	if marketTrend == 1
+		isBullishBOS := true
+	else
+		isBullishCHoCH    := true
+		bullishTrendChange := true
+		reversalLowLevel  := lastSwingLow
+		reversalLowBar    := lastSwingLowBar
+	if (isBullishBOS and _showTrendBreaks) or (isBullishCHoCH and _showReversalBreaks)
+		int    midPoint = math.round((nz(lastSwingHighBar, bar_index) + bar_index) / 2)
+		line.new(nz(lastSwingHighBar, bar_index), lastSwingHigh, bar_index, lastSwingHigh,
+		  color = bullishColorInput, style = resolvedStyle, width = 1)
+		if _showStructLabels
+			string structLabel = isBullishCHoCH ? "Reversal" : "Trend Break"
+			label.new(midPoint, lastSwingHigh + nz(atrValue, 0) * 0.5, structLabel, style = label.style_none,
+			  textcolor = bullishColorInput, size = size.small)
+	marketTrend  := 1
+	trendBarsAge := 0
+
+// Process bearish break
+if bearishBreak and not bullishBreak
+	swingLowBroken := true
+	if marketTrend == -1
+		isBearishBOS := true
+	else
+		isBearishCHoCH     := true
+		bearishTrendChange := true
+		reversalHighLevel  := lastSwingHigh
+		reversalHighBar    := lastSwingHighBar
+	if (isBearishBOS and _showTrendBreaks) or (isBearishCHoCH and _showReversalBreaks)
+		int    midPoint = math.round((nz(lastSwingLowBar, bar_index) + bar_index) / 2)
+		line.new(nz(lastSwingLowBar, bar_index), lastSwingLow, bar_index, lastSwingLow,
+		  color = bearishColorInput, style = resolvedStyle, width = 1)
+		if _showStructLabels
+			string structLabel = isBearishCHoCH ? "Reversal" : "Trend Break"
+			label.new(midPoint, lastSwingLow - nz(atrValue, 0) * 0.5, structLabel, style = label.style_none,
+			  textcolor = bearishColorInput, size = size.small)
+	marketTrend  := -1
+	trendBarsAge := 0
+
+bool bullishStructEvent = isBullishBOS or isBullishCHoCH
+bool bearishStructEvent = isBearishBOS or isBearishCHoCH
+
+// Update swing levels with new pivots
+bool isHigherHigh = false, bool isLowerHigh = false
+bool isHigherLow  = false, bool isLowerLow  = false
+
+if not na(swingHigh)
+	isHigherHigh := not na(lastSwingHigh) and swingHigh > lastSwingHigh
+	isLowerHigh  := not na(lastSwingHigh) and swingHigh < lastSwingHigh
+	if _showSwingLabels
+		string swLabel = isHigherHigh ? "Higher High" : isLowerHigh ? "Lower High" : ""
+		if swLabel != ""
+			label.new(bar_index - swingDetectionLenInput, swingHigh + nz(atrValue, 0) * 0.5, swLabel,
+			  style = label.style_none,
+			  textcolor = isHigherHigh ? bullishColorInput : bearishColorInput, size = size.small)
+	lastSwingHigh    := swingHigh
+	lastSwingHighBar := bar_index - swingDetectionLenInput
+	swingHighBroken  := false
+
+if not na(swingLow)
+	isHigherLow := not na(lastSwingLow) and swingLow > lastSwingLow
+	isLowerLow  := not na(lastSwingLow) and swingLow < lastSwingLow
+	if _showSwingLabels
+		string swLabel = isHigherLow ? "Higher Low" : isLowerLow ? "Lower Low" : ""
+		if swLabel != ""
+			label.new(bar_index - swingDetectionLenInput, swingLow - nz(atrValue, 0) * 0.5, swLabel,
+			  style = label.style_none,
+			  textcolor = isHigherLow ? bullishColorInput : bearishColorInput, size = size.small)
+	lastSwingLow    := swingLow
+	lastSwingLowBar := bar_index - swingDetectionLenInput
+	swingLowBroken  := false
+
+// ═══════════════════════════════════════════════════════════════════════
+//  EQUAL HIGHS / LOWS DETECTION
+// ═══════════════════════════════════════════════════════════════════════
+
+var array<float> recentHighLevels = array.new<float>()
+var array<int>   recentHighBars   = array.new<int>()
+var array<float> recentLowLevels  = array.new<float>()
+var array<int>   recentLowBars    = array.new<int>()
+
+var float equalHighLevel = na
+var int   equalHighBar   = na
+var float equalLowLevel  = na
+var int   equalLowBar    = na
+var line  equalHighLine  = na
+var line  equalLowLine   = na
+
+if _showLiquidity
+	if not na(swingHigh)
+		array.push(recentHighLevels, swingHigh)
+		array.push(recentHighBars,   bar_index - swingDetectionLenInput)
+		while array.size(recentHighBars) > 0 and (bar_index - array.get(recentHighBars, 0)) > equalLevelLookbackInput
+			array.remove(recentHighLevels, 0)
+			array.remove(recentHighBars,   0)
+		if array.size(recentHighLevels) >= 2
+			float newest = array.get(recentHighLevels, array.size(recentHighLevels) - 1)
+			for k = array.size(recentHighLevels) - 2 to 0
+				float prev = array.get(recentHighLevels, k)
+				if math.abs(newest - prev) <= equalLevelToleranceInput * nz(atrValue, 1)
+					equalHighLevel := (newest + prev) / 2
+					equalHighBar   := bar_index - swingDetectionLenInput
+					line.delete(equalHighLine)
+					equalHighLine := line.new(array.get(recentHighBars, k), equalHighLevel,
+					  bar_index + 20, equalHighLevel,
+					  color = color.new(#ffd93d, 40), style = line.style_dotted, width = 1)
+					label.new(bar_index - swingDetectionLenInput, equalHighLevel + nz(atrValue, 0) * 0.5, "Equal Highs",
+					  style = label.style_none, textcolor = #ffd93d, size = size.small)
+					break
+
+	if not na(swingLow)
+		array.push(recentLowLevels, swingLow)
+		array.push(recentLowBars,   bar_index - swingDetectionLenInput)
+		while array.size(recentLowBars) > 0 and (bar_index - array.get(recentLowBars, 0)) > equalLevelLookbackInput
+			array.remove(recentLowLevels, 0)
+			array.remove(recentLowBars,   0)
+		if array.size(recentLowLevels) >= 2
+			float newest = array.get(recentLowLevels, array.size(recentLowLevels) - 1)
+			for k = array.size(recentLowLevels) - 2 to 0
+				float prev = array.get(recentLowLevels, k)
+				if math.abs(newest - prev) <= equalLevelToleranceInput * nz(atrValue, 1)
+					equalLowLevel := (newest + prev) / 2
+					equalLowBar   := bar_index - swingDetectionLenInput
+					line.delete(equalLowLine)
+					equalLowLine := line.new(array.get(recentLowBars, k), equalLowLevel,
+					  bar_index + 20, equalLowLevel,
+					  color = color.new(#ffd93d, 40), style = line.style_dotted, width = 1)
+					label.new(bar_index - swingDetectionLenInput, equalLowLevel - nz(atrValue, 0) * 0.5, "Equal Lows",
+					  style = label.style_none, textcolor = #ffd93d, size = size.small)
+					break
+
+// Extend equal level lines
+if not na(equalHighLine)
+	line.set_x2(equalHighLine, bar_index + 20)
+if not na(equalLowLine)
+	line.set_x2(equalLowLine, bar_index + 20)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ORDER BLOCK MANAGEMENT (extend + mitigate existing)
+// ═══════════════════════════════════════════════════════════════════════
+
+var array<box>    zoneBoxes    = array.new<box>()
+var array<float>  zoneTops     = array.new<float>()
+var array<float>  zoneBots     = array.new<float>()
+var array<int>    zoneDirs     = array.new<int>()
+var array<string> zoneTiers    = array.new<string>()
+var array<int>    zoneTouches  = array.new<int>()
+
+// S/R arrays (declared early for smart TP access)
+var array<box>   srBoxes  = array.new<box>()
+var array<float> srLevels = array.new<float>()
+var array<int>   srDirs   = array.new<int>()
+
+// Breaker block arrays
+var array<box>   breakerBoxes = array.new<box>()
+var array<float> breakerTops  = array.new<float>()
+var array<float> breakerBots  = array.new<float>()
+var array<int>   breakerDirs  = array.new<int>()
+
+// Manage existing breaker blocks (extend + mitigate)
+if array.size(breakerBoxes) > 0
+	for i = array.size(breakerBoxes) - 1 to 0
+		int   brkDir = array.get(breakerDirs, i)
+		float brkTop = array.get(breakerTops, i)
+		float brkBot = array.get(breakerBots, i)
+		box   brkBx  = array.get(breakerBoxes, i)
+		bool brkMitigated = (brkDir == 1 and close < brkBot) or (brkDir == -1 and close > brkTop)
+		if brkMitigated
+			box.delete(brkBx)
+			array.remove(breakerBoxes, i)
+			array.remove(breakerTops,  i)
+			array.remove(breakerBots,  i)
+			array.remove(breakerDirs,  i)
+		else
+			box.set_right(brkBx, bar_index + 5)
+
+if _showSupplyDemand and array.size(zoneBoxes) > 0
+	for i = array.size(zoneBoxes) - 1 to 0
+		int   zDir    = array.get(zoneDirs, i)
+		float zTop    = array.get(zoneTops, i)
+		float zBot    = array.get(zoneBots, i)
+		box   zBx     = array.get(zoneBoxes, i)
+		bool mitigated = (zDir == 1 and close < zBot) or (zDir == -1 and close > zTop)
+		bool touching  = (zDir == 1 and low <= zTop and close > zBot) or (zDir == -1 and high >= zBot and close < zTop)
+		int touches = array.get(zoneTouches, i)
+		if touching and not mitigated
+			array.set(zoneTouches, i, touches + 1)
+			touches := touches + 1
+		if mitigated or touches >= 3
+			// Breaker block: flip mitigated zones
+			if mitigated and _showBreakerBlocks and touches < 3
+				int   flipDir  = -zDir
+				color brkBg    = flipDir == 1 ? bullBreakerColorInput : bearBreakerColorInput
+				color brkBdr   = flipDir == 1 ? bullishColorInput : bearishColorInput
+				int   origLeft = box.get_left(zBx)
+				box   brkBx    = box.new(origLeft, zTop, bar_index + 5, zBot,
+				  bgcolor = brkBg, border_color = brkBdr,
+				  border_width = 1, border_style = line.style_dashed)
+				string brkLabel = flipDir == 1 ? "Bullish Breaker" : "Bearish Breaker"
+				label.new(bar_index + 5, zBot, brkLabel,
+				  style = label.style_none, textcolor = brkBdr, size = size.small)
+				array.push(breakerBoxes, brkBx)
+				array.push(breakerTops,  zTop)
+				array.push(breakerBots,  zBot)
+				array.push(breakerDirs,  flipDir)
+				while array.size(breakerBoxes) > maxBreakersInput
+					box.delete(array.get(breakerBoxes, 0))
+					array.remove(breakerBoxes, 0)
+					array.remove(breakerTops,  0)
+					array.remove(breakerBots,  0)
+					array.remove(breakerDirs,  0)
+			box.delete(zBx)
+			array.remove(zoneBoxes, i)
+			array.remove(zoneTops,  i)
+			array.remove(zoneBots,  i)
+			array.remove(zoneDirs,  i)
+			array.remove(zoneTiers, i)
+			array.remove(zoneTouches, i)
+		else
+			box.set_right(zBx, bar_index + 5)
+			if touches >= 2
+				color fadedClr = zDir == 1 ? color.new(demandZoneColorInput, 92) : color.new(supplyZoneColorInput, 92)
+				box.set_bgcolor(zBx, fadedClr)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  FAIR VALUE GAP DETECTION + MANAGEMENT
+// ═══════════════════════════════════════════════════════════════════════
+
+var array<box>   gapBoxes = array.new<box>()
+var array<float> gapTops  = array.new<float>()
+var array<float> gapBots  = array.new<float>()
+var array<int>   gapDirs  = array.new<int>()
+
+// Manage existing FVGs
+if array.size(gapBoxes) > 0
+	for i = array.size(gapBoxes) - 1 to 0
+		int   gDir   = array.get(gapDirs, i)
+		float gTop   = array.get(gapTops, i)
+		float gBot   = array.get(gapBots, i)
+		float gapSize = gTop - gBot
+		bool gapMitigated = false
+		if gDir == 1
+			gapMitigated := low <= gTop - gapSize * gapFillThresholdInput
+		else
+			gapMitigated := high >= gBot + gapSize * gapFillThresholdInput
+		if gapMitigated
+			box.delete(array.get(gapBoxes, i))
+			array.remove(gapBoxes, i)
+			array.remove(gapTops,  i)
+			array.remove(gapBots,  i)
+			array.remove(gapDirs,  i)
+		else
+			box.set_right(array.get(gapBoxes, i), bar_index + 5)
+
+// Detect new FVGs
+if _showImbalances
+	bool bullishGap = low > high[2] and (low - high[2]) > nz(atrValue, 1) * 0.1
+	bool bearishGap = high < low[2] and (low[2] - high) > nz(atrValue, 1) * 0.1
+	if bullishGap
+		float gTop = low
+		float gBot = high[2]
+		box gBx = box.new(bar_index - 2, gTop, bar_index + 5, gBot,
+		  bgcolor = bullishGapColorInput, border_color = na, border_width = 0)
+		label.new(bar_index + 5, gBot, "Bullish Gap",
+		  style = label.style_none, textcolor = color.new(#00bcd4, 10), size = size.small)
+		array.push(gapBoxes, gBx)
+		array.push(gapTops,  gTop)
+		array.push(gapBots,  gBot)
+		array.push(gapDirs,  1)
+		while array.size(gapBoxes) > maxVisibleGapsInput
+			box.delete(array.get(gapBoxes, 0))
+			array.remove(gapBoxes, 0)
+			array.remove(gapTops,  0)
+			array.remove(gapBots,  0)
+			array.remove(gapDirs,  0)
+	if bearishGap
+		float gTop = low[2]
+		float gBot = high
+		box gBx = box.new(bar_index - 2, gTop, bar_index + 5, gBot,
+		  bgcolor = bearishGapColorInput, border_color = na, border_width = 0)
+		label.new(bar_index + 5, gBot, "Bearish Gap",
+		  style = label.style_none, textcolor = color.new(#e91e63, 10), size = size.small)
+		array.push(gapBoxes, gBx)
+		array.push(gapTops,  gTop)
+		array.push(gapBots,  gBot)
+		array.push(gapDirs,  -1)
+		while array.size(gapBoxes) > maxVisibleGapsInput
+			box.delete(array.get(gapBoxes, 0))
+			array.remove(gapBoxes, 0)
+			array.remove(gapTops,  0)
+			array.remove(gapBots,  0)
+			array.remove(gapDirs,  0)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  RSI DIVERGENCE ENGINE
+// ═══════════════════════════════════════════════════════════════════════
+
+var float prevHighRsi = na, var float currHighRsi = na
+var float prevLowRsi  = na, var float currLowRsi  = na
+var float prevHighVal = na, var float currHighVal = na
+var float prevLowVal  = na, var float currLowVal  = na
+var int   prevHighBar = na, var int   currHighBar = na
+var int   prevLowBar  = na, var int   currLowBar  = na
+
+bool regularBullDiv  = false
+bool regularBearDiv  = false
+bool hiddenBullDiv   = false
+bool hiddenBearDiv   = false
+
+if not na(swingHigh)
+	float pivotRsi = rsiValue[swingDetectionLenInput]
+	prevHighRsi := currHighRsi
+	prevHighVal := currHighVal
+	prevHighBar := currHighBar
+	currHighRsi := pivotRsi
+	currHighVal := swingHigh
+	currHighBar := bar_index - swingDetectionLenInput
+	if not na(prevHighVal) and swingHigh > prevHighVal and pivotRsi < prevHighRsi
+		regularBearDiv := true
+	if not na(prevHighVal) and swingHigh < prevHighVal and pivotRsi > prevHighRsi
+		hiddenBearDiv := true
+
+if not na(swingLow)
+	float pivotRsi = rsiValue[swingDetectionLenInput]
+	prevLowRsi := currLowRsi
+	prevLowVal := currLowVal
+	prevLowBar := currLowBar
+	currLowRsi := pivotRsi
+	currLowVal := swingLow
+	currLowBar := bar_index - swingDetectionLenInput
+	if not na(prevLowVal) and swingLow < prevLowVal and pivotRsi > prevLowRsi
+		regularBullDiv := true
+	if not na(prevLowVal) and swingLow > prevLowVal and pivotRsi < prevLowRsi
+		hiddenBullDiv := true
+
+// Divergence visuals
+if _showDivergence and regularBearDiv and not na(prevHighBar) and not na(currHighBar)
+	line.new(prevHighBar, prevHighVal, currHighBar, currHighVal,
+	  color = color.new(#ff9800, 30), style = line.style_dashed, width = 2)
+	label.new(currHighBar, currHighVal + nz(atrValue, 0) * 0.8, "Bearish Divergence",
+	  style = label.style_none, textcolor = #ff9800, size = size.small)
+
+if _showDivergence and regularBullDiv and not na(prevLowBar) and not na(currLowBar)
+	line.new(prevLowBar, prevLowVal, currLowBar, currLowVal,
+	  color = color.new(#ffd93d, 30), style = line.style_dashed, width = 2)
+	label.new(currLowBar, currLowVal - nz(atrValue, 0) * 0.8, "Bullish Divergence",
+	  style = label.style_none, textcolor = #ffd93d, size = size.small)
+
+if _showDivergence and hiddenBearDiv and not na(prevHighBar) and not na(currHighBar)
+	line.new(prevHighBar, prevHighVal, currHighBar, currHighVal,
+	  color = color.new(#ff9800, 50), style = line.style_dotted, width = 1)
+	label.new(currHighBar, currHighVal + nz(atrValue, 0) * 0.8, "Hidden Bearish Div",
+	  style = label.style_none, textcolor = color.new(#ff9800, 10), size = size.small)
+
+if _showDivergence and hiddenBullDiv and not na(prevLowBar) and not na(currLowBar)
+	line.new(prevLowBar, prevLowVal, currLowBar, currLowVal,
+	  color = color.new(#ffd93d, 50), style = line.style_dotted, width = 1)
+	label.new(currLowBar, currLowVal - nz(atrValue, 0) * 0.8, "Hidden Bullish Div",
+	  style = label.style_none, textcolor = color.new(#ffd93d, 10), size = size.small)
+
+// Track active divergence state for confluence scoring
+var bool divBullActive = false
+var bool divBearActive = false
+if regularBullDiv or hiddenBullDiv
+	divBullActive := true
+if regularBearDiv or hiddenBearDiv
+	divBearActive := true
+if bullishTrendChange
+	divBullActive := false
+if bearishTrendChange
+	divBearActive := false
+
+// ═══════════════════════════════════════════════════════════════════════
+//  MOMENTUM GATE
+// ═══════════════════════════════════════════════════════════════════════
+
+bool momentumPassed = true
+if _requireMomentum and (bullishTrendChange or bearishTrendChange)
+	int checksHit = 0
+	if volume > momentumVolThreshInput * nz(volumeAverage, volume)
+		checksHit += 1
+	float bodyMagnitude = math.abs(close - open)
+	float rangeMagnitude = high - low
+	if rangeMagnitude > 0 and bodyMagnitude > rangeMagnitude * momentumBodyRatioInput
+		checksHit += 1
+	if bodyMagnitude > nz(atrValue, bodyMagnitude) * momentumDisplacementInput
+		checksHit += 1
+	float breakLevel = bullishTrendChange ? nz(lastSwingHigh, close) : nz(lastSwingLow, close)
+	float penetration = bullishTrendChange ? (close - breakLevel) : (breakLevel - close)
+	if penetration > nz(atrValue, 1) * 0.25
+		checksHit += 1
+	momentumPassed := checksHit >= momentumChecksInput
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SIGNAL FILTERS
+// ═══════════════════════════════════════════════════════════════════════
+
+evaluateFilters(int direction) =>
+	bool passed = true
+	if requireHTF1Input
+		passed := passed and ((direction == 1 and htf1Score >= 2) or (direction == -1 and htf1Score <= -2))
+	if requireHTF2Input
+		passed := passed and ((direction == 1 and htf2Score >= 2) or (direction == -1 and htf2Score <= -2))
+	if requireHTF3Input
+		passed := passed and ((direction == 1 and htf3Score >= 2) or (direction == -1 and htf3Score <= -2))
+	if requireTrendStrengthInput
+		passed := passed and trendStrength >= minTrendStrengthInput
+	if requireVolatilityInput
+		passed := passed and volatilityScore >= minVolScoreInput and volatilityScore <= maxVolScoreInput
+	if requireDivergenceInput
+		passed := passed and ((direction == 1 and divBullActive) or (direction == -1 and divBearActive))
+	if requireSweepInput
+		passed := passed and ((direction == 1 and recentBullishSweep) or (direction == -1 and recentBearishSweep))
+	if requireSessionInput
+		passed := passed and isAnySessionActive
+	passed
+
+// Anti-whipsaw tracking
+var int lastSignalBar = 0
+var int lastSignalDir = 0
+
+bool showBullishSignal = false
+bool showBearishSignal = false
+
+bool whipsawBlocked = false
+if antiWhipsawBarsInput > 0
+	if bullishTrendChange and lastSignalDir == -1 and (bar_index - lastSignalBar) < antiWhipsawBarsInput
+		whipsawBlocked := true
+	if bearishTrendChange and lastSignalDir == 1 and (bar_index - lastSignalBar) < antiWhipsawBarsInput
+		whipsawBlocked := true
+
+if bullishTrendChange
+	if whipsawBlocked or (not momentumPassed) or (enableFiltersInput and not evaluateFilters(1)) or (blockBuysVixSpikeInput and isVixSpiking) or (suppressInRangeInput and isRangingMarket)
+		signalFiltered := true
+	else
+		showBullishSignal := true
+		signalFiltered    := false
+
+if bearishTrendChange
+	if whipsawBlocked or (not momentumPassed) or (enableFiltersInput and not evaluateFilters(-1)) or (suppressInRangeInput and isRangingMarket)
+		signalFiltered := true
+	else
+		showBearishSignal := true
+		signalFiltered    := false
+
+if enableFiltersInput and not bullishTrendChange and not bearishTrendChange and signalFiltered
+	if evaluateFilters(marketTrend)
+		signalFiltered := false
+
+// ═══════════════════════════════════════════════════════════════════════
+//  CONFLUENCE SCORING
+// ═══════════════════════════════════════════════════════════════════════
+
+var int lastConfidenceScore = 0
+var string lastSignalTooltip = ""
+int confidenceScore = 0
+
+if showBullishSignal or showBearishSignal
+	int dir = showBullishSignal ? 1 : -1
+	string tip = ""
+	int mtfAligned = 0
+	if dir == 1
+		if htf1Score >= 2
+			mtfAligned += 1
+		if htf2Score >= 2
+			mtfAligned += 1
+		if htf3Score >= 2
+			mtfAligned += 1
+	else
+		if htf1Score <= -2
+			mtfAligned += 1
+		if htf2Score <= -2
+			mtfAligned += 1
+		if htf3Score <= -2
+			mtfAligned += 1
+	if mtfAligned >= 3
+		confidenceScore += 2
+		tip += "✓✓ All timeframes aligned (+2)\n"
+	else if mtfAligned >= 2
+		confidenceScore += 1
+		tip += "✓ 2/3 timeframes aligned\n"
+	else
+		tip += "✗ Multi-TF aligned (" + str.tostring(mtfAligned) + "/3)\n"
+	// +1 RSI divergence
+	bool divConfirmed = (dir == 1 and divBullActive) or (dir == -1 and divBearActive)
+	if divConfirmed
+		confidenceScore += 1
+		tip += "✓ RSI divergence\n"
+	else
+		tip += "✗ RSI divergence\n"
+	// +1 Liquidity sweep
+	bool sweepConfirmed = (dir == 1 and recentBullishSweep) or (dir == -1 and recentBearishSweep)
+	if sweepConfirmed
+		confidenceScore += 1
+		tip += "✓ Liquidity sweep\n"
+	else
+		tip += "✗ Liquidity sweep\n"
+	if sweepConfirmed and divConfirmed
+		confidenceScore += 1
+		tip += "✓ Sweep + Divergence combo\n"
+	// +1 Near active untouched zone
+	bool nearZone = false
+	if array.size(zoneBoxes) > 0
+		for i = 0 to array.size(zoneBoxes) - 1
+			if array.get(zoneDirs, i) == dir and array.get(zoneTouches, i) == 0
+				float zt = array.get(zoneTops, i)
+				float zb = array.get(zoneBots, i)
+				if (dir == 1 and low <= zt and low >= zb - nz(atrValue, 1)) or (dir == -1 and high >= zb and high <= zt + nz(atrValue, 1))
+					nearZone := true
+					break
+	if nearZone
+		confidenceScore += 1
+		tip += "✓ Near order block\n"
+	else
+		tip += "✗ Near order block\n"
+	// +1 ADX trending
+	if trendStrength >= 25
+		confidenceScore += 1
+		tip += "✓ Strong trend (ADX " + str.tostring(trendStrength, "#.#") + ")\n"
+	else
+		tip += "✗ Strong trend (ADX " + str.tostring(trendStrength, "#.#") + ")\n"
+	// +1 Volume surge
+	bool volumeSurge = volume > 1.5 * nz(volumeAverage, volume)
+	if volumeSurge
+		confidenceScore += 1
+		tip += "✓ Volume surge\n"
+	else
+		tip += "✗ Volume surge\n"
+	// +1 Nearby FVG
+	bool nearGap = false
+	if array.size(gapBoxes) > 0
+		for i = 0 to array.size(gapBoxes) - 1
+			if array.get(gapDirs, i) == dir
+				float gapMid = (array.get(gapTops, i) + array.get(gapBots, i)) / 2
+				if math.abs(close - gapMid) <= nz(atrValue, 1) * 3
+					nearGap := true
+					break
+	if nearGap
+		confidenceScore += 1
+		tip += "✓ Nearby FVG\n"
+	else
+		tip += "✗ Nearby FVG\n"
+	// +1 VIX confirms
+	if enableVixInput and not na(vixCurrentClose)
+		bool vixConfirmed = (dir == -1 and isVixElevated and isVixRising) or (dir == 1 and isVixFalling and not isVixElevated)
+		if vixConfirmed
+			confidenceScore += 1
+			tip += "✓ VIX confirms\n"
+		else
+			tip += "✗ VIX confirms\n"
+	// +1 VWAP confirms
+	if enableVwapInput and not na(sessionVwap)
+		bool vwapConfirmed = (dir == 1 and close <= sessionVwap + nz(atrValue, 1) * 0.5) or (dir == -1 and close >= sessionVwap - nz(atrValue, 1) * 0.5)
+		if vwapConfirmed
+			confidenceScore += 1
+			tip += "✓ VWAP confirms\n"
+		else
+			tip += "✗ VWAP confirms\n"
+	// +1 Near key level
+	bool nearKeyLevel = false
+	float klTolerance = nz(atrValue, 1) * 1.5
+	if _showKeyLevels
+		if (dir == 1 and not na(prevDayLow) and math.abs(close - prevDayLow) <= klTolerance) or (dir == -1 and not na(prevDayHigh) and math.abs(close - prevDayHigh) <= klTolerance)
+			nearKeyLevel := true
+		if not nearKeyLevel
+			if (dir == 1 and not na(prevWeekLow) and math.abs(close - prevWeekLow) <= klTolerance) or (dir == -1 and not na(prevWeekHigh) and math.abs(close - prevWeekHigh) <= klTolerance)
+				nearKeyLevel := true
+		if not nearKeyLevel
+			if (dir == 1 and not na(prevMonthLow) and math.abs(close - prevMonthLow) <= klTolerance) or (dir == -1 and not na(prevMonthHigh) and math.abs(close - prevMonthHigh) <= klTolerance)
+				nearKeyLevel := true
+	if nearKeyLevel
+		confidenceScore += 1
+		tip += "✓ Near key level\n"
+	else
+		tip += "✗ Near key level\n"
+	// +1 Displacement candle
+	if isDisplacementCandle
+		confidenceScore += 1
+		tip += "✓ Displacement candle\n"
+	else
+		tip += "✗ Displacement candle\n"
+	// +1 Near breaker block
+	bool nearBreaker = false
+	if array.size(breakerBoxes) > 0
+		for i = 0 to array.size(breakerBoxes) - 1
+			if array.get(breakerDirs, i) == dir
+				float bkTop = array.get(breakerTops, i)
+				float bkBot = array.get(breakerBots, i)
+				if (dir == 1 and low <= bkTop and close >= bkBot) or (dir == -1 and high >= bkBot and close <= bkTop)
+					nearBreaker := true
+					break
+	if nearBreaker
+		confidenceScore += 1
+		tip += "✓ Near breaker block\n"
+	else
+		tip += "✗ Near breaker block\n"
+	// +1 Volume delta confirms
+	bool deltaConfirmed = (dir == 1 and volumeDelta > 0 and volumeDelta > nz(deltaAverage, 0)) or (dir == -1 and volumeDelta < 0 and volumeDelta < nz(deltaAverage, 0))
+	if deltaConfirmed
+		confidenceScore += 1
+		tip += "✓ Delta confirms\n"
+	else
+		tip += "✗ Delta confirms\n"
+	// +2 Inside HTF zone
+	bool insideHTFZone = false
+	if _showHTFZones
+		if dir == 1 and not na(htfDemandTop) and not na(htfDemandBot)
+			if close >= htfDemandBot and close <= htfDemandTop
+				insideHTFZone := true
+		if dir == -1 and not na(htfSupplyTop) and not na(htfSupplyBot)
+			if close >= htfSupplyBot and close <= htfSupplyTop
+				insideHTFZone := true
+	if insideHTFZone
+		confidenceScore += 2
+		tip += "✓✓ Inside HTF zone (+2)\n"
+	else
+		tip += "✗ Inside HTF zone\n"
+	// +1 Session killzone active
+	if showSessionZonesInput and isAnySessionActive
+		confidenceScore += 1
+		tip += "✓ Active killzone\n"
+	else if showSessionZonesInput
+		tip += "✗ Active killzone\n"
+	// Trend maturity modifier
+	if trendBarsAge < 15
+		confidenceScore += 1
+		tip += "✓ Fresh trend reversal\n"
+	else if trendBarsAge > 60
+		confidenceScore -= 1
+		tip += "⚠ Aging trend (penalty)\n"
+	// Range penalty
+	if isRangingMarket
+		confidenceScore -= 2
+		tip += "⚠ Ranging market (penalty -2)\n"
+	// RSI exhaustion penalty
+	bool rsiExhausted = (dir == 1 and rsiValue > 75) or (dir == -1 and rsiValue < 25)
+	if rsiExhausted
+		confidenceScore -= 1
+		tip += "⚠ RSI exhaustion (penalty)\n"
+	// Clamp 0-10
+	confidenceScore := math.max(0, math.min(confidenceScore, MAX_CONFLUENCE))
+	lastSignalTooltip := "Confidence: " + str.tostring(confidenceScore) + "/10\n\n" + tip
+	// Gate: suppress if below minimum
+	if confidenceScore < minConfluenceScoreInput
+		if showBullishSignal
+			showBullishSignal := false
+			signalFiltered    := true
+		if showBearishSignal
+			showBearishSignal := false
+			signalFiltered    := true
+	lastConfidenceScore := confidenceScore
+
+// ═══════════════════════════════════════════════════════════════════════
+//  BUY / SELL SIGNAL LABELS
+// ═══════════════════════════════════════════════════════════════════════
+
+float labelOffset = nz(atrValue, 0) * 5.0
+
+if showBullishSignal
+	string signalText = "BUY"
+	if _showConfluence
+		if confidenceScore > 0
+			signalText := signalText + " " + renderStars(math.min(confidenceScore, 5)) + " (" + str.tostring(confidenceScore) + "/10)"
+		else
+			signalText := signalText + " (0/10)"
+	color labelClr = confidenceScore <= 3 ? color.new(bullishColorInput, 40) : bullishColorInput
+	label.new(bar_index, low - labelOffset * 0.95, "",
+	  style = label.style_label_up, color = color.new(bullishColorInput, 70),
+	  textcolor = color.new(color.white, 100), size = size.large)
+	label.new(bar_index, low - labelOffset, signalText,
+	  style = label.style_label_up, color = labelClr,
+	  textcolor = color.white, size = size.large,
+	  tooltip = lastSignalTooltip)
+	lastSignalBar := bar_index
+	lastSignalDir := 1
+
+if showBearishSignal
+	string signalText = "SELL"
+	if _showConfluence
+		if confidenceScore > 0
+			signalText := signalText + " " + renderStars(math.min(confidenceScore, 5)) + " (" + str.tostring(confidenceScore) + "/10)"
+		else
+			signalText := signalText + " (0/10)"
+	color labelClr = confidenceScore <= 3 ? color.new(bearishColorInput, 40) : bearishColorInput
+	label.new(bar_index, high + labelOffset * 0.95, "",
+	  style = label.style_label_down, color = color.new(bearishColorInput, 70),
+	  textcolor = color.new(color.white, 100), size = size.large)
+	label.new(bar_index, high + labelOffset, signalText,
+	  style = label.style_label_down, color = labelClr,
+	  textcolor = color.white, size = size.large,
+	  tooltip = lastSignalTooltip)
+	lastSignalBar := bar_index
+	lastSignalDir := -1
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TREND REVERSAL MARKERS
+// ═══════════════════════════════════════════════════════════════════════
+
+if _showReversalRef and showBullishSignal and not na(reversalLowLevel) and not na(reversalLowBar)
+	float refOffset = nz(atrValue, 0) * 0.4
+	label.new(reversalLowBar, reversalLowLevel, "●",
+	  style = label.style_none, textcolor = bullishColorInput, size = size.normal)
+	label.new(reversalLowBar + 2, reversalLowLevel - refOffset, "Trend Reversal",
+	  style = label.style_none, textcolor = color.new(color.white, 20), size = size.small)
+	line.new(reversalLowBar, reversalLowLevel, reversalLowBar + reversalLineLenInput, reversalLowLevel,
+	  color = bullishColorInput, style = line.style_dotted, width = 1)
+
+if _showReversalRef and showBearishSignal and not na(reversalHighLevel) and not na(reversalHighBar)
+	float refOffset = nz(atrValue, 0) * 0.4
+	label.new(reversalHighBar, reversalHighLevel, "●",
+	  style = label.style_none, textcolor = bearishColorInput, size = size.normal)
+	label.new(reversalHighBar + 2, reversalHighLevel + refOffset, "Trend Reversal",
+	  style = label.style_none, textcolor = color.new(color.white, 20), size = size.small)
+	line.new(reversalHighBar, reversalHighLevel, reversalHighBar + reversalLineLenInput, reversalHighLevel,
+	  color = bearishColorInput, style = line.style_dotted, width = 1)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  OTE ZONE (Optimal Trade Entry Fibonacci)
+// ═══════════════════════════════════════════════════════════════════════
+
+var box oteBullishBox = na
+var box oteBearishBox = na
+
+if _showOptimalEntry and showBullishSignal and not na(reversalLowLevel)
+	box.delete(oteBullishBox)
+	float oteSwingHigh = close
+	float oteSwingLow  = reversalLowLevel
+	float oteRange     = oteSwingHigh - oteSwingLow
+	float oteTop       = oteSwingHigh - oteRange * oteFibLowerInput
+	float oteBot       = oteSwingHigh - oteRange * oteFibUpperInput
+	oteBullishBox := box.new(bar_index, oteTop, bar_index + oteExtensionBarsInput, oteBot,
+	  bgcolor = color.new(bullishColorInput, 88), border_color = color.new(bullishColorInput, 50),
+	  border_width = 1, border_style = line.style_dashed)
+	label.new(bar_index + oteExtensionBarsInput, oteBot, "Optimal Entry",
+	  style = label.style_none, textcolor = bullishColorInput, size = size.small)
+
+if _showOptimalEntry and showBearishSignal and not na(reversalHighLevel)
+	box.delete(oteBearishBox)
+	float oteSwingHigh = reversalHighLevel
+	float oteSwingLow  = close
+	float oteRange     = oteSwingHigh - oteSwingLow
+	float oteBot       = oteSwingLow + oteRange * oteFibLowerInput
+	float oteTop       = oteSwingLow + oteRange * oteFibUpperInput
+	oteBearishBox := box.new(bar_index, oteTop, bar_index + oteExtensionBarsInput, oteBot,
+	  bgcolor = color.new(bearishColorInput, 88), border_color = color.new(bearishColorInput, 50),
+	  border_width = 1, border_style = line.style_dashed)
+	label.new(bar_index + oteExtensionBarsInput, oteBot, "Optimal Entry",
+	  style = label.style_none, textcolor = bearishColorInput, size = size.small)
+
+if not na(oteBullishBox) and box.get_right(oteBullishBox) >= bar_index
+	box.set_right(oteBullishBox, bar_index + oteExtensionBarsInput)
+if not na(oteBearishBox) and box.get_right(oteBearishBox) >= bar_index
+	box.set_right(oteBearishBox, bar_index + oteExtensionBarsInput)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  PERFORMANCE TRACKER
+// ═══════════════════════════════════════════════════════════════════════
+
+var array<float> perfEntries = array.new<float>()
+var array<float> perfStops   = array.new<float>()
+var array<float> perfTargets = array.new<float>()
+var array<int>   perfDirs    = array.new<int>()
+var array<int>   perfScores  = array.new<int>()
+var array<int>   perfStatus  = array.new<int>()    // 0=active, 1=win, -1=loss
+var int   perfWins     = 0
+var int   perfLosses   = 0
+var float perfTotalR   = 0.0
+
+if _showPerformance and (showBullishSignal or showBearishSignal)
+	float pEntry = close
+	float pStopBuf = nz(atrValue, 0) * stopBufferMultInput
+	float pSL    = na
+	float pTP1   = na
+	int   pDir   = showBullishSignal ? 1 : -1
+	if showBullishSignal
+		pSL  := nz(reversalLowLevel, low) - pStopBuf
+		float pRisk = math.abs(pEntry - pSL)
+		pTP1 := pEntry + pRisk * target1MultInput
+	else
+		pSL  := nz(reversalHighLevel, high) + pStopBuf
+		float pRisk = math.abs(pSL - pEntry)
+		pTP1 := pEntry - pRisk * target1MultInput
+	array.push(perfEntries, pEntry)
+	array.push(perfStops,   pSL)
+	array.push(perfTargets, pTP1)
+	array.push(perfDirs,    pDir)
+	array.push(perfScores,  confidenceScore)
+	array.push(perfStatus,  0)
+	while array.size(perfEntries) > maxTrackedSignalsInput
+		if array.get(perfStatus, 0) == 1
+			perfWins -= 1
+		else if array.get(perfStatus, 0) == -1
+			perfLosses -= 1
+		array.remove(perfEntries, 0)
+		array.remove(perfStops,   0)
+		array.remove(perfTargets, 0)
+		array.remove(perfDirs,    0)
+		array.remove(perfScores,  0)
+		array.remove(perfStatus,  0)
+
+if _showPerformance and array.size(perfEntries) > 0
+	for i = 0 to array.size(perfEntries) - 1
+		if array.get(perfStatus, i) == 0
+			int   pd   = array.get(perfDirs, i)
+			float psl  = array.get(perfStops, i)
+			float ptp  = array.get(perfTargets, i)
+			float pent = array.get(perfEntries, i)
+			if pd == 1
+				if low <= psl
+					array.set(perfStatus, i, -1)
+					perfLosses += 1
+					perfTotalR -= 1.0
+				else if high >= ptp
+					array.set(perfStatus, i, 1)
+					perfWins += 1
+					perfTotalR += target1MultInput
+			else
+				if high >= psl
+					array.set(perfStatus, i, -1)
+					perfLosses += 1
+					perfTotalR -= 1.0
+				else if low <= ptp
+					array.set(perfStatus, i, 1)
+					perfWins += 1
+					perfTotalR += target1MultInput
+
+int   perfTotal   = perfWins + perfLosses
+float perfWinRate = perfTotal > 0 ? float(perfWins) / float(perfTotal) * 100.0 : na
+float perfAvgR    = perfTotal > 0 ? perfTotalR / float(perfTotal) : na
+
+// ═══════════════════════════════════════════════════════════════════════
+//  TP / SL LEVELS + TRAILING STOP
+// ═══════════════════════════════════════════════════════════════════════
+
+var line  stopLine  = na, var line  tp1Line = na
+var line  tp2Line   = na, var line  tp3Line = na
+var label stopLabel = na, var label tp1Label = na
+var label tp2Label  = na, var label tp3Label = na
+
+var int   trailDirection = 0
+var int   trailState     = TRAIL_NONE
+var float trailEntry     = na
+var float trailStop      = na
+var float trailTP1       = na
+var float trailTP2       = na
+var float trailTP3       = na
+var float trailAtrStop   = na
+
+if _showTargetsStop and (showBullishSignal or showBearishSignal)
+	line.delete(stopLine),  line.delete(tp1Line)
+	line.delete(tp2Line),   line.delete(tp3Line)
+	label.delete(stopLabel), label.delete(tp1Label)
+	label.delete(tp2Label),  label.delete(tp3Label)
+
+	float entry = close
+	int   ext   = 50
+	float stopBuffer = nz(atrValue, 0) * stopBufferMultInput
+
+	if showBullishSignal
+		float baseSL = nz(reversalLowLevel, low)
+		float sl = baseSL - stopBuffer
+		if stopLossModeInput == "Below Zone" and array.size(zoneBoxes) > 0
+			float zoneSL = na
+			for i = 0 to array.size(zoneBoxes) - 1
+				if array.get(zoneDirs, i) == 1 and array.get(zoneBots, i) < entry
+					float zb = array.get(zoneBots, i)
+					if na(zoneSL) or zb > zoneSL
+						zoneSL := zb
+			if not na(zoneSL)
+				sl := zoneSL - stopBuffer
+		float risk = math.abs(entry - sl)
+		float t1 = entry + risk * target1MultInput
+		float t2 = entry + risk * target2MultInput
+		float t3 = entry + risk * target3MultInput
+		string t1Txt = " Target 1 "
+		string t2Txt = " Target 2 "
+		string t3Txt = " Target 3 "
+		if useSmartTargetsInput
+			float nearestGap = na
+			if array.size(gapBoxes) > 0
+				for i = 0 to array.size(gapBoxes) - 1
+					if array.get(gapDirs, i) == 1
+						float gm = (array.get(gapTops, i) + array.get(gapBots, i)) / 2
+						if gm > entry and (na(nearestGap) or gm < nearestGap)
+							nearestGap := gm
+			if not na(nearestGap)
+				t1    := nearestGap
+				t1Txt := " Target 1: Gap Fill "
+			if not na(equalHighLevel) and equalHighLevel > entry
+				t2    := equalHighLevel
+				t2Txt := " Target 2: Equal Highs "
+			else if _showKeyLevels and not na(prevDayHigh) and prevDayHigh > entry
+				t2    := prevDayHigh
+				t2Txt := " Target 2: Prev Day High "
+			if _showKeyLevels and not na(prevWeekHigh) and prevWeekHigh > entry
+				t3    := prevWeekHigh
+				t3Txt := " Target 3: Prev Week High "
+			else if _showSupportResist and array.size(srLevels) > 0
+				float nearestSR = na
+				for i = 0 to array.size(srLevels) - 1
+					float lv = array.get(srLevels, i)
+					if lv > entry and (na(nearestSR) or lv < nearestSR)
+						nearestSR := lv
+				if not na(nearestSR)
+					t3    := nearestSR
+					t3Txt := " Target 3: Support/Resist "
+
+		stopLine := line.new(bar_index, sl, bar_index + ext, sl,
+		  color = bearishColorInput, style = line.style_dashed, width = 1)
+		tp1Line := line.new(bar_index, t1, bar_index + ext, t1,
+		  color = color.new(color.white, 50), style = line.style_dashed, width = 1)
+		tp2Line := line.new(bar_index, t2, bar_index + ext, t2,
+		  color = color.new(color.white, 50), style = line.style_dashed, width = 1)
+		tp3Line := line.new(bar_index, t3, bar_index + ext, t3,
+		  color = color.new(color.white, 50), style = line.style_dashed, width = 1)
+		stopLabel := label.new(bar_index + ext, sl, " Stop Loss ",
+		  style = label.style_label_left, color = bearishColorInput,
+		  textcolor = color.white, size = size.small)
+		tp1Label := label.new(bar_index + ext, t1, t1Txt,
+		  style = label.style_label_left, color = color.new(#30363d, 20),
+		  textcolor = color.white, size = size.small)
+		tp2Label := label.new(bar_index + ext, t2, t2Txt,
+		  style = label.style_label_left, color = color.new(#30363d, 20),
+		  textcolor = color.white, size = size.small)
+		tp3Label := label.new(bar_index + ext, t3, t3Txt,
+		  style = label.style_label_left, color = color.new(#30363d, 20),
+		  textcolor = color.white, size = size.small)
+
+		if _showTrailing
+			trailDirection := 1
+			trailState     := TRAIL_INITIAL
+			trailEntry     := entry
+			trailStop      := sl
+			trailTP1       := t1
+			trailTP2       := t2
+			trailTP3       := t3
+			trailAtrStop   := entry - nz(atrValue, 1) * trailingAtrMultInput
+
+	if showBearishSignal
+		float baseSL = nz(reversalHighLevel, high)
+		float sl = baseSL + stopBuffer
+		if stopLossModeInput == "Below Zone" and array.size(zoneBoxes) > 0
+			float zoneSL = na
+			for i = 0 to array.size(zoneBoxes) - 1
+				if array.get(zoneDirs, i) == -1 and array.get(zoneTops, i) > entry
+					float zt = array.get(zoneTops, i)
+					if na(zoneSL) or zt < zoneSL
+						zoneSL := zt
+			if not na(zoneSL)
+				sl := zoneSL + stopBuffer
+		float risk = math.abs(sl - entry)
+		float t1 = entry - risk * target1MultInput
+		float t2 = entry - risk * target2MultInput
+		float t3 = entry - risk * target3MultInput
+		string t1Txt = " Target 1 "
+		string t2Txt = " Target 2 "
+		string t3Txt = " Target 3 "
+		if useSmartTargetsInput
+			float nearestGap = na
+			if array.size(gapBoxes) > 0
+				for i = 0 to array.size(gapBoxes) - 1
+					if array.get(gapDirs, i) == -1
+						float gm = (array.get(gapTops, i) + array.get(gapBots, i)) / 2
+						if gm < entry and (na(nearestGap) or gm > nearestGap)
+							nearestGap := gm
+			if not na(nearestGap)
+				t1    := nearestGap
+				t1Txt := " Target 1: Gap Fill "
+			if not na(equalLowLevel) and equalLowLevel < entry
+				t2    := equalLowLevel
+				t2Txt := " Target 2: Equal Lows "
+			else if _showKeyLevels and not na(prevDayLow) and prevDayLow < entry
+				t2    := prevDayLow
+				t2Txt := " Target 2: Prev Day Low "
+			if _showKeyLevels and not na(prevWeekLow) and prevWeekLow < entry
+				t3    := prevWeekLow
+				t3Txt := " Target 3: Prev Week Low "
+			else if _showSupportResist and array.size(srLevels) > 0
+				float nearestSR = na
+				for i = 0 to array.size(srLevels) - 1
+					float lv = array.get(srLevels, i)
+					if lv < entry and (na(nearestSR) or lv > nearestSR)
+						nearestSR := lv
+				if not na(nearestSR)
+					t3    := nearestSR
+					t3Txt := " Target 3: Support/Resist "
+
+		stopLine := line.new(bar_index, sl, bar_index + ext, sl,
+		  color = bullishColorInput, style = line.style_dashed, width = 1)
+		tp1Line := line.new(bar_index, t1, bar_index + ext, t1,
+		  color = color.new(color.white, 50), style = line.style_dashed, width = 1)
+		tp2Line := line.new(bar_index, t2, bar_index + ext, t2,
+		  color = color.new(color.white, 50), style = line.style_dashed, width = 1)
+		tp3Line := line.new(bar_index, t3, bar_index + ext, t3,
+		  color = color.new(color.white, 50), style = line.style_dashed, width = 1)
+		stopLabel := label.new(bar_index + ext, sl, " Stop Loss ",
+		  style = label.style_label_left, color = bullishColorInput,
+		  textcolor = color.white, size = size.small)
+		tp1Label := label.new(bar_index + ext, t1, t1Txt,
+		  style = label.style_label_left, color = color.new(#30363d, 20),
+		  textcolor = color.white, size = size.small)
+		tp2Label := label.new(bar_index + ext, t2, t2Txt,
+		  style = label.style_label_left, color = color.new(#30363d, 20),
+		  textcolor = color.white, size = size.small)
+		tp3Label := label.new(bar_index + ext, t3, t3Txt,
+		  style = label.style_label_left, color = color.new(#30363d, 20),
+		  textcolor = color.white, size = size.small)
+
+		if _showTrailing
+			trailDirection := -1
+			trailState     := TRAIL_INITIAL
+			trailEntry     := entry
+			trailStop      := sl
+			trailTP1       := t1
+			trailTP2       := t2
+			trailTP3       := t3
+			trailAtrStop   := entry + nz(atrValue, 1) * trailingAtrMultInput
+
+// Trailing Stop Logic
+if _showTrailing and _showTargetsStop and trailState > TRAIL_NONE and trailState < TRAIL_COMPLETE
+	if trailingModeInput == "Stepped"
+		if trailDirection == 1
+			if trailState == TRAIL_INITIAL and high >= trailTP1
+				trailStop  := trailEntry
+				trailState := TRAIL_BREAKEVEN
+				line.set_y1(stopLine, trailStop)
+				line.set_y2(stopLine, trailStop)
+				label.set_y(stopLabel, trailStop)
+				label.set_text(stopLabel, " Breakeven ")
+			if trailState == TRAIL_BREAKEVEN and high >= trailTP2
+				trailStop  := trailTP1
+				trailState := TRAIL_AT_TP1
+				line.set_y1(stopLine, trailStop)
+				line.set_y2(stopLine, trailStop)
+				label.set_y(stopLabel, trailStop)
+				label.set_text(stopLabel, " Trailing Stop ")
+			if trailState == TRAIL_AT_TP1 and high >= trailTP3
+				trailState := TRAIL_COMPLETE
+			if low <= trailStop
+				trailState := TRAIL_NONE
+		if trailDirection == -1
+			if trailState == TRAIL_INITIAL and low <= trailTP1
+				trailStop  := trailEntry
+				trailState := TRAIL_BREAKEVEN
+				line.set_y1(stopLine, trailStop)
+				line.set_y2(stopLine, trailStop)
+				label.set_y(stopLabel, trailStop)
+				label.set_text(stopLabel, " Breakeven ")
+			if trailState == TRAIL_BREAKEVEN and low <= trailTP2
+				trailStop  := trailTP1
+				trailState := TRAIL_AT_TP1
+				line.set_y1(stopLine, trailStop)
+				line.set_y2(stopLine, trailStop)
+				label.set_y(stopLabel, trailStop)
+				label.set_text(stopLabel, " Trailing Stop ")
+			if trailState == TRAIL_AT_TP1 and low <= trailTP3
+				trailState := TRAIL_COMPLETE
+			if high >= trailStop
+				trailState := TRAIL_NONE
+	else  // ATR trailing
+		if trailDirection == 1
+			float newStop = ta.highest(high, 10) - nz(atrValue, 1) * trailingAtrMultInput
+			if newStop > trailAtrStop
+				trailAtrStop := newStop
+			trailStop := trailAtrStop
+			line.set_y1(stopLine, trailStop)
+			line.set_y2(stopLine, trailStop)
+			label.set_y(stopLabel, trailStop)
+			if low <= trailStop
+				trailState := TRAIL_NONE
+		if trailDirection == -1
+			float newStop = ta.lowest(low, 10) + nz(atrValue, 1) * trailingAtrMultInput
+			if newStop < trailAtrStop
+				trailAtrStop := newStop
+			trailStop := trailAtrStop
+			line.set_y1(stopLine, trailStop)
+			line.set_y2(stopLine, trailStop)
+			label.set_y(stopLabel, trailStop)
+			if high >= trailStop
+				trailState := TRAIL_NONE
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SMART ORDER BLOCK CREATION (Multi-Factor Grading)
+// ═══════════════════════════════════════════════════════════════════════
+
+// Bullish OB on bullish structure event
+if _showSupplyDemand and bullishStructEvent
+	int   obIdx = bar_index
+	float obH   = high
+	float obL   = low
+	float obV   = volume
+	for j = 1 to swingDetectionLenInput * 3
+		if close[j] < open[j]
+			obIdx := bar_index - j
+			obH   := high[j]
+			obL   := low[j]
+			obV   := volume[j]
+			break
+	float volRatio     = nz(volumeAverage, 1) > 0 ? obV / volumeAverage : 1.0
+	float displacement = nz(atrValue, 1) > 0 ? math.abs(close - obH) / atrValue : 1.0
+	float bodyRatio    = (high[0] - low[0]) > 0 ? math.abs(close[0] - open[0]) / (high[0] - low[0]) : 0.5
+	bool  sweepBefore  = recentBullishSweep
+	float vrScore = math.min(3.0, volRatio)
+	float dpScore = math.min(3.0, displacement)
+	float brScore = bodyRatio * 2.0
+	float swScore = sweepBefore ? 2.0 : 0.0
+	int   obScore = int(math.round(vrScore + dpScore + brScore + swScore))
+	string obTier = obScore >= 8 ? "A" : obScore >= 6 ? "B" : obScore >= 4 ? "C" : "D"
+	box bx = box.new(obIdx, obH, bar_index + 5, obL,
+	  bgcolor = demandZoneColorInput, border_color = bullishColorInput, border_width = 1)
+	label.new(bar_index + 5, obL, "Demand Zone " + obTier,
+	  style = label.style_none, textcolor = bullishColorInput, size = size.small)
+	array.push(zoneBoxes, bx)
+	array.push(zoneTops,  obH)
+	array.push(zoneBots,  obL)
+	array.push(zoneDirs,  1)
+	array.push(zoneTiers, obTier)
+	array.push(zoneTouches, 0)
+	while array.size(zoneBoxes) > maxVisibleZonesInput
+		box.delete(array.get(zoneBoxes, 0))
+		array.remove(zoneBoxes, 0)
+		array.remove(zoneTops,  0)
+		array.remove(zoneBots,  0)
+		array.remove(zoneDirs,  0)
+		array.remove(zoneTiers, 0)
+		array.remove(zoneTouches, 0)
+
+// Bearish OB on bearish structure event
+if _showSupplyDemand and bearishStructEvent
+	int   obIdx = bar_index
+	float obH   = high
+	float obL   = low
+	float obV   = volume
+	for j = 1 to swingDetectionLenInput * 3
+		if close[j] > open[j]
+			obIdx := bar_index - j
+			obH   := high[j]
+			obL   := low[j]
+			obV   := volume[j]
+			break
+	float volRatio     = nz(volumeAverage, 1) > 0 ? obV / volumeAverage : 1.0
+	float displacement = nz(atrValue, 1) > 0 ? math.abs(obL - close) / atrValue : 1.0
+	float bodyRatio    = (high[0] - low[0]) > 0 ? math.abs(close[0] - open[0]) / (high[0] - low[0]) : 0.5
+	bool  sweepBefore  = recentBearishSweep
+	float vrScore = math.min(3.0, volRatio)
+	float dpScore = math.min(3.0, displacement)
+	float brScore = bodyRatio * 2.0
+	float swScore = sweepBefore ? 2.0 : 0.0
+	int   obScore = int(math.round(vrScore + dpScore + brScore + swScore))
+	string obTier = obScore >= 8 ? "A" : obScore >= 6 ? "B" : obScore >= 4 ? "C" : "D"
+	box bx = box.new(obIdx, obH, bar_index + 5, obL,
+	  bgcolor = supplyZoneColorInput, border_color = bearishColorInput, border_width = 1)
+	label.new(bar_index + 5, obL, "Supply Zone " + obTier,
+	  style = label.style_none, textcolor = bearishColorInput, size = size.small)
+	array.push(zoneBoxes, bx)
+	array.push(zoneTops,  obH)
+	array.push(zoneBots,  obL)
+	array.push(zoneDirs,  -1)
+	array.push(zoneTiers, obTier)
+	array.push(zoneTouches, 0)
+	while array.size(zoneBoxes) > maxVisibleZonesInput
+		box.delete(array.get(zoneBoxes, 0))
+		array.remove(zoneBoxes, 0)
+		array.remove(zoneTops,  0)
+		array.remove(zoneBots,  0)
+		array.remove(zoneDirs,  0)
+		array.remove(zoneTiers, 0)
+		array.remove(zoneTouches, 0)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  SUPPORT & RESISTANCE ZONES
+// ═══════════════════════════════════════════════════════════════════════
+
+if _showSupportResist
+	float srPivotHigh = ta.pivothigh(high, zoneDetectionStrengthInput, zoneDetectionStrengthInput)
+	float srPivotLow  = ta.pivotlow(low,   zoneDetectionStrengthInput, zoneDetectionStrengthInput)
+
+	if not na(srPivotHigh)
+		bool tooClose = false
+		for k = 0 to math.max(0, array.size(srLevels) - 1)
+			if array.size(srLevels) > 0
+				if math.abs(srPivotHigh - array.get(srLevels, k)) / srPivotHigh * 100 < minZoneGapInput
+					tooClose := true
+					break
+		if not tooClose
+			float halfHeight = nz(atrValue, 1) * zoneHeightInput / 2
+			box bx = box.new(bar_index - zoneDetectionStrengthInput, srPivotHigh + halfHeight,
+			  bar_index + zoneExtensionBarsInput, srPivotHigh - halfHeight,
+			  bgcolor = color.new(bearishColorInput, 75),
+			  border_color = color.new(bearishColorInput, 50), border_width = 1)
+			array.push(srBoxes,  bx)
+			array.push(srLevels, srPivotHigh)
+			array.push(srDirs,   1)
+			while array.size(srBoxes) > maxSRZonesInput
+				box.delete(array.get(srBoxes, 0))
+				array.remove(srBoxes,  0)
+				array.remove(srLevels, 0)
+				array.remove(srDirs,   0)
+
+	if not na(srPivotLow)
+		bool tooClose = false
+		for k = 0 to math.max(0, array.size(srLevels) - 1)
+			if array.size(srLevels) > 0
+				if math.abs(srPivotLow - array.get(srLevels, k)) / srPivotLow * 100 < minZoneGapInput
+					tooClose := true
+					break
+		if not tooClose
+			float halfHeight = nz(atrValue, 1) * zoneHeightInput / 2
+			box bx = box.new(bar_index - zoneDetectionStrengthInput, srPivotLow + halfHeight,
+			  bar_index + zoneExtensionBarsInput, srPivotLow - halfHeight,
+			  bgcolor = color.new(bullishColorInput, 75),
+			  border_color = color.new(bullishColorInput, 50), border_width = 1)
+			array.push(srBoxes,  bx)
+			array.push(srLevels, srPivotLow)
+			array.push(srDirs,  -1)
+			while array.size(srBoxes) > maxSRZonesInput
+				box.delete(array.get(srBoxes, 0))
+				array.remove(srBoxes,  0)
+				array.remove(srLevels, 0)
+				array.remove(srDirs,   0)
+
+	for i = 0 to math.max(0, array.size(srBoxes) - 1)
+		if array.size(srBoxes) > 0
+			box.set_right(array.get(srBoxes, i), bar_index + zoneExtensionBarsInput)
+	if barstate.islast
+		for i = 0 to math.max(0, array.size(srBoxes) - 1)
+			if array.size(srBoxes) > 0
+				float lv = array.get(srLevels, i)
+				int   dr = array.get(srDirs, i)
+				float halfHeight = nz(atrValue, 1) * zoneHeightInput / 2
+				string srText = dr == 1 ? "Resistance" : "Support"
+				color  srClr  = dr == 1 ? bearishColorInput : bullishColorInput
+				label.new(bar_index + zoneExtensionBarsInput, lv - halfHeight, srText,
+				  style = label.style_none, textcolor = color.new(srClr, 10), size = size.small)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  CONTINUATION ARROWS (Confluence-Filtered)
+// ═══════════════════════════════════════════════════════════════════════
+
+var int lastBullCont = -999
+var int lastBearCont = -999
+
+bool bullishContTouch = marketTrend == 1 and low <= lowerBand3 and close > lowerBand3 and close > open
+bool bearishContTouch = marketTrend == -1 and high >= upperBand3 and close < upperBand3 and close < open
+
+bool bullishContQualified = bullishContTouch and trendStrength > 20
+bool bearishContQualified = bearishContTouch and trendStrength > 20
+
+if bullishContQualified
+	bool hasConf = false
+	if volume > nz(volumeAverage, volume) * 1.2
+		hasConf := true
+	if not hasConf and array.size(zoneBoxes) > 0
+		for i = 0 to array.size(zoneBoxes) - 1
+			if array.get(zoneDirs, i) == 1
+				float zt = array.get(zoneTops, i)
+				float zb = array.get(zoneBots, i)
+				if low <= zt and close >= zb
+					hasConf := true
+					break
+	if not hasConf and array.size(gapBoxes) > 0
+		for i = 0 to array.size(gapBoxes) - 1
+			if array.get(gapDirs, i) == 1
+				float gm = (array.get(gapTops, i) + array.get(gapBots, i)) / 2
+				if math.abs(low - gm) <= nz(atrValue, 1) * 2
+					hasConf := true
+					break
+	bullishContQualified := hasConf
+
+if bearishContQualified
+	bool hasConf = false
+	if volume > nz(volumeAverage, volume) * 1.2
+		hasConf := true
+	if not hasConf and array.size(zoneBoxes) > 0
+		for i = 0 to array.size(zoneBoxes) - 1
+			if array.get(zoneDirs, i) == -1
+				float zt = array.get(zoneTops, i)
+				float zb = array.get(zoneBots, i)
+				if high >= zb and close <= zt
+					hasConf := true
+					break
+	if not hasConf and array.size(gapBoxes) > 0
+		for i = 0 to array.size(gapBoxes) - 1
+			if array.get(gapDirs, i) == -1
+				float gm = (array.get(gapTops, i) + array.get(gapBots, i)) / 2
+				if math.abs(high - gm) <= nz(atrValue, 1) * 2
+					hasConf := true
+					break
+	bearishContQualified := hasConf
+
+bool bullishContShow = _showContinuation and bullishContQualified and (bar_index - lastBullCont >= continuationSpacingInput)
+bool bearishContShow = _showContinuation and bearishContQualified and (bar_index - lastBearCont >= continuationSpacingInput)
+
+if bullishContShow
+	lastBullCont := bar_index
+if bearishContShow
+	lastBearCont := bar_index
+
+plotshape(bullishContShow, "Bullish Continuation", shape.triangleup,
+  location.belowbar, bullishColorInput, size = size.tiny,
+  text = "Re-entry", textcolor = bullishColorInput)
+plotshape(bearishContShow, "Bearish Continuation", shape.triangledown,
+  location.abovebar, bearishColorInput, size = size.tiny,
+  text = "Re-entry", textcolor = bearishColorInput)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  VOLATILITY ENVELOPE & MAIN TREND LINE
+// ═══════════════════════════════════════════════════════════════════════
+
+float mainBullLine = marketTrend == 1  ? lowerBand5 : na
+float mainBearLine = marketTrend == -1 ? upperBand5 : na
+
+plotBasis = plot(_showEnvelope ? trendBaseline : na, "Baseline", color.new(color.white, 88), linewidth = 1, display = display.pane)
+plotU3    = plot(_showEnvelope and _fullBands ? upperBand3 : na, "U3", color.new(color.white, 84), linewidth = 1, display = display.pane)
+plotU5    = plot(_showEnvelope ? upperBand5 : na, "U5", color.new(color.white, 76), linewidth = 1, display = display.pane)
+plotL3    = plot(_showEnvelope and _fullBands ? lowerBand3 : na, "L3", color.new(color.white, 84), linewidth = 1, display = display.pane)
+plotL5    = plot(_showEnvelope ? lowerBand5 : na, "L5", color.new(color.white, 76), linewidth = 1, display = display.pane)
+
+plot(mainBullLine, "Bull Trend", bullishColorInput, linewidth = 2, display = display.pane)
+plot(mainBearLine, "Bear Trend", bearishColorInput, linewidth = 2, display = display.pane)
+
+// VWAP line
+plot(enableVwapInput and showVwapLineInput ? sessionVwap : na, "VWAP", color.new(#00e5ff, 0), linewidth = 2, style = plot.style_line, display = display.pane)
+
+int bearAlpha = marketTrend == -1 ? 78 : 93
+int bullAlpha = marketTrend == 1  ? 78 : 93
+
+fill(plotU3,    plotU5,  color.new(bearishColorInput, math.max(0, bearAlpha - 3)))
+fill(plotBasis, plotU3,  color.new(bearishColorInput, math.min(100, bearAlpha + 5)))
+fill(plotL3,    plotL5,  color.new(bullishColorInput, math.max(0, bullAlpha - 3)))
+fill(plotBasis, plotL3,  color.new(bullishColorInput, math.min(100, bullAlpha + 5)))
+
+// ═══════════════════════════════════════════════════════════════════════
+//  CLARITY CANDLES, TREND BACKGROUND, SESSION ZONES, PREMIUM/DISCOUNT
+// ═══════════════════════════════════════════════════════════════════════
+
+color activeTrendColor = marketTrend == 1 ? bullishColorInput : marketTrend == -1 ? bearishColorInput : color.gray
+color candleOverride   = enableFiltersInput and signalFiltered ? filteredColorInput : activeTrendColor
+
+barcolor(_showCandleColor ? candleOverride : na)
+bgcolor(showTrendBackgroundInput ? color.new(activeTrendColor, 95) : na)
+
+// Session killzone backgrounds
+bgcolor(showSessionZonesInput and isLondonActive ? londonSessionColorInput : na, title = "London Killzone")
+bgcolor(showSessionZonesInput and isNewYorkActive ? nySessionColorInput : na, title = "New York Killzone")
+bgcolor(showSessionZonesInput and isAsiaActive ? asiaSessionColorInput : na, title = "Asia Killzone")
+
+// Premium / Discount Zones
+float pdEquilibrium = not na(lastSwingHigh) and not na(lastSwingLow) ? (lastSwingHigh + lastSwingLow) / 2 : na
+plot(showPremiumDiscountInput and not na(pdEquilibrium) ? pdEquilibrium : na, "Equilibrium", color.new(color.white, 50), linewidth = 1, style = plot.style_cross, display = display.pane)
+plotPremTop = plot(showPremiumDiscountInput and not na(lastSwingHigh) ? lastSwingHigh : na, "Premium Top", color.new(color.white, 100), display = display.none)
+plotEquil   = plot(showPremiumDiscountInput and not na(pdEquilibrium) ? pdEquilibrium : na, "Equilibrium Fill", color.new(color.white, 100), display = display.none)
+plotDiscBot = plot(showPremiumDiscountInput and not na(lastSwingLow)  ? lastSwingLow  : na, "Discount Bot", color.new(color.white, 100), display = display.none)
+fill(plotPremTop, plotEquil, premiumColorInput, title = "Premium Zone")
+fill(plotEquil, plotDiscBot, discountColorInput, title = "Discount Zone")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  KEY LEVELS (PDH/PDL/PWH/PWL/PMH/PML)
+// ═══════════════════════════════════════════════════════════════════════
+
+plot(_showKeyLevels and _showDailyLevels and not na(prevDayHigh) ? prevDayHigh : na, "Prev Day High",
+  color.new(#ff9800, 10), linewidth = 2, style = plot.style_stepline, display = display.pane)
+plot(_showKeyLevels and _showDailyLevels and not na(prevDayLow) ? prevDayLow : na, "Prev Day Low",
+  color.new(#ff9800, 10), linewidth = 2, style = plot.style_stepline, display = display.pane)
+plot(_showKeyLevels and _showWeeklyLevels and not na(prevWeekHigh) ? prevWeekHigh : na, "Prev Week High",
+  color.new(#42a5f5, 10), linewidth = 2, style = plot.style_stepline, display = display.pane)
+plot(_showKeyLevels and _showWeeklyLevels and not na(prevWeekLow) ? prevWeekLow : na, "Prev Week Low",
+  color.new(#42a5f5, 10), linewidth = 2, style = plot.style_stepline, display = display.pane)
+plot(_showKeyLevels and _showMonthlyLevels and not na(prevMonthHigh) ? prevMonthHigh : na, "Prev Month High",
+  color.new(#ab47bc, 10), linewidth = 3, style = plot.style_stepline, display = display.pane)
+plot(_showKeyLevels and _showMonthlyLevels and not na(prevMonthLow) ? prevMonthLow : na, "Prev Month Low",
+  color.new(#ab47bc, 10), linewidth = 3, style = plot.style_stepline, display = display.pane)
+
+var label _lblDH = na, var label _lblDL = na
+var label _lblWH = na, var label _lblWL = na
+var label _lblMH = na, var label _lblML = na
+
+if barstate.islast
+	if _showKeyLevels and _showDailyLevels and not na(prevDayHigh)
+		label.delete(_lblDH)
+		_lblDH := label.new(bar_index + 5, prevDayHigh, "Day High", style = label.style_label_left, color = color.new(#ff9800, 85), textcolor = color.new(#ff9800, 0), size = size.small)
+	if _showKeyLevels and _showDailyLevels and not na(prevDayLow)
+		label.delete(_lblDL)
+		_lblDL := label.new(bar_index + 5, prevDayLow, "Day Low", style = label.style_label_left, color = color.new(#ff9800, 85), textcolor = color.new(#ff9800, 0), size = size.small)
+	if _showKeyLevels and _showWeeklyLevels and not na(prevWeekHigh)
+		label.delete(_lblWH)
+		_lblWH := label.new(bar_index + 5, prevWeekHigh, "Week High", style = label.style_label_left, color = color.new(#42a5f5, 85), textcolor = color.new(#42a5f5, 0), size = size.small)
+	if _showKeyLevels and _showWeeklyLevels and not na(prevWeekLow)
+		label.delete(_lblWL)
+		_lblWL := label.new(bar_index + 5, prevWeekLow, "Week Low", style = label.style_label_left, color = color.new(#42a5f5, 85), textcolor = color.new(#42a5f5, 0), size = size.small)
+	if _showKeyLevels and _showMonthlyLevels and not na(prevMonthHigh)
+		label.delete(_lblMH)
+		_lblMH := label.new(bar_index + 5, prevMonthHigh, "Month High", style = label.style_label_left, color = color.new(#ab47bc, 85), textcolor = color.new(#ab47bc, 0), size = size.small)
+	if _showKeyLevels and _showMonthlyLevels and not na(prevMonthLow)
+		label.delete(_lblML)
+		_lblML := label.new(bar_index + 5, prevMonthLow, "Month Low", style = label.style_label_left, color = color.new(#ab47bc, 85), textcolor = color.new(#ab47bc, 0), size = size.small)
+
+// Displacement Candle Markers
+plotshape(_showDisplacement and isBullishDisplacement, "Bullish Displacement", shape.diamond,
+  location.belowbar, color.new(bullishColorInput, 20), size = size.tiny,
+  text = "Momentum", textcolor = bullishColorInput)
+plotshape(_showDisplacement and isBearishDisplacement, "Bearish Displacement", shape.diamond,
+  location.abovebar, color.new(bearishColorInput, 20), size = size.tiny,
+  text = "Momentum", textcolor = bearishColorInput)
+
+// HTF Zone Projection
+var box htfDemBox = na
+var box htfSupBox = na
+
+if _showHTFZones and barstate.islast
+	box.delete(htfDemBox)
+	box.delete(htfSupBox)
+	if not na(htfDemandTop) and not na(htfDemandBot)
+		htfDemBox := box.new(bar_index - 50, htfDemandTop, bar_index + 20, htfDemandBot,
+		  bgcolor = htfDemandColorInput, border_color = color.new(bullishColorInput, 60),
+		  border_width = 2, border_style = line.style_dashed)
+		label.new(bar_index + 20, htfDemandBot, formatTimeframe(htfZoneTimeframeInput) + " Demand Zone",
+		  style = label.style_none, textcolor = color.new(bullishColorInput, 10), size = size.small)
+	if not na(htfSupplyTop) and not na(htfSupplyBot)
+		htfSupBox := box.new(bar_index - 50, htfSupplyTop, bar_index + 20, htfSupplyBot,
+		  bgcolor = htfSupplyColorInput, border_color = color.new(bearishColorInput, 60),
+		  border_width = 2, border_style = line.style_dashed)
+		label.new(bar_index + 20, htfSupplyBot, formatTimeframe(htfZoneTimeframeInput) + " Supply Zone",
+		  style = label.style_none, textcolor = color.new(bearishColorInput, 10), size = size.small)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════
+
+dashPosResolved = switch dashboardPositionInput
+	"Top Left"     => position.top_left
+	"Top Right"    => position.top_right
+	"Bottom Left"  => position.bottom_left
+	=> position.bottom_right
+
+dashSzResolved = switch dashboardSizeInput
+	"Tiny"   => size.tiny
+	"Normal" => size.normal
+	=> size.small
+
+var table dashPanel = na
+
+if _showDashboard and barstate.islast
+	if not na(dashPanel)
+		table.delete(dashPanel)
+	int dashRows = _miniDashboard ? 5 : 18
+	dashPanel := table.new(dashPosResolved, 3, dashRows,
+	  bgcolor      = color.new(#0d1117, 10),
+	  frame_color  = color.new(#30363d, 50),
+	  frame_width  = 1,
+	  border_width = 0)
+
+	string tfLabel      = formatTimeframe(timeframe.period)
+	string trendText    = marketTrend == 1 ? "BULLISH" : marketTrend == -1 ? "BEARISH" : "—"
+	color  trendTextClr = marketTrend == 1 ? bullishColorInput : marketTrend == -1 ? bearishColorInput : color.gray
+	string strengthText = trendStrength < 20 ? "Weak" : trendStrength < 25 ? "Ranging" : "Strong"
+	color  strengthClr  = trendStrength < 20 ? #ff6b6b : trendStrength < 25 ? #ffd93d : #6bcb77
+	string confText     = lastConfidenceScore > 0 ? renderStars(math.min(lastConfidenceScore, 5)) : "—"
+	color  confClr      = lastConfidenceScore >= 7 ? #6bcb77 : lastConfidenceScore >= 4 ? #ffd93d : color.gray
+	color  volScoreClr  = volatilityScore <= 3 ? #6bcb77 : volatilityScore <= 6 ? #ffd93d : #ff6b6b
+	color  m1Clr        = htf1Score > 0 ? bullishColorInput : htf1Score < 0 ? bearishColorInput : color.gray
+	color  m2Clr        = htf2Score > 0 ? bullishColorInput : htf2Score < 0 ? bearishColorInput : color.gray
+	color  m3Clr        = htf3Score > 0 ? bullishColorInput : htf3Score < 0 ? bearishColorInput : color.gray
+
+	if _miniDashboard
+		// MINI DASHBOARD (Clean + Balanced)
+		table.cell(dashPanel, 0, 0, "TREND",
+		  text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		string trendFull = trendText + " " + strengthText
+		table.cell(dashPanel, 1, 0, trendFull, text_color = trendTextClr, text_size = dashSzResolved)
+		table.merge_cells(dashPanel, 1, 0, 2, 0)
+		// Row 1: Signal Quality + Volatility
+		table.cell(dashPanel, 0, 1, confText, text_color = confClr, text_size = dashSzResolved)
+		string qualityNum = lastConfidenceScore > 0 ? str.tostring(lastConfidenceScore) + "/10" : ""
+		table.cell(dashPanel, 1, 1, qualityNum, text_color = confClr, text_size = dashSzResolved)
+		string volState = volatilityScore <= 3 ? "Low" : volatilityScore <= 6 ? "Medium" : "High"
+		table.cell(dashPanel, 2, 1, volState + " " + str.tostring(volatilityScore), text_color = volScoreClr, text_size = dashSzResolved)
+		// Row 2: MTF alignment
+		table.cell(dashPanel, 0, 2, formatTimeframe(higherTF1Input), text_color = m1Clr, text_size = dashSzResolved, text_halign = text.align_center)
+		table.cell(dashPanel, 1, 2, formatTimeframe(higherTF2Input), text_color = m2Clr, text_size = dashSzResolved, text_halign = text.align_center)
+		table.cell(dashPanel, 2, 2, formatTimeframe(higherTF3Input), text_color = m3Clr, text_size = dashSzResolved, text_halign = text.align_center)
+		// Row 3: Range indicator
+		string miniStatus = isRangingMarket ? "● RANGING MARKET" : ""
+		if miniStatus != ""
+			table.cell(dashPanel, 0, 3, miniStatus, text_color = #ff6b6b, text_size = dashSzResolved)
+			table.merge_cells(dashPanel, 0, 3, 2, 3)
+		// Row 4: Win rate
+		if _showPerformance and perfTotal > 0
+			string wrText = str.tostring(perfWinRate, "#.#") + "% (" + str.tostring(perfWins) + "W/" + str.tostring(perfLosses) + "L)"
+			color  wrClr  = perfWinRate >= 55 ? #6bcb77 : perfWinRate >= 45 ? #ffd93d : #ff6b6b
+			table.cell(dashPanel, 0, 4, "WIN RATE", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+			table.cell(dashPanel, 1, 4, wrText, text_color = wrClr, text_size = dashSzResolved)
+			table.merge_cells(dashPanel, 1, 4, 2, 4)
+	else
+		// FULL DASHBOARD
+		string modeTag = chartModeInput == "Auto" ? " ⚡" + activeChartMode : ""
+		table.cell(dashPanel, 0, 0, "VIPRASOL" + modeTag,
+		  text_color = color.white, text_size = dashSzResolved,
+		  text_halign = text.align_center,
+		  bgcolor = color.new(#161b22, 10))
+		table.merge_cells(dashPanel, 0, 0, 2, 0)
+		// Row 1: Trend
+		table.cell(dashPanel, 0, 1, tfLabel + " TREND", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		string fullTrendText = marketTrend == 1 ? "BULLISH" : marketTrend == -1 ? "BEARISH" : "NEUTRAL"
+		table.cell(dashPanel, 1, 1, fullTrendText, text_color = trendTextClr, text_size = dashSzResolved)
+		table.merge_cells(dashPanel, 1, 1, 2, 1)
+		// Row 2: Strength
+		table.cell(dashPanel, 0, 2, "STRENGTH", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		table.cell(dashPanel, 1, 2, strengthText, text_color = strengthClr, text_size = dashSzResolved)
+		table.merge_cells(dashPanel, 1, 2, 2, 2)
+		// Row 3: Trend Age
+		string ageText = trendBarsAge < 20 ? "NEW" : "OLD"
+		color  ageClr  = trendBarsAge < 20 ? #6bcb77 : #ffd93d
+		table.cell(dashPanel, 0, 3, "TREND AGE", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		table.cell(dashPanel, 1, 3, ageText + " (" + str.tostring(trendBarsAge) + ")", text_color = ageClr, text_size = dashSzResolved)
+		table.merge_cells(dashPanel, 1, 3, 2, 3)
+		// Row 4: Volatility
+		table.cell(dashPanel, 0, 4, "VOLATILITY", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		table.cell(dashPanel, 1, 4, str.tostring(volatilityScore) + "/10", text_color = volScoreClr, text_size = dashSzResolved)
+		table.merge_cells(dashPanel, 1, 4, 2, 4)
+		// Row 5: Confluence
+		string fullConfText = lastConfidenceScore > 0 ? renderStars(math.min(lastConfidenceScore, 5)) + " (" + str.tostring(lastConfidenceScore) + "/10)" : "N/A"
+		color  fullConfClr  = lastConfidenceScore >= 7 ? #6bcb77 : lastConfidenceScore >= 4 ? #ffd93d : #ff6b6b
+		table.cell(dashPanel, 0, 5, "SIGNAL QUALITY", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		table.cell(dashPanel, 1, 5, fullConfText, text_color = fullConfClr, text_size = dashSzResolved)
+		table.merge_cells(dashPanel, 1, 5, 2, 5)
+		// Row 6: Divergence
+		string divText = divBullActive ? "Bullish Divergence" : divBearActive ? "Bearish Divergence" : "None"
+		color  divClr  = divBullActive ? #ffd93d : divBearActive ? #ff9800 : color.gray
+		table.cell(dashPanel, 0, 6, "DIVERGENCE", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		table.cell(dashPanel, 1, 6, divText, text_color = divClr, text_size = dashSzResolved)
+		table.merge_cells(dashPanel, 1, 6, 2, 6)
+		// Row 7: Trailing SL
+		string trailText = trailState > 0 ? str.tostring(trailStop, "#.####") : "Inactive"
+		color  trailClr  = trailState > 0 ? (trailDirection == 1 ? bullishColorInput : bearishColorInput) : color.gray
+		table.cell(dashPanel, 0, 7, "TRAILING STOP", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		table.cell(dashPanel, 1, 7, trailText, text_color = trailClr, text_size = dashSzResolved)
+		table.merge_cells(dashPanel, 1, 7, 2, 7)
+		// Row 8-9: MTF
+		table.cell(dashPanel, 0, 8, formatTimeframe(higherTF1Input), text_color = color.new(color.white, 30), text_size = dashSzResolved, text_halign = text.align_center)
+		table.cell(dashPanel, 1, 8, formatTimeframe(higherTF2Input), text_color = color.new(color.white, 30), text_size = dashSzResolved, text_halign = text.align_center)
+		table.cell(dashPanel, 2, 8, formatTimeframe(higherTF3Input), text_color = color.new(color.white, 30), text_size = dashSzResolved, text_halign = text.align_center)
+		table.cell(dashPanel, 0, 9, str.tostring(htf1Score), text_color = m1Clr, text_size = dashSzResolved, text_halign = text.align_center)
+		table.cell(dashPanel, 1, 9, str.tostring(htf2Score), text_color = m2Clr, text_size = dashSzResolved, text_halign = text.align_center)
+		table.cell(dashPanel, 2, 9, str.tostring(htf3Score), text_color = m3Clr, text_size = dashSzResolved, text_halign = text.align_center)
+		// Row 10: Liquidity Levels
+		string liqAbove = not na(equalHighLevel) ? str.tostring(equalHighLevel, "#.####") : "-"
+		string liqBelow = not na(equalLowLevel) ? str.tostring(equalLowLevel, "#.####") : "-"
+		table.cell(dashPanel, 0, 10, "LIQUIDITY", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		table.cell(dashPanel, 1, 10, "▲ " + liqAbove, text_color = #ffd93d, text_size = dashSzResolved)
+		table.cell(dashPanel, 2, 10, "▼ " + liqBelow, text_color = #ffd93d, text_size = dashSzResolved)
+		// Row 11: VIX
+		if enableVixInput and not na(vixCurrentClose)
+			string vixText = str.tostring(vixCurrentClose, "#.#") + (isVixRising ? " ▲" : isVixFalling ? " ▼" : " ─")
+			color  vixClr  = isVixElevated ? #ff6b6b : isVixComplacent ? #6bcb77 : #ffd93d
+			table.cell(dashPanel, 0, 11, "VOLATILITY INDEX", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+			table.cell(dashPanel, 1, 11, vixText, text_color = vixClr, text_size = dashSzResolved)
+			table.merge_cells(dashPanel, 1, 11, 2, 11)
+		// Row 12: Range Status
+		string rangeText = isRangingMarket ? "RANGING" : "TRENDING"
+		color  rangeClr  = isRangingMarket ? #ff6b6b : #6bcb77
+		table.cell(dashPanel, 0, 12, "MARKET", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		table.cell(dashPanel, 1, 12, rangeText, text_color = rangeClr, text_size = dashSzResolved)
+		table.merge_cells(dashPanel, 1, 12, 2, 12)
+		// Row 13: VWAP
+		if enableVwapInput and not na(sessionVwap)
+			table.cell(dashPanel, 0, 13, "VWAP", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+			table.cell(dashPanel, 1, 13, str.tostring(sessionVwap, "#.####"), text_color = color.white, text_size = dashSzResolved)
+			table.merge_cells(dashPanel, 1, 13, 2, 13)
+		// Row 14: Volume Delta
+		string deltaText = volumeDelta > 0 ? "+" + formatVolume(math.abs(volumeDelta)) : volumeDelta < 0 ? "-" + formatVolume(math.abs(volumeDelta)) : "0"
+		color  deltaClr  = volumeDelta > 0 ? bullishColorInput : volumeDelta < 0 ? bearishColorInput : color.gray
+		table.cell(dashPanel, 0, 14, "VOLUME DELTA", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+		table.cell(dashPanel, 1, 14, deltaText, text_color = deltaClr, text_size = dashSzResolved)
+		table.merge_cells(dashPanel, 1, 14, 2, 14)
+		// Row 15: Key Levels
+		if _showKeyLevels
+			string nearHigh = not na(prevDayHigh) ? "PDH " + str.tostring(prevDayHigh, "#.##") : ""
+			string nearLow  = not na(prevDayLow) ? "PDL " + str.tostring(prevDayLow, "#.##") : ""
+			table.cell(dashPanel, 0, 15, "KEY LEVEL", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+			table.cell(dashPanel, 1, 15, nearHigh, text_color = #ff9800, text_size = dashSzResolved)
+			table.cell(dashPanel, 2, 15, nearLow, text_color = #ff9800, text_size = dashSzResolved)
+		// Row 16: Performance
+		if _showPerformance and perfTotal > 0
+			string wrText = str.tostring(perfWinRate, "#.#") + "% (" + str.tostring(perfWins) + "W/" + str.tostring(perfLosses) + "L)"
+			string avgRText = "Avg " + str.tostring(perfAvgR, "#.##") + "R"
+			color  wrClr  = perfWinRate >= 55 ? #6bcb77 : perfWinRate >= 45 ? #ffd93d : #ff6b6b
+			table.cell(dashPanel, 0, 16, "WIN RATE", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+			table.cell(dashPanel, 1, 16, wrText, text_color = wrClr, text_size = dashSzResolved)
+			table.cell(dashPanel, 2, 16, avgRText, text_color = wrClr, text_size = dashSzResolved)
+		// Row 17: HTF Zone Status
+		if _showHTFZones
+			string htfText = ""
+			color  htfClr  = color.gray
+			if not na(htfDemandTop) and close >= htfDemandBot and close <= htfDemandTop
+				htfText := "IN HTF DEMAND"
+				htfClr  := bullishColorInput
+			else if not na(htfSupplyTop) and close >= htfSupplyBot and close <= htfSupplyTop
+				htfText := "IN HTF SUPPLY"
+				htfClr  := bearishColorInput
+			else
+				htfText := "No HTF Zone"
+			table.cell(dashPanel, 0, 17, formatTimeframe(htfZoneTimeframeInput) + " ZONE", text_color = color.new(color.white, 30), text_size = dashSzResolved)
+			table.cell(dashPanel, 1, 17, htfText, text_color = htfClr, text_size = dashSzResolved)
+			table.merge_cells(dashPanel, 1, 17, 2, 17)
+
+// ═══════════════════════════════════════════════════════════════════════
+//  ALERTS (Dynamic messages with v6 alert() + legacy alertcondition())
+// ═══════════════════════════════════════════════════════════════════════
+
+// Dynamic alerts using alert() — v6 feature with {{ticker}}, {{close}}, {{interval}}
+if showBullishSignal
+	alert("VP-ISE: BULLISH signal on " + syminfo.ticker + " (" + timeframe.period + ") | Close: " + str.tostring(close) + " | Confidence: " + str.tostring(lastConfidenceScore) + "/10", alert.freq_once_per_bar_close)
+if showBearishSignal
+	alert("VP-ISE: BEARISH signal on " + syminfo.ticker + " (" + timeframe.period + ") | Close: " + str.tostring(close) + " | Confidence: " + str.tostring(lastConfidenceScore) + "/10", alert.freq_once_per_bar_close)
+if bullishSweepNow
+	alert("VP-ISE: Bullish Liquidity Sweep on " + syminfo.ticker + " | Low: " + str.tostring(low), alert.freq_once_per_bar_close)
+if bearishSweepNow
+	alert("VP-ISE: Bearish Liquidity Sweep on " + syminfo.ticker + " | High: " + str.tostring(high), alert.freq_once_per_bar_close)
+
+// Legacy alertcondition() for TradingView alert dialog
+alertcondition(isBullishBOS,      "Bullish BOS",           "VP-ISE: Bullish Break of Structure on {{ticker}} ({{interval}})")
+alertcondition(isBearishBOS,      "Bearish BOS",           "VP-ISE: Bearish Break of Structure on {{ticker}} ({{interval}})")
+alertcondition(bullishContShow,   "Bullish Continuation",  "VP-ISE: Bullish Continuation on {{ticker}} at {{close}}")
+alertcondition(bearishContShow,   "Bearish Continuation",  "VP-ISE: Bearish Continuation on {{ticker}} at {{close}}")
+alertcondition(bullishStructEvent, "Bullish Order Block",  "VP-ISE: Bullish Order Block on {{ticker}} ({{interval}})")
+alertcondition(bearishStructEvent, "Bearish Order Block",  "VP-ISE: Bearish Order Block on {{ticker}} ({{interval}})")
+
+// Tiered confidence alerts
+alertcondition(showBullishSignal and confidenceScore >= 7, "High-Conf Bullish", "VP-ISE: HIGH confidence Bullish (7+/10) on {{ticker}} at {{close}}")
+alertcondition(showBullishSignal and confidenceScore >= 4 and confidenceScore < 7, "Med-Conf Bullish", "VP-ISE: MEDIUM confidence Bullish (4-6/10) on {{ticker}} at {{close}}")
+alertcondition(showBullishSignal and confidenceScore < 4, "Low-Conf Bullish", "VP-ISE: LOW confidence Bullish (<4/10) on {{ticker}} at {{close}}")
+alertcondition(showBearishSignal and confidenceScore >= 7, "High-Conf Bearish", "VP-ISE: HIGH confidence Bearish (7+/10) on {{ticker}} at {{close}}")
+alertcondition(showBearishSignal and confidenceScore >= 4 and confidenceScore < 7, "Med-Conf Bearish", "VP-ISE: MEDIUM confidence Bearish (4-6/10) on {{ticker}} at {{close}}")
+alertcondition(showBearishSignal and confidenceScore < 4, "Low-Conf Bearish", "VP-ISE: LOW confidence Bearish (<4/10) on {{ticker}} at {{close}}")
+
+// Sweep alerts
+alertcondition(bullishSweepNow,   "Bullish Liquidity Sweep", "VP-ISE: Bullish Liquidity Sweep on {{ticker}}")
+alertcondition(bearishSweepNow,   "Bearish Liquidity Sweep", "VP-ISE: Bearish Liquidity Sweep on {{ticker}}")
+
+// Displacement candle alerts
+alertcondition(isBullishDisplacement, "Bullish Displacement", "VP-ISE: Bullish Displacement Candle on {{ticker}} at {{close}}")
+alertcondition(isBearishDisplacement, "Bearish Displacement", "VP-ISE: Bearish Displacement Candle on {{ticker}} at {{close}}")
+
+// Key level proximity alerts
+alertcondition(not na(prevDayHigh) and high >= prevDayHigh and high[1] < prevDayHigh, "Price at PDH", "VP-ISE: Price reaching Previous Day High on {{ticker}}")
+alertcondition(not na(prevDayLow) and low <= prevDayLow and low[1] > prevDayLow, "Price at PDL", "VP-ISE: Price reaching Previous Day Low on {{ticker}}")
+
+// Any trend change
+alertcondition(showBullishSignal, "Bullish Trend Change", "VP-ISE: Bullish Trend Change on {{ticker}} at {{close}} ({{interval}})")
+alertcondition(showBearishSignal, "Bearish Trend Change", "VP-ISE: Bearish Trend Change on {{ticker}} at {{close}} ({{interval}})")
+
+// ═══════════════════════════════════════════════════════════════════════
+//  END — [Viprasol] Institutional Structure Engine
+// ═══════════════════════════════════════════════════════════════════════
