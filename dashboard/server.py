@@ -352,7 +352,7 @@ _accounts["default"] = _default_account_state()
 def get_account(login: Optional[str] = None) -> Dict[str, Any]:
     """Return account state dict for a given login (default = active)."""
     if login is None:
-        return _AccountView._active()
+        return _account._active()
     return _accounts.setdefault(str(login), _default_account_state())
 
 
@@ -3953,7 +3953,7 @@ async def get_positions(symbol: str = Query("XAUUSD")):
 
 # pyrefly: ignore [bad-function-definition]
 
-async def get_pending_orders(symbol: str = Query("XAUUSD"), request: Request = None):
+async def get_pending_orders(request: Request, symbol: str = Query("XAUUSD")):
 
     """Get pending orders (QUEUED/CLAIMED commands) for the orders tab.
 
@@ -4017,7 +4017,7 @@ async def get_pending_orders(symbol: str = Query("XAUUSD"), request: Request = N
 
 # pyrefly: ignore [bad-function-definition]
 
-async def get_patterns(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), request: Request = None):
+async def get_patterns(request: Request, symbol: str = Query("XAUUSD"), tf: str = Query("M15")):
 
     """Get detected patterns for the PatternAlert panel.
 
@@ -7590,7 +7590,7 @@ async def bridge_calendar(req: CalendarRequest, request: Request):
 
 # pyrefly: ignore [bad-function-definition]
 
-async def get_economic_calendar(days: int = Query(7, ge=1, le=30), request: Request = None):
+async def get_economic_calendar(request: Request, days: int = Query(7, ge=1, le=30)):
 
     """Economic calendar cho frontend (EconomicCalendar component).
 
@@ -8208,7 +8208,7 @@ async def get_settings(request: Request):
 
         "runtime_config": _config,
 
-        "account": {**_account, "ea_connected": _ea_fresh(),
+        "account": {**_account._active(), "ea_connected": _ea_fresh(),
 
                     "data_status": "LIVE" if _bridge_data_real else "STUB"},
 
