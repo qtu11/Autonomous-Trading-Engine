@@ -32,8 +32,8 @@ input bool     InpChartMarkupEnabled = true;                 // Bật/Tắt vẽ
 input int      InpMarkupReRenderSec  = 5;                    // Chu kỳ vẽ lại cấu trúc AI trên biểu đồ (giây)
 input int      InpMarkupMaxObjects   = 120;                  // Số lượng đối tượng vẽ tối đa trên biểu đồ
 input int      InpCandlesIntervalSec = 30;                   // Chu kỳ đẩy dữ liệu nến thời gian thực (giây)
-input int      InpCandlesHistory    = 5000;                  // Số nến lịch sử tối đa đẩy lên (5000 cho M1)
-input int      InpCandlesChunkSize  = 1000;                  // Số nến mỗi request (1000 nến tránh payload quá lớn)
+input int      InpCandlesHistory    = 3000;                  // Số nến lịch sử tối đa đẩy lên (3000 nến an toàn)
+input int      InpCandlesChunkSize  = 500;                   // Số nến mỗi request (500 nến ~35KB siêu nhẹ, không nghẽn)
 input int      InpLiveCandleIntervalSec = 3;                // Chu kỳ đẩy nến ĐANG HÌNH THÀNH (real-time, close = giá hiện tại như MT5)
 
 
@@ -1248,7 +1248,7 @@ bool PushCandlesChunk(string tfLabel, int start, int end,
    
    string headers = BridgeHeaders();
    ResetLastError();
-   int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 30000, data, result, result_headers);
+   int res = WebRequest("POST", ATEApiBase() + "/api/v1/bridge/candles", headers, 5000, data, result, result_headers);
    if(res != 200)
    {
       int err = GetLastError();
@@ -1263,17 +1263,19 @@ bool PushCandlesChunk(string tfLabel, int start, int end,
 //+------------------------------------------------------------------+
 void PushCandlesTimeframe(ENUM_TIMEFRAMES tf, int history, string tfLabel)
 {
+   int safeHistory = MathMin(history, 3000);
    MqlRates rates[];
    ArraySetAsSeries(rates, false); // Oldest first, newest last
-   int copied = CopyRates(g_symbol, tf, 0, history, rates);
+   int copied = CopyRates(g_symbol, tf, 0, safeHistory, rates);
    if(copied <= 0)
    {
       PrintFormat("CANDLES_COPY_FAILED: tf=%s history=%d err=%d symbol=%s",
-         tfLabel, history, GetLastError(), g_symbol);
+         tfLabel, safeHistory, GetLastError(), g_symbol);
       return;
    }
 
-   int chunk = (InpCandlesChunkSize > 0) ? InpCandlesChunkSize : 10000;
+   int chunk = InpCandlesChunkSize;
+   if(chunk <= 0 || chunk > 500) chunk = 500; // Hard limit an toàn: tối đa 500 nến/request
    int sent = 0;
    bool first = true;
    for(int start = 0; start < copied; start += chunk)
