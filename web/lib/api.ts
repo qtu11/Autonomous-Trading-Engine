@@ -48,14 +48,14 @@ async function getJson<T>(url: string): Promise<T | null> {
     const res = await fetch(url, {
       cache: 'no-store',
       headers: { ...adminHeaders() },
-      credentials: 'same-origin',
+      credentials: 'include',
     });
-    // Only redirect on 401 for auth-specific endpoints, not polling APIs
-    if (res.status === 401 && typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-      const isAuthEndpoint = url.includes('/auth/');
-      if (isAuthEndpoint) {
+    if (res.status === 401) {
+      if (typeof window !== 'undefined' && url.includes('/auth/')) {
         localStorage.removeItem('quantai_auth_token');
-        window.location.href = '/login';
+        if (!window.location.pathname.startsWith('/login')) {
+          window.location.href = '/login';
+        }
       }
       return null;
     }
@@ -69,15 +69,15 @@ async function postJson<T>(url: string, body?: Record<string, unknown>): Promise
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...adminHeaders() },
-      credentials: 'same-origin',
+      credentials: 'include',
       body: body ? JSON.stringify(body) : undefined,
     });
-    // Only redirect on 401 for auth-specific endpoints
-    if (res.status === 401 && typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-      const isAuthEndpoint = url.includes('/auth/');
-      if (isAuthEndpoint) {
+    if (res.status === 401) {
+      if (typeof window !== 'undefined' && url.includes('/auth/')) {
         localStorage.removeItem('quantai_auth_token');
-        window.location.href = '/login';
+        if (!window.location.pathname.startsWith('/login')) {
+          window.location.href = '/login';
+        }
       }
       return null;
     }
@@ -85,6 +85,7 @@ async function postJson<T>(url: string, body?: Record<string, unknown>): Promise
     return await res.json() as T;
   } catch { return null; }
 }
+
 
 
 // API Functions

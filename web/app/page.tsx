@@ -103,14 +103,30 @@ export default function DashboardPage() {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' });
+        const localToken = typeof window !== 'undefined' ? localStorage.getItem('quantai_auth_token') : null;
+        const res = await fetch('/api/auth/refresh', {
+          method: 'POST',
+          headers: localToken ? { Authorization: `Bearer ${localToken}` } : {},
+          credentials: 'include',
+        });
         if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (data?.access_token) {
+            localStorage.setItem('quantai_auth_token', data.access_token);
+          }
+          setIsAuthenticated(true);
+        } else if (localToken) {
           setIsAuthenticated(true);
         } else {
           router.replace('/login');
         }
       } catch {
-        router.replace('/login');
+        const localToken = typeof window !== 'undefined' ? localStorage.getItem('quantai_auth_token') : null;
+        if (localToken) {
+          setIsAuthenticated(true);
+        } else {
+          router.replace('/login');
+        }
       } finally {
         setAuthChecked(true);
       }
@@ -142,7 +158,7 @@ export default function DashboardPage() {
       return { s, ps, m, h, po, l, b, cc };
     },
     2000,
-    [isAuthenticated, selectedSymbol, chartTf],
+    [isAuthenticated, authChecked, selectedSymbol, chartTf],
     (data) => {
       if (!data) return;
       setStatus(data.s);
@@ -153,7 +169,8 @@ export default function DashboardPage() {
       setLogs(data.l || []);
       setBrain(data.b);
       setCcStatus(data.cc);
-    }
+    },
+    isAuthenticated && authChecked
   );
 
   // Re-fetch market IMMEDIATELY when trading method changes
@@ -161,21 +178,34 @@ export default function DashboardPage() {
   useFetchInterval(
     async () => fetchMarket(selectedSymbol, chartTf),
     5000,
-    [isAuthenticated, tradingMethod, selectedSymbol, chartTf],
-    (m) => { if (m) setMarket(m); }
+    [isAuthenticated, authChecked, tradingMethod, selectedSymbol, chartTf],
+    (m) => { if (m) setMarket(m); },
+    isAuthenticated && authChecked
   );
+
 
   // PHASE 1.2: Keyboard shortcuts with Shift modifier (memoized deps, single listener)
   const handleClosePosition = useCallback(async (ticket?: number) => {
     if (!ticket) return;
     try {
-      await fetch('/api/order/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ticket }) });
+      const token = typeof window !== 'undefined' ? localStorage.getItem('quantai_auth_token') || '' : '';
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+      await fetch('/api/order/close', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ ticket }),
+      });
       setPositions(prev => prev.filter(p => p.ticket !== ticket));
       addNotif('Position closed', 'success');
     } catch {
       addNotif('Failed to close', 'error');
     }
   }, [addNotif]);
+
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -353,11 +383,22 @@ export default function DashboardPage() {
       // BUG FIX: QUEUED commands chưa có ticket (ticket=0) — phải gửi command_id
       // kèm order_ticket, nếu không nút cancel không bao giờ khớp được lệnh chờ.
       const pend = pendingOrders.find(o => o.ticket === ticket);
-      await fetch('/api/order/cancel_pending', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order_ticket: ticket, command_id: (pend as any)?.command_id }) });
+      const token = typeof window !== 'undefined' ? localStorage.getItem('quantai_auth_token') || '' : '';
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+      await fetch('/api/order/cancel_pending', {
+        method: 'POST',
+        headers,
+        credentials: 'include',
+        body: JSON.stringify({ order_ticket: ticket, command_id: (pend as any)?.command_id }),
+      });
       setPendingOrders(prev => prev.filter(o => o.ticket !== ticket));
       addNotif('Order cancelled', 'success');
     } catch { addNotif('Failed to cancel', 'error'); }
   };
+
   const handleQuickTrade = async (order: any) => {
     try {
       const res = await createOrder({

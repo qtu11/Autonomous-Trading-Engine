@@ -33,8 +33,8 @@ async function fetchQuote(symbol: string): Promise<{ price: number; change: numb
   try {
     const tf = 'H1';
     const token = typeof window !== 'undefined' ? localStorage.getItem('quantai_auth_token') || '' : '';
-    const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {};
-    const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${tf}&count=2`, { headers, credentials: 'same-origin' });
+    const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+    const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${tf}&count=2`, { headers, credentials: 'include' });
     if (!res.ok) return null;
     const data = await res.json();
     if (!data.candles || data.candles.length < 2) return null;
@@ -46,6 +46,7 @@ async function fetchQuote(symbol: string): Promise<{ price: number; change: numb
     return { price, change };
   } catch { return null; }
 }
+
 
 
 // Correlation data (simplified)

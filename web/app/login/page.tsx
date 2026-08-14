@@ -91,14 +91,17 @@ export default function LoginPage() {
       if (res.ok && data.status === 'SUCCESS') {
         setSuccessMsg('Xac thuc thanh cong. Dang truy cap...');
         const token = data.access_token || data.token || 'authenticated';
+        const refresh = data.refresh_token || token;
         localStorage.setItem('quantai_auth_token', token);
         localStorage.setItem('quantai_user_info', JSON.stringify(data.user || {}));
-        document.cookie = `access_token=${token}; path=/; max-age=604800; SameSite=Lax`;
-        document.cookie = `quantai_auth=${token}; path=/; max-age=604800; SameSite=Lax`;
-        setTimeout(() => router.push('/'), 800);
+        document.cookie = `access_token=${token}; path=/; max-age=2592000; SameSite=Lax`;
+        document.cookie = `quantai_auth=${token}; path=/; max-age=2592000; SameSite=Lax`;
+        document.cookie = `refresh_token=${refresh}; path=/; max-age=2592000; SameSite=Lax`;
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 500);
       } else {
-
-        setErrorMsg(data.detail?.message || data.detail?.code || 'Xac thuc that bai');
+        setErrorMsg(data.detail?.message || data.detail?.code || data.error || 'Xac thuc that bai. Vui long kiem tra lai thong tin.');
       }
     } catch {
       setErrorMsg('Khong the ket noi backend. Vui long kiem tra dich vu.');
@@ -106,6 +109,7 @@ export default function LoginPage() {
       setLoading(false);
     }
   };
+
 
   return (
     <div style={{

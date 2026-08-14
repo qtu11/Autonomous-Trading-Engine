@@ -12,7 +12,8 @@ export function useFetchInterval<T>(
   fetcher: (signal: AbortSignal) => Promise<T | null>,
   delay: number,
   deps: any[] = [],
-  onData?: (data: T | null) => void
+  onData?: (data: T | null) => void,
+  enabled: boolean = true
 ) {
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
@@ -21,6 +22,7 @@ export function useFetchInterval<T>(
   const abortRef = useRef<AbortController | null>(null);
 
   const run = useCallback(async () => {
+    if (!enabled) return;
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -33,9 +35,14 @@ export function useFetchInterval<T>(
       // AbortError is expected on cancel; swallow it
       if (err instanceof DOMException && err.name === 'AbortError') return;
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) {
+      abortRef.current?.abort();
+      return;
+    }
+
     let intervalId: ReturnType<typeof setInterval> | null = null;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
@@ -68,5 +75,6 @@ export function useFetchInterval<T>(
       abortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [delay, run, ...deps]);
+  }, [delay, run, enabled, ...deps]);
 }
+

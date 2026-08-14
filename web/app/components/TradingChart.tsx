@@ -538,9 +538,9 @@ export default function TradingChart({
     const fetchData = async () => {
       try {
         const count = TIMEFRAME_CANDLES[localTf] || 4800;
-        const token = localStorage.getItem('quantai_auth_token') || '';
-        const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {};
-        const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(localTf)}&count=${count}`, { headers, credentials: 'same-origin' });
+        const token = typeof window !== 'undefined' ? localStorage.getItem('quantai_auth_token') || '' : '';
+        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+        const res = await fetch(`/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(localTf)}&count=${count}`, { headers, credentials: 'include' });
 
         const data = await res.json();
         if (data.candles && isMountedRef.current) setCandles(data.candles);
@@ -551,6 +551,7 @@ export default function TradingChart({
         // Silent: parent may be polling
       }
     };
+
     fetchData();
   }, [symbol, localTf, propCandles]);
 

@@ -13,10 +13,17 @@
     "NEXT_PUBLIC_ATE_API_ORIGIN": "https://autonomous-trading-engine.vercel.app",
     "ATE_BACKEND_URL": "http://113.173.192.226:8848",
     "ATE_BRIDGE_TOKEN": "20022007@Tu",
+    "QUANTAI_BRIDGE_TOKEN": "20022007@Tu",
+    "MT5_BRIDGE_TOKEN": "20022007@Tu",
+    "ADMIN_LOGIN": "qtusdev@quanttrading.ai",
+    "ADMIN_PASSWORD": "qtusdev07",
+    "JWT_SECRET": "c0c403307c970b29a7841a1f3a98ea2a48ab24536d72d46e6839cbde0dc8304f",
+    "JWT_REFRESH_SECRET": "42162a842a50df05b3dffc182481c164d1ec250ca7cbd7f154b8d4a3b8fc3161",
     "ATE_EXECUTION_MODE": "LIVE",
     "ATE_LIVE_ARMED": "true",
     "ATE_DEMO_ARMED": "true",
     "VERCEL": "1",
     "VERCEL_ENV": "production"
   }
+
 }

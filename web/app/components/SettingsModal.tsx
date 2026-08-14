@@ -311,12 +311,13 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                 </div>
                 <button onClick={() => {
                   const token = localStorage.getItem('quantai_auth_token') || '';
-                  const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {};
-                  fetch('/api/order/close_all', { method: 'POST', headers, credentials: 'same-origin' }).then(onClose);
+                  const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+                  fetch('/api/order/close_all', { method: 'POST', headers, credentials: 'include' }).then(onClose);
                 }} style={{
                   width: '100%', padding: '10px', background: C.redDim, border: `1px solid ${C.red}`,
                   borderRadius: 6, color: C.red, fontSize: 9, fontFamily: C.mono, fontWeight: 800, cursor: 'pointer',
                 }}>CLOSE ALL POSITIONS NOW</button>
+
               </Card>
             </div>
           )}

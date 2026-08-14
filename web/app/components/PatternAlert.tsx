@@ -55,17 +55,16 @@ export default function PatternAlert({ patterns = [], timeframe = 'M15', onViewC
     let cancelled = false;
     const load = async () => {
       try {
-        const token = localStorage.getItem('quantai_auth_token') || '';
-        const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {};
-        const res = await fetch(`/api/patterns?symbol=XAUUSD&tf=${encodeURIComponent(timeframe)}`, { headers, credentials: 'same-origin' });
+        const token = typeof window !== 'undefined' ? localStorage.getItem('quantai_auth_token') || '' : '';
+        const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+        const res = await fetch(`/api/patterns?symbol=XAUUSD&tf=${encodeURIComponent(timeframe)}`, { headers, credentials: 'include' });
         if (!res.ok || cancelled) return;
         const data = await res.json();
         const items = Array.isArray(data) ? data : (Array.isArray(data?.patterns) ? data.patterns : []);
-        // BUG FIX: gán bất kể rỗng hay không — trước đây `if (items.length > 0)`
-        // khiến alerts CŨ của TF trước hiển thị mãi nếu TF mới không có pattern.
         setAlerts(items.slice(0, 5));
       } catch { /* silent */ }
     };
+
     load();
     const id = setInterval(load, 30000);
     return () => { cancelled = true; clearInterval(id); };

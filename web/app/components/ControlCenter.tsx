@@ -279,17 +279,18 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
       {/* QUICK ACTIONS */}
       <Section title="Quick Actions">
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-          <button onClick={async () => { try { const token = localStorage.getItem('quantai_auth_token') || ''; const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {}; await fetch('/api/order/close_all', { method: 'POST', headers, credentials: 'same-origin' }); await loadStatus(); } catch { /* silent */ } }}
+          <button onClick={async () => { try { const token = localStorage.getItem('quantai_auth_token') || ''; const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}; await fetch('/api/order/close_all', { method: 'POST', headers, credentials: 'include' }); await loadStatus(); } catch { /* silent */ } }}
             style={{ padding: '8px', background: C.redDim, border: `1px solid ${C.red}`, borderRadius: 6, color: C.red, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>Close All</button>
-          <button onClick={async () => { try { const token = localStorage.getItem('quantai_auth_token') || ''; const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {}; await fetch('/api/reset_all', { method: 'POST', headers, credentials: 'same-origin' }); await loadStatus(); } catch { /* silent */ } }}
+          <button onClick={async () => { try { const token = localStorage.getItem('quantai_auth_token') || ''; const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}; await fetch('/api/reset_all', { method: 'POST', headers, credentials: 'include' }); await loadStatus(); } catch { /* silent */ } }}
             style={{ padding: '8px', background: 'rgba(0,0,0,0.3)', border: `1px solid ${C.border}`, borderRadius: 6, color: C.dim, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>Reset</button>
-          <button onClick={async () => { try { const token = localStorage.getItem('quantai_auth_token') || ''; const headers: Record<string, string> = token && token !== 'authenticated' ? { Authorization: `Bearer ${token}` } : {}; await fetch('/api/orders/close-profitable', { method: 'POST', headers, credentials: 'same-origin' }); await loadStatus(); } catch { /* silent */ } }}
+          <button onClick={async () => { try { const token = localStorage.getItem('quantai_auth_token') || ''; const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}; await fetch('/api/orders/close-profitable', { method: 'POST', headers, credentials: 'include' }); await loadStatus(); } catch { /* silent */ } }}
             style={{ padding: '8px', background: C.greenDim, border: `1px solid ${C.green}`, borderRadius: 6, color: C.green, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>Close Profit</button>
 
           <button onClick={handleMT5Login}
             style={{ padding: '8px', background: C.blueDim, border: `1px solid ${C.blue}`, borderRadius: 6, color: C.blue, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>Test AI</button>
         </div>
       </Section>
+
 
       {/* SYSTEM STATUS */}
       <Section title="System">
