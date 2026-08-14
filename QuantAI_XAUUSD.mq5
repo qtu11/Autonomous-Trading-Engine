@@ -11,7 +11,7 @@
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
-input string   InpApiUrl           = "http://113.173.192.226:8848/api/v1"; // URL Server AI Engine (Vercel Proxy Cloud Backend)
+input string   InpApiUrl           = "http://127.0.0.1:8848/api/v1"; // URL Server AI Engine (FastAPI Local/Cloud Bridge)
 input ulong    InpMagicNumber      = 888999;                 // Mã nhận diện EA (Magic Number)
 // InpSymbol removed — EA ALWAYS auto-detects chart symbol via Symbol() in OnInit
 input int      InpPollIntervalSec  = 1;                      // Tần suất truy vấn AI Protocol (giây)
@@ -32,9 +32,10 @@ input bool     InpChartMarkupEnabled = true;                 // Bật/Tắt vẽ
 input int      InpMarkupReRenderSec  = 5;                    // Chu kỳ vẽ lại cấu trúc AI trên biểu đồ (giây)
 input int      InpMarkupMaxObjects   = 120;                  // Số lượng đối tượng vẽ tối đa trên biểu đồ
 input int      InpCandlesIntervalSec = 30;                   // Chu kỳ đẩy dữ liệu nến thời gian thực (giây)
-input int      InpCandlesHistory    = 40000;                 // Số nến lịch sử tối đa đẩy lên (mặc định 40000 cho M1)
-input int      InpCandlesChunkSize  = 10000;                 // Số nến mỗi request (tránh payload quá lớn bị WebRequest chặn)
+input int      InpCandlesHistory    = 5000;                  // Số nến lịch sử tối đa đẩy lên (5000 cho M1)
+input int      InpCandlesChunkSize  = 1000;                  // Số nến mỗi request (1000 nến tránh payload quá lớn)
 input int      InpLiveCandleIntervalSec = 3;                // Chu kỳ đẩy nến ĐANG HÌNH THÀNH (real-time, close = giá hiện tại như MT5)
+
 
 //--- Global Variables
 CTrade         m_trade;
