@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { fetchSettings, updateSettings, loginMT5Account } from '@/lib/api';
+import { fetchSettings, updateSettings, loginMT5Account, updateTradingMethod } from '@/lib/api';
 
 const C = {
   gold: '#D4B483',
@@ -67,8 +67,17 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
   ];
 
   const update = async (patch: Record<string, unknown>) => {
+    // Optimistically update local state immediately
+    setData((prev: any) => prev ? {
+      ...prev,
+      runtime_config: { ...(prev.runtime_config || {}), ...patch },
+    } : prev);
+
     setBusy(true);
     try {
+      if (patch.trading_method) {
+        await updateTradingMethod(patch.trading_method as string);
+      }
       const res = await updateSettings(patch);
       if (res?.status === 'SUCCESS') {
         setSavedAt(new Date().toLocaleTimeString('en-US', { hour12: false }));

@@ -902,9 +902,10 @@ export default function DashboardPage() {
 
       <QuickTradePanel isOpen={showQuickTrade} onClose={() => setShowQuickTrade(false)} onExecute={handleQuickTrade} currentPrice={market?.candles?.[market.candles.length - 1]?.c || status?.current_bid || 0} />
 
-      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} onUpdated={() => {
-        // Force refetch
-        setMarket(null);
+      <SettingsModal open={showSettings} onClose={() => setShowSettings(false)} onUpdated={(patch: any) => {
+        // Force immediate refetch of market data and status
+        fetchMarket(selectedSymbol, chartTf).then(data => { if (data) setMarket(data); });
+        fetchStatus().then(s => { if (s) setStatus(s); });
       }} />
 
 

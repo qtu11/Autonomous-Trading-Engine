@@ -8201,17 +8201,23 @@ async def update_settings_endpoint(request: Request):
 
 
     updated_keys = []
-
     for key, val in body.items():
-
-        _config[key] = val
-
+        if key == "trading_method":
+            raw = str(val).upper().replace(" ", "_").replace("-", "_")
+            if raw in ("PA", "PRICE_ACTION"):
+                raw = "PRICE_ACTION"
+            elif raw in ("ULTRA", "ULTRA_CONFLUENCE"):
+                raw = "ULTRA_CONFLUENCE"
+            elif raw in ("SNIPER", "SMC", "ICT", "INDICATOR"):
+                pass
+            else:
+                raw = "SMC"
+            _config["trading_method"] = raw
+        else:
+            _config[key] = val
         updated_keys.append(key)
 
-
-
-    _add_log("INFO", "SETTINGS_UPDATE", f"Updated settings: {updated_keys}")
-
+    _add_log("INFO", "SETTINGS_UPDATE", f"Updated settings: {updated_keys} | active_method={_config.get('trading_method')}")
     return {"status": "SUCCESS", "updated": updated_keys, "config": _config}
 
 
