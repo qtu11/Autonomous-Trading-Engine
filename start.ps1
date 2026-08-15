@@ -6,11 +6,11 @@
 .DESCRIPTION
   Orchestrates every link in the chain so the platform starts with a single
   command and proves each stage is alive before opening the dashboard:
-    1. Free ports 8005 (backend) and 3000 (frontend).
+    1. Free ports 8005 (backend) and 3005 (frontend).
     2. Compile the MQL5 EA via MetaEditor (fail fast on compile errors).
     3. Ensure the MT5 terminal is running.
     4. Start the FastAPI backend (port 8005).
-    5. Install/start the Next.js dashboard (port 3000).
+    5. Install/start the Next.js dashboard (port 3005).
     6. Health-check the backend until MT5 reports connected (or time out).
     7. Open the dashboard in the default browser.
 
@@ -29,7 +29,7 @@ $ErrorActionPreference = 'Stop'
 
 $Root        = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BackendPort = 8005
-$FrontendPort = 3000
+$FrontendPort = 3005
 $BackendUrl  = "http://127.0.0.1:$BackendPort"
 $FrontendUrl = "http://localhost:$FrontendPort"
 $MetaEditorCandidates = @(
@@ -75,7 +75,9 @@ function Stop-PortProcess([int]$Port) {
 
 function Test-BackendHealth {
     try {
-        $response = Invoke-RestMethod -Uri "$BackendUrl/api/control-center/status" -TimeoutSec 3 -ErrorAction Stop
+        # BUG FIX (SECURITY): /api/control-center/status giờ yêu cầu bridge token
+        # (không còn public) — health-check dùng /health (public) thay vì status.
+        $response = Invoke-RestMethod -Uri "$BackendUrl/health" -TimeoutSec 3 -ErrorAction Stop
         return $response
     } catch {
         return $null
@@ -154,7 +156,7 @@ if ($ChooseDocker) {
             }
         } catch {}
         try {
-            $resDirect = Invoke-WebRequest -Uri "http://localhost:3000" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue
+            $resDirect = Invoke-WebRequest -Uri "http://localhost:3005" -UseBasicParsing -TimeoutSec 3 -ErrorAction SilentlyContinue
             if ($null -ne $resDirect -and $resDirect.StatusCode -eq 200) {
                 $dockerHealthy = $true
                 break
@@ -174,7 +176,7 @@ if ($ChooseDocker) {
     
     Write-Host "`n[SUCCESS] Docker Stack Services active." -ForegroundColor Green
     Write-Host "  Nginx Proxy (public entry):  $DockerUrl" -ForegroundColor Gray
-    Write-Host "  Next.js Frontend (direct):   http://localhost:3000" -ForegroundColor Gray
+    Write-Host "  Next.js Frontend (direct):   http://localhost:3005" -ForegroundColor Gray
     Write-Host "  FastAPI Backend (direct):    http://localhost:8005" -ForegroundColor Gray
     exit 0
 }
@@ -246,7 +248,7 @@ while ((Get-Date) -lt $deadline) {
     $status = Test-BackendHealth
     if ($null -ne $status) {
         $healthy = $true
-        if ($status.account.mt5_connected) { break }
+        break
     }
     Start-Sleep -Seconds 2
 }
@@ -254,12 +256,28 @@ while ((Get-Date) -lt $deadline) {
 Write-Host "`n------------------------- SYSTEM STATUS -------------------------" -ForegroundColor DarkGray
 if ($healthy) {
     Write-Ok "Backend API reachable at $BackendUrl"
-    $mt5State = if ($status.account.mt5_connected) { "CONNECTED" } else { "DISCONNECTED" }
-    $mt5Color = if ($status.account.mt5_connected) { "Green" } else { "Red" }
-    Write-Host ("    MT5:            " + $mt5State) -ForegroundColor $mt5Color
-    Write-Host ("    Account:        " + $status.account.login + " @ " + $status.account.server) -ForegroundColor Gray
-    Write-Host ("    Execution mode: " + $status.execution.mode + "  (locked=" + $status.execution.execution_locked + ")") -ForegroundColor Gray
-    Write-Host ("    Readiness:      " + $status.readiness.reason_code) -ForegroundColor Gray
+    # BUG FIX (SECURITY): chi tiết MT5/account giờ cần bridge token — lấy qua
+    # /api/control-center/status với token từ env (nếu có) để không 401.
+    $token = $env:QUANTAI_BRIDGE_TOKEN
+    if (-not $token) { $token = $env:ATE_BRIDGE_TOKEN }
+    if (-not $token) { $token = $env:MT5_BRIDGE_TOKEN }
+    $detail = $null
+    if ($token) {
+        try {
+            $headers = @{ Authorization = "Bearer $token" }
+            $detail = Invoke-RestMethod -Uri "$BackendUrl/api/control-center/status" -Headers $headers -TimeoutSec 3 -ErrorAction SilentlyContinue
+        } catch {}
+    }
+    if ($null -ne $detail) {
+        $mt5State = if ($detail.account.mt5_connected) { "CONNECTED" } else { "DISCONNECTED" }
+        $mt5Color = if ($detail.account.mt5_connected) { "Green" } else { "Red" }
+        Write-Host ("    MT5:            " + $mt5State) -ForegroundColor $mt5Color
+        Write-Host ("    Account:        " + $detail.account.login + " @ " + $detail.account.server) -ForegroundColor Gray
+        Write-Host ("    Execution mode: " + $detail.execution.mode + "  (locked=" + $detail.execution.execution_locked + ")") -ForegroundColor Gray
+        Write-Host ("    Readiness:      " + $detail.readiness.reason_code) -ForegroundColor Gray
+    } else {
+        Write-Warn "Set QUANTAI_BRIDGE_TOKEN trong env để xem chi tiết MT5 (status giờ yêu cầu auth)."
+    }
 } else {
     Write-Warn "Backend did not respond within 45s. Check the backend console window."
 }

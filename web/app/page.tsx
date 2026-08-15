@@ -104,11 +104,8 @@ export default function DashboardPage() {
     (async () => {
       try {
         const localToken = typeof window !== 'undefined' ? localStorage.getItem('quantai_auth_token') : null;
-        const isMaster = localToken && (
-          localToken === '20022007@Tu' ||
-          localToken === 'qtusdev07' ||
-          localToken === 'authenticated'
-        );
+        // BUG FIX (SECURITY): bỏ check master-token literal ('20022007@Tu'/
+        // 'qtusdev07'/'authenticated') — chỉ chấp nhận session hợp lệ từ refresh.
 
         const res = await fetch('/api/auth/refresh', {
           method: 'POST',
@@ -121,8 +118,6 @@ export default function DashboardPage() {
           if (data?.access_token) {
             localStorage.setItem('quantai_auth_token', data.access_token);
           }
-          setIsAuthenticated(true);
-        } else if (isMaster) {
           setIsAuthenticated(true);
         } else {
           localStorage.removeItem('quantai_auth_token');

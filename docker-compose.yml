@@ -36,7 +36,7 @@ services:
       - ATE_EXECUTION_MODE=${ATE_EXECUTION_MODE:-DEMO}
       # Trading method chỉ đổi qua API /api/control-center/trading-method —
       # server.py không đọc biến env TRADING_METHOD (đã bỏ biến chết).
-      - QUANTAI_BRIDGE_TOKEN=${QUANTAI_BRIDGE_TOKEN:-20022007@Tu}
+      - QUANTAI_BRIDGE_TOKEN=${QUANTAI_BRIDGE_TOKEN:?QUANTAI_BRIDGE_TOKEN bắt buộc phải set trong .env — không dùng token mặc định}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:

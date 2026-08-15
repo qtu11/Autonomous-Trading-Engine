@@ -105,7 +105,11 @@ def test_status_reflects_changes():
         with TestClient(app) as client:
             client.post("/api/control-center/mode", json={"mode": "LIVE"}, headers=_AUTH)
             client.post("/api/control-center/kill-switch", json={"active": True}, headers=_AUTH)
+            # BUG FIX (SECURITY): /api/control-center/status giờ yêu cầu bridge token
+            # (lộ balance/equity/login MT5) — không còn public như trước.
             r = client.get("/api/control-center/status")
+            assert r.status_code == 401
+            r = client.get("/api/control-center/status", headers=_AUTH)
             assert r.status_code == 200
             body = r.json()
             assert body["execution"]["mode"] == "LIVE"

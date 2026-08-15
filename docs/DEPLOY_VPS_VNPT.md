@@ -113,8 +113,8 @@ nano .env
 
 ```ini
 # MT5 Bridge — phải khớp với InpBridgeToken trong EA
-QUANTAI_BRIDGE_TOKEN=20022007@Tu
-QUANTAI_OPERATOR_TOKEN=20022007@Tu
+QUANTAI_BRIDGE_TOKEN=<token-random-32-chars>
+QUANTAI_OPERATOR_TOKEN=${QUANTAI_BRIDGE_TOKEN}
 
 # Đổi admin password
 ADMIN_PASSWORD=mat-khau-cua-ban
@@ -216,7 +216,7 @@ Trong MetaEditor → mở `ATE_XAUUSD.mq5` → compile → mở MT5 → kéo EA 
 | Input | Giá trị |
 |---|---|
 | `InpApiUrl` | `http://113.173.192.226:8848/api/v1/` ← trực tiếp VPS, latency thấp |
-| `InpBridgeToken` | `20022007@Tu` ← phải khớp QUANTAI_BRIDGE_TOKEN |
+| `InpBridgeToken` | `<token-random>` ← phải khớp QUANTAI_BRIDGE_TOKEN (không có mặc định) |
 | `InpMagicNumber` | `888999` ← phải khớp QUANTAI_EXECUTION_MAGIC |
 | `InpSymbol` | `XAUUSDm` ← phải khớp QUANTAI_EXECUTION_SYMBOL |
 

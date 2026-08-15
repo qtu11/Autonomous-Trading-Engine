@@ -105,7 +105,14 @@ export async function fetchPositions() {
   return data.map(p => ({
     id: `#${p.ticket || p.id || 'unknown'}`,
     ticket: typeof p.ticket === 'number' ? p.ticket : undefined,
-    type: p.type === 0 || p.type === 'BUY' ? 'BUY' : 'SELL',
+    // BUG FIX: chuẩn hoá type — backend có thể trả số (0/1) hoặc chuỗi
+    // ('BUY'/'SELL'/'buy'/'sell'); trước đây chuỗi lowercase rơi vào nhánh SELL sai.
+    type: (() => {
+      const raw = String(p.type ?? '').toUpperCase();
+      if (raw === '0' || raw === 'BUY') return 'BUY';
+      if (raw === '1' || raw === 'SELL') return 'SELL';
+      return 'SELL';
+    })(),
     lot: Number(p.volume ?? p.lot ?? 0),
     entry: Number(p.price_open ?? p.entry ?? 0),
     sl: Number(p.sl ?? 0),

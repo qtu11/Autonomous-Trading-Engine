@@ -82,8 +82,8 @@
 | Biến | Mặc định | Nơi đọc | Mô tả |
 |------|----------|---------|-------|
 | `ADMIN_LOGIN` / `ADMIN_PASSWORD` | (bắt buộc đặt) | backend `/api/auth/login`, web `pages/api/auth/login.ts` | Đăng nhập dashboard |
-| `QUANTAI_BRIDGE_TOKEN` | `20022007@Tu` | web proxy, python-bridge | **Tên chuẩn** token Bearer EA↔server (NÊN đổi) |
-| `ATE_BRIDGE_TOKEN` | `20022007@Tu` | alias tương thích | Luôn để CÙNG GIÁ TRỊ với `QUANTAI_BRIDGE_TOKEN` |
+| `QUANTAI_BRIDGE_TOKEN` | *(bắt buộc, không có mặc định)* | web proxy, python-bridge | **Tên chuẩn** token Bearer EA↔server — FAIL-CLOSED: thiếu env = mọi endpoint /api/* bị khóa |
+| `ATE_BRIDGE_TOKEN` | *(bắt buộc, cùng giá trị)* | alias tương thích | Luôn để CÙNG GIÁ TRỊ với `QUANTAI_BRIDGE_TOKEN` |
 | `ATE_OPERATOR_TOKEN` | — | (dự phòng) | Token vận hành nâng cao |
 | `JWT_SECRET` / `JWT_REFRESH_SECRET` | — | web `lib/middleware/auth.ts` | Tạo bằng `openssl rand -hex 32` — đã sinh sẵn trong root `.env`, `dashboard/.env`, `web/.env*`, `Cloudlocal/.env` |
 
@@ -109,7 +109,7 @@
 | `ATE_FRONTEND_URL` | `https://autonomous-trading-engine.vercel.app` | Origin website |
 | `ATE_MT5_API` | `https://autonomous-trading-engine.vercel.app/api/v1` | URL web dùng để rewrite `/api/v1/*` (next.config) — cầu nối cho EA tới home server |
 | `NEXT_PUBLIC_ATE_API_ORIGIN` | — | Không được code đọc — có thể bỏ |
-| `ATE_ALLOWED_ORIGINS` | localhost:3000 + vercel.app | CORS cho backend |
+| `ATE_ALLOWED_ORIGINS` | localhost:3000/3005 + vercel.app | CORS cho backend |
 | `ATE_DASHBOARD_HOST` / `ATE_DASHBOARD_PORT` | `0.0.0.0` / `8005` | Bind backend (KHÔNG dùng 8848 — nginx chiếm) |
 | `BRIDGE_URL` / `BRIDGE_PORT` | `http://localhost:8007` / `8007` | python-bridge |
 | `AI_ENGINE_URL` / `AI_ENGINE_PORT` | `http://localhost:8006` / `8006` | AI Engine |
@@ -162,8 +162,8 @@
 ### 1. Local dev (máy Windows cài MT5) — ⚠️ BẮT BUỘC đọc kỹ
 ```bash
 cd dashboard && pip install -r requirements.txt && python server.py      # :8005
-cd web && npm install && npm run dev                                       # :3000
-# Mở http://localhost:3000, đăng nhập, vào Control Center
+cd web && npm install && npm run dev                                       # :3005
+# Mở http://localhost:3005, đăng nhập, vào Control Center
 ```
 **EA trong MT5 — QUAN TRỌNG (MT5 WebRequest CHẶN localhost/127.0.0.1):**
 1. Trong MetaEditor: đổi `InpApiUrl = http://192.168.1.12:8005/api/v1/`

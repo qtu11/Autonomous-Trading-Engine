@@ -50,8 +50,8 @@ services:
 
       # MT5 credentials — EA logs into MT5 itself. Server only needs:
       # Bridge token (must match MT5 EA input)
-      QUANTAI_BRIDGE_TOKEN: "${QUANTAI_BRIDGE_TOKEN:-20022007@Tu}"
-      QUANTAI_OPERATOR_TOKEN: "${QUANTAI_OPERATOR_TOKEN:-20022007@Tu}"
+      QUANTAI_BRIDGE_TOKEN: "${QUANTAI_BRIDGE_TOKEN:?QUANTAI_BRIDGE_TOKEN bắt buộc phải set trong .env}"
+      QUANTAI_OPERATOR_TOKEN: "${QUANTAI_OPERATOR_TOKEN:-${QUANTAI_BRIDGE_TOKEN}}"
       QUANTAI_DEMO_COMMAND_TTL_SECONDS: "${QUANTAI_DEMO_COMMAND_TTL_SECONDS:-10}"
 
       # Admin / login

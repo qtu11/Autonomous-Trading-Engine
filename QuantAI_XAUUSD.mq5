@@ -11,14 +11,19 @@
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
-input string   InpApiUrl           = "http://192.168.1.12:8848/api/v1"; // URL Server AI Engine (hoặc https://autonomous-trading-engine.vercel.app/api/v1)
+input string   InpApiUrl           = "http://192.168.1.12:8005/api/v1"; // URL Server AI Engine (native backend :8005, nginx :8848, hoặc https://autonomous-trading-engine.vercel.app/api/v1)
 input ulong    InpMagicNumber      = 888999;                 // Mã nhận diện EA (Magic Number)
 // InpSymbol removed — EA ALWAYS auto-detects chart symbol via Symbol() in OnInit
 input int      InpPollIntervalSec  = 1;                      // Tần suất truy vấn AI Protocol (giây)
 input bool     InpExecutionEnabled = true;                   // Bật/Tắt thực thi lệnh tự động (Fail closed)
-input string   InpBridgeToken      = "20022007@Tu";          // Token xác thực Bearer Token cho kết nối Bridge
+input string   InpBridgeToken      = "";                     // Token xác thực Bearer Token (FAIL-CLOSED: để rỗng = EA không gửi telemetry/claim)
 input string   InpExecutorId       = "ate-ea-local";         // Mã định danh Executor duy nhất cho hợp đồng lệnh
 input bool     InpVerifyAccount    = true;                   // Kiểm tra xác thực tài khoản môi giới nghiêm ngặt
+// ── REAL-ACCOUNT GUARD (tùy chọn, fail-closed khi set) ──
+// Để TRỐNG = chấp nhận mọi account (như cũ). Nếu set, EA CHỈ giao dịch khi
+// account login + server khớp đúng. Bảo vệ khi attach nhầm EA lên tài khoản REAL.
+input long     InpAllowedLogin     = 0;                       // Account login duy nhất được phép (0 = bất kỳ)
+input string   InpAllowedServers   = "";                     // Danh sách server được phép, phân cách dấu phẩy (rỗng = bất kỳ)
 input double   InpMaxSpread        = 0.50;                   // Giới hạn mức chênh lệch giá tối đa (Spread Cap)
 input int      InpMaxPositions     = 5;                      // Số lượng vị thế mở tối đa cùng lúc
 input int      InpMaxDeviationPts  = 50;                     // Độ lệch giá tối đa cho phép từ Broker (Points)
@@ -147,7 +152,7 @@ int OnInit()
 
    if(StringFind(InpApiUrl, "127.0.0.1") >= 0 || StringFind(InpApiUrl, "localhost") >= 0)
    {
-      Print("CHU Y QUAN TRONG: MT5 WebRequest chan dia chi 127.0.0.1/localhost (Loi 5203). Vui long doi InpApiUrl sang http://192.168.1.12:8848/api/v1 hoac https://autonomous-trading-engine.vercel.app/api/v1 va them URL vao MT5 Tools -> Options -> Expert Advisors!");
+      Print("CHU Y QUAN TRONG: MT5 WebRequest chan dia chi 127.0.0.1/localhost (Loi 5203). Vui long doi InpApiUrl sang http://192.168.1.12:8005/api/v1 (backend native) hoac https://autonomous-trading-engine.vercel.app/api/v1 va them URL vao MT5 Tools -> Options -> Expert Advisors!");
    }
 
    ATELog(StringFormat("INIT_BEGIN url=%s token_len=%d exec=%s verify=%s poll=%ds", InpApiUrl, StringLen(InpBridgeToken), InpExecutionEnabled ? "true" : "false", InpVerifyAccount ? "true" : "false", InpPollIntervalSec));
@@ -204,6 +209,27 @@ bool IsAuthorizedEnvironment()
 
    string company  = AccountInfoString(ACCOUNT_COMPANY);
    long accountMode = AccountInfoInteger(ACCOUNT_TRADE_MODE);
+
+   // ── REAL-ACCOUNT GUARD (fail-closed khi cấu hình) ──
+   // Mặc định (0/rỗng) vẫn auto-identity như cũ. Khi set InpAllowedLogin/
+   // InpAllowedServers, mọi account không khớp sẽ bị chặn hoàn toàn — kể cả
+   // DEMO — tránh attach nhầm EA vào tài khoản không mong muốn.
+   long thisLogin = AccountInfoInteger(ACCOUNT_LOGIN);
+   if(InpAllowedLogin > 0 && thisLogin != InpAllowedLogin)
+   {
+      ATELogThrottled("ACCOUNT_GUARD", StringFormat("Account login #%I64d KHÔNG khớp InpAllowedLogin=%I64d — chặn", thisLogin, InpAllowedLogin));
+      return false;
+   }
+   string thisServer = AccountInfoString(ACCOUNT_SERVER);
+   if(StringLen(InpAllowedServers) > 0)
+   {
+      string allowed = "," + InpAllowedServers + ",";
+      if(StringFind(allowed, "," + thisServer + ",") < 0)
+      {
+         ATELogThrottled("ACCOUNT_GUARD", StringFormat("Server '%s' KHÔNG nằm trong InpAllowedServers — chặn", thisServer));
+         return false;
+      }
+   }
 
    if(accountMode == ACCOUNT_TRADE_MODE_DEMO)
    {
@@ -461,8 +487,7 @@ void SendTelemetry()
    int res = WebRequest("POST", ATEApiBase() + "/api/v1/telemetry", headers, 3000, data, result, result_headers);
    if(res != 200)
    {
-      int err = GetLastError();
-      ATELogThrottled("TELEMETRY_HTTP_" + string(res), StringFormat("Telemetry push failed (HTTP %d, err=%d). Huong dan: (1) InpApiUrl phai la https://autonomous-trading-engine.vercel.app/api/v1/ (hoac http://113.173.192.226:8848/api/v1/) - KHONG dung localhost/127.0.0.1 (MT5 chan); (2) them URL vao MT5 allowlist: Tools > Options > Expert Advisors > Allow WebRequest; (3) backend phai chay: python dashboard/server.py; (4) kiem tra token InpBridgeToken = QUANTAI_BRIDGE_TOKEN.", res, err));
+      int err = GetLastError();       ATELogThrottled("TELEMETRY_HTTP_" + string(res), StringFormat("Telemetry push failed (HTTP %d, err=%d). Huong dan: (1) InpApiUrl phai la http://<IP-LAN>:8005/api/v1/ (backend native) hoac http://113.173.192.226:8848/api/v1/ (nginx) - KHONG dung localhost/127.0.0.1 (MT5 chan); (2) them URL vao MT5 allowlist: Tools > Options > Expert Advisors > Allow WebRequest; (3) backend phai chay: python dashboard/server.py; (4) kiem tra token InpBridgeToken = QUANTAI_BRIDGE_TOKEN.", res, err));
    }
    else if(!g_telemetry_ok_logged)
    {

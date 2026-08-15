@@ -26,37 +26,62 @@ interface QuickTradePanelProps {
   currentPrice?: number;
 }
 
-export default function QuickTradePanel({ isOpen, onClose, onExecute, currentPrice = 2850 }: QuickTradePanelProps) {
+// BUG FIX: trước đây SL/TP nhập bằng "pips" (mặc định 50/100) nhưng gửi thẳng
+// làm GIÁ tuyệt đối (stop_loss=50) → backend tính ATR proxy abs(entry-50) khổng
+// lồ, RiskGate reject hoặc EA đặt SL ở $50. Giờ nhập GIÁ và validate đúng hướng.
+export default function QuickTradePanel({ isOpen, onClose, onExecute, currentPrice = 0 }: QuickTradePanelProps) {
   const [symbol, setSymbol] = useState('XAUUSD');
   const [type, setType] = useState<'BUY' | 'SELL'>('BUY');
   const [volume, setVolume] = useState('0.10');
-  const [sl, setSl] = useState('50');
-  const [tp, setTp] = useState('100');
+  const [sl, setSl] = useState('');
+  const [tp, setTp] = useState('');
   const [useMarketPrice, setUseMarketPrice] = useState(true);
-  const [price, setPrice] = useState(currentPrice.toString());
+  const [price, setPrice] = useState(currentPrice > 0 ? currentPrice.toFixed(2) : '');
   const [showConfirm, setShowConfirm] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const pipValue = 0.5; // XAUUSD
-  const riskAmount = (parseFloat(volume) * parseFloat(sl) * pipValue);
-  const rewardAmount = (parseFloat(volume) * parseFloat(tp) * pipValue);
-  const rrr = parseFloat(sl) > 0 ? parseFloat(tp) / parseFloat(sl) : 0;
+  // Giá tham chiếu khi market order (0 nếu chưa có dữ liệu thật)
+  const referencePrice = currentPrice > 0 ? currentPrice : (parseFloat(price) || 0);
+
+  // BUG FIX: P&L tính theo contract thật (XAUUSD 100 oz/lot), không hardcode pip.
+  const slNum = parseFloat(sl) || 0;
+  const tpNum = parseFloat(tp) || 0;
+  const volNum = parseFloat(volume) || 0;
+  const riskAmount = referencePrice > 0 && slNum > 0 ? Math.abs(referencePrice - slNum) * volNum * 100 : 0;
+  const rewardAmount = referencePrice > 0 && tpNum > 0 ? Math.abs(tpNum - referencePrice) * volNum * 100 : 0;
+  const rrr = riskAmount > 0 ? rewardAmount / riskAmount : 0;
+
+  const validate = (): boolean => {
+    if (!(volNum > 0)) { setErrorMsg('Volume phải lớn hơn 0'); return false; }
+    const entry = useMarketPrice ? referencePrice : (parseFloat(price) || 0);
+    if (!(entry > 0)) { setErrorMsg('Chưa có giá thị trường — thử lại sau'); return false; }
+    if (!(slNum > 0) || !(tpNum > 0)) { setErrorMsg('SL/TP phải là giá dương (ví dụ XAU ~3300)'); return false; }
+    if (type === 'BUY' && !(slNum < entry && entry < tpNum)) {
+      setErrorMsg('BUY yêu cầu: SL < Entry < TP'); return false;
+    }
+    if (type === 'SELL' && !(slNum > entry && entry > tpNum)) {
+      setErrorMsg('SELL yêu cầu: SL > Entry > TP'); return false;
+    }
+    setErrorMsg('');
+    return true;
+  };
 
   const handleExecute = useCallback(() => {
-    setShowConfirm(true);
-  }, []);
+    if (validate()) setShowConfirm(true);
+  }, [validate]);
 
   const confirmExecute = useCallback(() => {
     onExecute?.({
       symbol,
       type,
-      volume: parseFloat(volume),
-      sl: parseFloat(sl),
-      tp: parseFloat(tp),
-      price: useMarketPrice ? undefined : parseFloat(price),
+      volume: volNum,
+      sl: slNum,
+      tp: tpNum,
+      price: useMarketPrice ? undefined : (parseFloat(price) || undefined),
     });
     setShowConfirm(false);
     onClose();
-  }, [symbol, type, volume, sl, tp, price, useMarketPrice, onExecute, onClose]);
+  }, [symbol, type, volNum, slNum, tpNum, price, useMarketPrice, onExecute, onClose]);
 
   if (!isOpen) return null;
 
@@ -142,14 +167,14 @@ export default function QuickTradePanel({ isOpen, onClose, onExecute, currentPri
           {/* Entry Price */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <input type="checkbox" checked={useMarketPrice} onChange={e => setUseMarketPrice(e.target.checked)} />
-            <span style={{ fontSize: 8, fontFamily: C.mono, color: C.muted }}>Use Market Price</span>
+            <span style={{ fontSize: 8, fontFamily: C.mono, color: C.muted }}>Use Market Price {currentPrice > 0 ? `(${currentPrice.toFixed(2)})` : ''}</span>
           </div>
           {!useMarketPrice && <InputRow label="ENTRY PRICE" value={price} onChange={setPrice} />}
 
-          {/* SL/TP */}
+          {/* SL/TP — GIÁ tuyệt đối, không phải pips */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-            <InputRow label="STOP LOSS (PIPS)" value={sl} onChange={setSl} />
-            <InputRow label="TAKE PROFIT (PIPS)" value={tp} onChange={setTp} />
+            <InputRow label="STOP LOSS (PRICE)" value={sl} onChange={setSl} suffix={type === 'BUY' ? 'phải < Entry' : 'phải > Entry'} />
+            <InputRow label="TAKE PROFIT (PRICE)" value={tp} onChange={setTp} suffix={type === 'BUY' ? 'phải > Entry' : 'phải < Entry'} />
           </div>
 
           {/* Risk Preview */}
@@ -169,6 +194,12 @@ export default function QuickTradePanel({ isOpen, onClose, onExecute, currentPri
               </div>
             </div>
           </div>
+
+          {errorMsg && (
+            <div style={{ marginTop: 8, padding: '8px 10px', background: C.redDim, border: `1px solid ${C.red}`, borderRadius: 6, color: C.red, fontSize: 9, fontFamily: C.mono }}>
+              ⚠ {errorMsg}
+            </div>
+          )}
 
           {/* Execute Button */}
           <button onClick={handleExecute} style={{
@@ -198,7 +229,8 @@ export default function QuickTradePanel({ isOpen, onClose, onExecute, currentPri
             </div>
             <div style={{ fontSize: 11, fontFamily: C.mono, color: C.dim, marginBottom: 16, lineHeight: 1.6 }}>
               {type} {volume} lots {symbol}<br />
-              SL: {sl} pips | TP: {tp} pips
+              Entry: {useMarketPrice ? (currentPrice > 0 ? currentPrice.toFixed(2) : 'Market') : price}<br />
+              SL: {sl} | TP: {tp}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
               <button onClick={() => setShowConfirm(false)} style={{

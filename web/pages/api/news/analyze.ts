@@ -1,18 +1,9 @@
-import { BACKEND_URL } from '@/lib/api-config';
 import type { NextApiRequest, NextApiResponse } from 'next';
+import { authedProxy } from '@/lib/middleware/proxy';
 
-export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== 'POST') { return res.status(405).end(); }
-  try {
-    const body = JSON.stringify(req.body);
-    const response = await fetch(`${BACKEND_URL}/api/news/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': (req.headers.authorization as string) || '' },
-      body,
-    });
-    const data = await response.json().catch(() => ({ raw: 'ok' }));
-    return res.status(response.status).json(data);
-  } catch (error) {
-    return res.status(502).json({ error: 'Backend unavailable', details: error instanceof Error ? error.message : 'Unknown error' });
-  }
+// BUG FIX: trước đây forward nguyên Authorization (JWT user) xuống backend —
+// backend giờ validate token nghiêm ngặt nên JWT bị 401. Dùng authedProxy:
+// xác thực JWT cục bộ, forward bridge token xuống backend.
+export default function handler(req: NextApiRequest, res: NextApiResponse) {
+  return authedProxy(req as any, res, { method: 'POST', path: '/api/news/analyze' });
 }

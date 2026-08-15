@@ -144,7 +144,7 @@ Vào **Vercel Project → Settings → Environment Variables**, sửa:
 - `OPENAI_API_KEY`
 - `GEMINI_API_KEY`
 - `ATE_AI_MODEL=deepseek-v4-flash-free`
-- `ATE_BRIDGE_TOKEN=20022007@Tu`  *(nên đổi thành random 32 chars)*
+- `ATE_BRIDGE_TOKEN=<token-random-32-chars>`  *(BẮT BUỘC đổi — không còn token mặc định)*
 - `ATE_DEMO_ARMED=true`
 - `ATE_DEMO_COMMAND_TTL_SECONDS=10`
 - `ATE_ENABLE_TRADING=true`
@@ -274,7 +274,7 @@ curl http://<PUBLIC_IP>:8848/health
 
 | Hiện tại | Nên làm |
 |---|---|
-| `ATE_BRIDGE_TOKEN=20022007@Tu` | Đổi thành random 32+ chars, vd `xK7F3mN9pQ2vR8wT5yB1cL4hG6jD0sA9eZ` |
+| `ATE_BRIDGE_TOKEN=<random 32+ chars>` | Bắt buộc set — thiếu env = fail-closed toàn bộ |
 | `ADMIN_PASSWORD=qtusdev07` | Đổi thành password mạnh hơn (16+ chars) |
 | Port 8848 mở cho toàn internet | Có thể restrict bằng firewall Windows cho phép IP Vercel + broker MT5 |
 | Backend không HTTPS | OK cho demo; production nên dùng reverse proxy (nginx + Let's Encrypt) |

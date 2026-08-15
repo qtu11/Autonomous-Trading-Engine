@@ -38,6 +38,15 @@ def _clean_state():
     _commands.clear()
     _positions.clear()
     _market_cache.pop("economic_calendar", None)
+    # BUG FIX (test isolation): snapshot account trước khi test mutate — các test
+    # dưới set _account["balance"]=0.0/100.0 mà không restore → test_risk_gate chạy
+    # sau đó fail vì risk_pct (balance=0). Giờ restore đầy đủ sau mỗi test.
+    saved_account = {
+        "balance": _account.get("balance"),
+        "equity": _account.get("equity"),
+        "mt5_connected": _account.get("mt5_connected"),
+        "total_pnl": _account.get("total_pnl"),
+    }
     _account["balance"] = 10000.0
     _account["equity"] = 10000.0
     _account["mt5_connected"] = False
@@ -50,6 +59,8 @@ def _clean_state():
     yield
     for k, v in saved.items():
         _config[k] = v
+    for k, v in saved_account.items():
+        _account[k] = v
     _dca_state.clear()
     _commands.clear()
 

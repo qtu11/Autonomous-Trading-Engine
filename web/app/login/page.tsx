@@ -90,7 +90,9 @@ export default function LoginPage() {
 
       if (res.ok && data.status === 'SUCCESS') {
         setSuccessMsg('Xac thuc thanh cong. Dang truy cap...');
-        const token = data.access_token || data.token || 'authenticated';
+        // BUG FIX (SECURITY): bỏ fallback 'authenticated' — web login luôn trả
+        // access_token thật; fallback cũ cho phép vào dashboard mà không cần đăng nhập.
+        const token = data.access_token || data.token;
         const refresh = data.refresh_token || token;
         localStorage.setItem('quantai_auth_token', token);
         localStorage.setItem('quantai_user_info', JSON.stringify(data.user || {}));

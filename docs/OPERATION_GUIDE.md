@@ -48,7 +48,7 @@ Các biến quan trọng (tham chiếu đầy đủ: [`ENVIRONMENT_CONFIG.md`](.
 ```bash
 cd web
 npm install
-npm run dev       # phát triển - http://localhost:3000
+npm run dev       # phát triển - http://localhost:3005
 npm run build && npm run start   # production
 ```
 
@@ -63,7 +63,7 @@ npm run build && npm run start   # production
 ## 3. Trình Tự Khởi Động An Toàn (Checklist)
 
 1. [ ] Khởi động backend `python server.py` - chờ log "Ready".
-2. [ ] Mở dashboard `http://localhost:3000`, đăng nhập admin.
+2. [ ] Mở dashboard `http://localhost:3005`, đăng nhập admin.
 3. [ ] Kiểm tra `Control Center` -> status cho thấy MT5 connected (nếu MT5 đang chạy EA).
 4. [ ] Gắn EA vào chart XAUUSDm; theo dõi telemetry xuất hiện.
 5. [ ] Bật `AI Auto Loop` để hệ thống bắt đầu vòng lặp phân tích.

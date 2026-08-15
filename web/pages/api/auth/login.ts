@@ -2,9 +2,16 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { issueTokens } from '@/lib/middleware/auth';
 import { rateLimit } from '@/lib/middleware/rate-limit';
 
-const ADMIN_LOGIN = process.env.ADMIN_LOGIN || 'qtusdev@quanttrading.ai';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'qtusdev07';
-const BRIDGE_TOKEN = process.env.QUANTAI_BRIDGE_TOKEN || process.env.ATE_BRIDGE_TOKEN || '20022007@Tu';
+// BUG FIX (SECURITY): thiếu JWT_SECRET → từ chối login fail-closed với 503 rõ
+// ràng (không fallback secret hardcode).
+const HAS_JWT_SECRET = !!(process.env.JWT_SECRET && process.env.JWT_REFRESH_SECRET);
+
+// BUG FIX (SECURITY): trước đây có default hardcode (qtusdev07/20022007@Tu) và
+// điều kiện login cực lỏng (bất kỳ username nào + password = bridge token là
+// vào được). Giờ fail-closed: BẮT BUỘC ADMIN_LOGIN/ADMIN_PASSWORD từ env,
+// khớp chính xác cả hai.
+const ADMIN_LOGIN = (process.env.ADMIN_LOGIN || '').trim();
+const ADMIN_PASSWORD = (process.env.ADMIN_PASSWORD || '').trim();
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -28,17 +35,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const trimmedLogin = String(login).trim();
     const trimmedPass = String(password).trim();
 
-    // Check valid credentials
-    const isLoginValid =
-      (trimmedLogin === ADMIN_LOGIN && trimmedPass === ADMIN_PASSWORD) ||
-      trimmedPass === ADMIN_PASSWORD ||
-      trimmedPass === 'qtusdev07' ||
-      trimmedPass === BRIDGE_TOKEN ||
-      trimmedPass === '20022007@Tu' ||
-      trimmedLogin === BRIDGE_TOKEN ||
-      trimmedLogin === '20022007@Tu';
+    // Fail-closed: đúng username + đúng password, không có đường tắt nào khác.
+    if (!ADMIN_LOGIN || !ADMIN_PASSWORD) {
+      return res.status(503).json({ error: 'Authentication not configured (ADMIN_LOGIN/ADMIN_PASSWORD)' });
+    }
 
-    if (!isLoginValid) {
+    // Fail-closed (SECURITY): thiếu JWT secret → không thể cấp token an toàn.
+    if (!HAS_JWT_SECRET) {
+      return res.status(503).json({ error: 'JWT_SECRET/JWT_REFRESH_SECRET chưa được cấu hình — set trong env (openssl rand -hex 32)' });
+    }
+
+    if (trimmedLogin !== ADMIN_LOGIN || trimmedPass !== ADMIN_PASSWORD) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 

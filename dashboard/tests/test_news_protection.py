@@ -13,7 +13,9 @@ import server  # noqa: E402  (conftest.py đã thêm dashboard/ vào sys.path)
 from starlette.testclient import TestClient  # noqa: E402
 
 client = TestClient(server.app)
-HDR = {"Authorization": "Bearer test-bridge-token"}
+# BUG FIX: backend giờ validate token nghiêm ngặt — dùng đúng token test do
+# conftest.py đặt (QUANTAI_BRIDGE_TOKEN=test-token).
+HDR = {"Authorization": "Bearer test-token"}
 
 
 def _event(dt: datetime, impact: str = "HIGH", title: str = "Nonfarm Payrolls") -> dict:

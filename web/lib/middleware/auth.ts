@@ -6,8 +6,11 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import crypto from 'crypto';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'ate-quanttrading-jwt-secret-2026-do-not-use-in-prod';
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'ate-refresh-jwt-secret-2026-do-not-use-in-prod';
+// BUG FIX (SECURITY): trước đây có fallback hardcode 'ate-quanttrading-jwt-secret-...'
+// nằm trong repo công khai — bất kỳ ai cũng forge được admin JWT khi env thiếu.
+// Giờ fail-closed: thiếu env → secret rỗng → mọi token bị từ chối (không có đường tắt).
+const JWT_SECRET = process.env.JWT_SECRET || '';
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || '';
 
 export interface AuthPayload {
   sub: string;
@@ -42,6 +45,10 @@ interface SignOptions {
 }
 
 function jwtSign(payload: object, secret: string, opts: SignOptions): string {
+  if (!secret) {
+    // Fail-closed: không có secret cấu hình → không thể ký token hợp lệ.
+    throw new Error('JWT_SECRET not configured — set JWT_SECRET/JWT_REFRESH_SECRET trong env');
+  }
   const now = Math.floor(Date.now() / 1000);
   const full = { ...payload, iat: now, exp: now + opts.expiresIn };
   const header = b64urlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
@@ -51,6 +58,7 @@ function jwtSign(payload: object, secret: string, opts: SignOptions): string {
 }
 
 function jwtVerify<T>(token: string, secret: string): T | null {
+  if (!secret) return null; // fail-closed: secret rỗng → không verify được token nào
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
@@ -66,15 +74,15 @@ function jwtVerify<T>(token: string, secret: string): T | null {
 }
 
 export function isMasterToken(token: string): boolean {
+  // BUG FIX (SECURITY): trước đây hardcode 'authenticated' / '20022007@Tu' /
+  // 'qtusdev07' / ADMIN_PASSWORD / ADMIN_LOGIN làm master token — bất kỳ ai
+  // biết giá trị mặc định đều thành admin. Giờ chỉ chấp nhận bridge token
+  // thực sự cấu hình qua env (không có literal mặc định nào).
   if (!token) return false;
   const masterTokens = [
-    'authenticated',
-    '20022007@Tu',
-    'qtusdev07',
     process.env.QUANTAI_BRIDGE_TOKEN,
     process.env.ATE_BRIDGE_TOKEN,
-    process.env.ADMIN_PASSWORD,
-    process.env.ADMIN_LOGIN,
+    process.env.MT5_BRIDGE_TOKEN,
   ].filter(Boolean) as string[];
 
   return masterTokens.some(t => t === token || token.trim() === t.trim());

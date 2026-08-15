@@ -106,7 +106,8 @@ def test_create_order_returns_command_id_and_logs():
             assert body["entry"] > 0
             assert any(c["command_id"] == body["command_id"] for c in _commands)
 
-            logs = client.get("/api/logs").json()
+            # BUG FIX (SECURITY): /api/logs giờ yêu cầu bridge token hợp lệ.
+            logs = client.get("/api/logs", headers=_AUTH).json()
             assert any(l.get("event") == "MANUAL_ORDER" for l in logs), (
                 "create_order phải log MANUAL_ORDER")
     finally:
@@ -488,9 +489,8 @@ def test_telemetry_auto_detects_demo_then_live_account():
             # Cả 2 accounts cùng tồn tại
             assert "111" in _accounts and "222" in _accounts
             assert _accounts["222"]["account_mode"] == "REAL"
-
-            # 3) List accounts
-            r = client.get("/api/accounts")
+            # 3) List accounts — BUG FIX (SECURITY): /api/accounts giờ cần bridge token.
+            r = client.get("/api/accounts", headers=_AUTH)
             assert r.status_code == 200
             data = r.json()
             logins = {a["login"] for a in data["accounts"]}
@@ -599,9 +599,10 @@ def test_ai_test_endpoint_returns_status():
     """/api/ai/test phải trả 200 ngay cả khi AI Engine không khả dụng."""
     with TestClient(app) as client:
         r = client.post(
-            "/api/ai/test",
-            json={"key_type": "OpenCode Zen", "model": "deepseek-v4-flash-free"},
-        )
+                "/api/ai/test",
+                headers=_AUTH,
+                json={"key_type": "OpenCode Zen", "model": "deepseek-v4-flash-free"},
+            )
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["status"] == "OK"

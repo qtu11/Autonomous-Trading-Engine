@@ -7,27 +7,27 @@
  * 1. Direct: browser → FastAPI on VPS (CORS needed)
  * 2. Proxy:  browser → Vercel (next.config.ts rewrites) → FastAPI on VPS
  *
- * Default = proxy through Vercel so browser only talks to vercel.app.
- * Production: env ATE_BACKEND_URL set via vercel.json → 8848.
- * Local dev: fallback localhost:8848 (chuẩn mới, khớp VPS + Docker).
+ * Default = proxy so browser only talks to the frontend origin.
+ *
+ * Port chuẩn (ENVIRONMENT_CONFIG.md):
+ *  - Backend FastAPI luôn chạy 8005 (local + Cloudlocal).
+ *  - 8848 chỉ là cổng public của nginx trên home server (production).
+ * BUG FIX: trước đây local dev fallback về 8848 trong khi start.ps1 chạy backend
+ * 8005 → toàn bộ proxy 502. Giờ ưu tiên ATE_BACKEND_URL (mọi môi trường), fallback
+ * 8005 ở dev, 8848 ở production.
  */
 
 const isLocalDev = process.env.NODE_ENV === 'development' || !process.env.VERCEL;
 const envBackend = (process.env.ATE_BACKEND_URL || '').trim();
 
-/**
- * If NEXT_PUBLIC_ATE_API_ORIGIN is set (frontend wants to talk to backend
- * directly), use that. Otherwise go through Vercel's own domain via /api.
- */
-const publicOrigin = (process.env.NEXT_PUBLIC_ATE_API_ORIGIN || '').trim();
-
-// In local development, prefer 127.0.0.1:8848 to avoid NAT loopback / WAN ETIMEDOUT
-export const BACKEND_URL = (isLocalDev ? (process.env.LOCAL_BACKEND_URL || 'http://127.0.0.1:8848') : (envBackend || 'http://127.0.0.1:8848')).replace(/\/+$/, '');
+export const BACKEND_URL = (envBackend || (isLocalDev ? 'http://127.0.0.1:8005' : 'http://127.0.0.1:8848')).replace(/\/+$/, '');
 
 /**
  * Browser-facing base URL. When empty, all fetches go to relative /api/*
  * which is rewritten/proxied by Next.js catch-all to BACKEND_URL.
  */
+const publicOrigin = (process.env.NEXT_PUBLIC_ATE_API_ORIGIN || '').trim();
+
 export const ATE_MT5_API =
   process.env.ATE_MT5_API ||
   (publicOrigin

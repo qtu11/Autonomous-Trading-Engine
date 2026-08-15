@@ -4,7 +4,26 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncio
+import pytest
 from server import evaluate_risk_gate, _config, _account
+
+
+@pytest.fixture(autouse=True)
+def _restore_shared_state():
+    """Bảo vệ test khỏi state rò rỉ giữa các test file (account/_config dùng chung
+    global — ví dụ test_dca để lại balance=0.0 làm risk_pct check fail)."""
+    import server as srv
+    saved_login = srv._active_login
+    saved_accounts = {k: dict(v) for k, v in srv._accounts.items()}
+    saved_cfg = {k: v for k, v in srv._config.items()
+                 if k in ("max_spread", "risk_per_trade_fraction", "max_open_positions",
+                          "execution_mode", "max_lot")}
+    yield
+    srv._accounts.clear()
+    srv._accounts.update(saved_accounts)
+    srv._active_login = saved_login
+    for k, v in saved_cfg.items():
+        srv._config[k] = v
 
 
 def test_approved_high_quality():

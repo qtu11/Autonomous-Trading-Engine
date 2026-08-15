@@ -16,12 +16,16 @@ import type { NextConfig } from 'next';
  *   ATE_BACKEND_URL=http://127.0.0.1:8005 (dashboard server)
  */
 
-// BUG FIX: fallback cũ dùng sai cổng (8005) so với chuẩn mới (8848). Cổng 8848
-// là chuẩn duy nhất cho dự án (VPS Docker, .env.example, hint UI). Nếu chạy LOCAL
-// mà ATE_BACKEND_URL chưa được set thì fallback về http://localhost:8848. Môi
-// trường production (Vercel) luôn có env qua web/vercel.json.
-const ATE_BACKEND_URL = process.env.ATE_BACKEND_URL || 'http://localhost:8848';
-const ATE_MT5_API    = process.env.ATE_MT5_API    || 'http://localhost:8848/api/v1';
+// BUG FIX: fallback theo đúng chuẩn ENVIRONMENT_CONFIG.md — local dev backend
+// chạy 8005. Production (Vercel/nginx) BẮT BUỘC set ATE_BACKEND_URL — trước
+// đây fallback localhost:8848 âm thầm khiến mọi API 502 trên Vercel khi quên
+// env. Giờ fail-fast: build production thiếu env → lỗi rõ ràng thay vì 502 mù.
+const IS_DEV = process.env.NODE_ENV === 'development';
+const IS_PROD = !IS_DEV;
+const ATE_BACKEND_URL = process.env.ATE_BACKEND_URL || (IS_DEV ? 'http://localhost:8005' : (() => {
+  throw new Error('ATE_BACKEND_URL bắt buộc phải set khi build production (Vercel: http://<IP>:8848 hoặc URL backend). Xem ENVIRONMENT_CONFIG.md');
+})());
+const ATE_MT5_API    = process.env.ATE_MT5_API    || `${ATE_BACKEND_URL.replace(/\/+$/, '')}/api/v1`;
 
 const nextConfig: NextConfig = {
   output: process.env.VERCEL ? undefined : 'standalone',
@@ -29,34 +33,16 @@ const nextConfig: NextConfig = {
 
   async rewrites() {
     return [
-      // MT5 EA sends to /api/v1/* — rewrite to backend server
-      // BUG FIX: EA gọi POST /api/v1/telemetry (thiếu /bridge); backend route là
-      // /api/v1/bridge/telemetry — trước đây destination sai => EA 404 => MT5 NO.
-      {
-        source: '/api/v1/telemetry',
-        destination: `${ATE_MT5_API}/bridge/telemetry`,
-      },
-      {
-        source: '/api/v1/bridge/commands/claim',
-        destination: `${ATE_MT5_API}/bridge/commands/claim`,
-      },
-      {
-        source: '/api/v1/bridge/candles',
-        destination: `${ATE_MT5_API}/bridge/candles`,
-      },
-      {
-        source: '/api/v1/bridge/markup',
-        destination: `${ATE_MT5_API}/bridge/markup`,
-      },
-      {
-        source: '/api/v1/bridge/calendar',
-        destination: `${ATE_MT5_API}/bridge/calendar`,
-      },
+      // BUG FIX: bỏ các rewrite /api/v1/bridge/* — chúng bị shadow bởi file
+      // pages/api/v1/bridge/*.ts (rewrites mặc định chạy SAU filesystem) nên
+      // không bao giờ kích hoạt. Chỉ giữ rewrite receipt (không có file tương
+      // ứng) + catch-all cho đường /api/* không có file proxy.
       {
         source: '/api/v1/bridge/commands/:commandId/receipt',
         destination: `${ATE_MT5_API}/bridge/commands/:commandId/receipt`,
       },
-      // Standard API proxy (Vercel → backend)
+      // Standard API proxy (Vercel → backend) cho đường /api/* không có file
+      // pages/api — file proxy (có auth JWT) luôn được ưu tiên.
       {
         source: '/api/:path*',
         destination: `${ATE_BACKEND_URL}/api/:path*`,

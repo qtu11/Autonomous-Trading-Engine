@@ -5,7 +5,7 @@ import {
   fetchControlCenterStatus,
   updateAiAutoLoop, loginMT5Account,
   fetchAIConfig, updateTradingMethod,
-  fetchMT5Diagnostics,
+  fetchMT5Diagnostics, testAIConnection,
 } from '../../lib/api';
 
 const C = {
@@ -53,6 +53,7 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
   const [mt5Server, setMt5Server] = useState('');
   const [diag, setDiag] = useState<any>(null);
   const [loginResult, setLoginResult] = useState<any>(null);
+  const [aiTestResult, setAiTestResult] = useState<any>(null);
 
   // BUG FIX: tải chẩn đoán MT5 (LAN IP, checklist allowlist/firewall, lần cuối EA
   // gửi telemetry) để hiển thị ngay lý do "MT5 Connected NO" khi EA chưa kết nối.
@@ -100,6 +101,16 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
       await loadDiag();
       setMt5Password('');
     } catch { /* silent */ }
+  };
+
+  // BUG FIX: nút "Test AI" trước đây gọi nhầm handleMT5Login (đòi login/password
+  // MT5) — giờ gọi đúng /api/ai/test để kiểm tra kết nối AI provider.
+  const handleTestAI = async () => {
+    try {
+      const model = aiConfig?.active_model || 'deepseek-v4-flash-free';
+      const result = await testAIConnection({ key_type: 'OpenCode Zen', model });
+      setAiTestResult(result);
+    } catch (e) { console.error('AI test failed:', e); }
   };
 
   if (loading) {
@@ -289,8 +300,8 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
           <button onClick={async () => { try { const token = localStorage.getItem('quantai_auth_token') || ''; const headers: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {}; await fetch('/api/orders/close-profitable', { method: 'POST', headers, credentials: 'include' }); await loadStatus(); } catch { /* silent */ } }}
             style={{ padding: '8px', background: C.greenDim, border: `1px solid ${C.green}`, borderRadius: 6, color: C.green, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>Close Profit</button>
 
-          <button onClick={handleMT5Login}
-            style={{ padding: '8px', background: C.blueDim, border: `1px solid ${C.blue}`, borderRadius: 6, color: C.blue, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>Test AI</button>
+          <button onClick={handleTestAI}
+            style={{ padding: '8px', background: C.blueDim, border: `1px solid ${C.blue}`, borderRadius: 6, color: C.blue, fontSize: 8, fontFamily: C.mono, fontWeight: 700, cursor: 'pointer' }}>{aiTestResult ? 'AI OK' : 'Test AI'}</button>
         </div>
       </Section>
 

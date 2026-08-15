@@ -9,8 +9,18 @@ import { NextRequest } from 'next/server';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
+// BUG FIX (SECURITY): endpoint /api/copilot/stream giờ yêu cầu bridge token
+// (backend đã chặn public) — SSE route phải forward Authorization, không được
+// gửi rỗng như trước (trước đây stream public nên không cần).
+const bridgeToken = (
+  process.env.QUANTAI_BRIDGE_TOKEN ||
+  process.env.ATE_BRIDGE_TOKEN ||
+  process.env.MT5_BRIDGE_TOKEN ||
+  ''
+);
+
 const BACKEND_URL = (
-  process.env.ATE_BACKEND_URL || 'http://113.173.192.226:8848'
+  process.env.ATE_BACKEND_URL || 'http://127.0.0.1:8005'
 ).replace(/\/+$/, '');
 
 export async function GET(req: NextRequest) {
@@ -27,6 +37,7 @@ export async function GET(req: NextRequest) {
         'Accept': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
+        'Authorization': bridgeToken ? `Bearer ${bridgeToken}` : '',
       },
       cache: 'no-store',
     });
@@ -63,7 +74,9 @@ export async function POST(req: NextRequest) {
       method: 'POST',
       headers: {
         'Content-Type': req.headers.get('content-type') || 'application/json',
-        'Authorization': req.headers.get('authorization') || '',
+        // BUG FIX (SECURITY): không forward Authorization tuỳ ý từ client xuống
+        // backend — backend validate token nghiêm ngặt nên dùng bridge token nội bộ.
+        'Authorization': bridgeToken ? `Bearer ${bridgeToken}` : '',
       },
       body,
     });

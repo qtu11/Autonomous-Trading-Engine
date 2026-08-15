@@ -291,7 +291,7 @@ python server.py
 cd web
 npm install
 npm run dev
-# Frontend: http://localhost:3000
+# Frontend: http://localhost:3005
 ```
 
 ### Production Deployment

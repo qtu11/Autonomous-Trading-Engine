@@ -274,18 +274,26 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
           {activeTab === 'risk' && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
               <Card title="RISK MANAGEMENT RULES">
+                {/* BUG FIX: trước đây label (%) nhưng value là fraction (0.01 = 1%);
+                    người dùng gõ 2 sẽ hiểu là 2% nhưng lưu 2.0 = 200%. Giờ hiển thị %
+                    và chia 100 khi lưu. */}
                 <Field label="Risk per Trade (%)">
-                  <NumInput value={cfg.risk_per_trade_fraction ?? 0.01} step={0.005} min={0.001} max={0.10}
-                    onCommit={(v: number) => update({ risk_per_trade_fraction: v })} />
+                  <NumInput value={((cfg.risk_per_trade_fraction ?? 0.01) * 100)} step={0.5} min={0.1} max={10}
+                    onCommit={(v: number) => update({ risk_per_trade_fraction: v / 100 })} />
                 </Field>
                 <Field label="Max Open Positions">
                   <NumInput value={cfg.max_open_positions ?? 5} step={1} min={1} max={20} int
                     onCommit={(v: number) => update({ max_open_positions: v })} />
                 </Field>
-                <Field label="Max Spread (pips)">
-                  <NumInput value={cfg.max_spread ?? 4.5} step={0.5} min={0.5} max={50}
+                {/* BUG FIX: đơn vị là "quote price" (ask-bid, XAU ~0.3-0.5) chứ KHÔNG
+                    phải pips — nhãn cũ gây hiểu nhầm, check spread không bao giờ chặn. */}
+                <Field label="Max Spread (quote units)">
+                  <NumInput value={cfg.max_spread ?? 4.5} step={0.1} min={0.05} max={50}
                     onCommit={(v: number) => update({ max_spread: v })} />
                 </Field>
+                <div style={{ fontSize: 7.5, color: C.muted, fontFamily: C.mono }}>
+                  XAUUSD spread (ask-bid) thường ~0.3-0.5 → đặt ngưỡng 0.5 để chặn lệnh lúc spread rộng.
+                </div>
               </Card>
 
               <Card title="DCA — NHỒI LỆNH TRUNG BÌNH GIÁ">
@@ -311,9 +319,10 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                   <NumInput value={cfg.dca_interval_sec ?? 300} step={60} min={60} max={3600} int
                     onCommit={(v: number) => update({ dca_interval_sec: v })} />
                 </Field>
-                <Field label="Max Risk / Balance">
-                  <NumInput value={cfg.dca_max_risk_balance_pct ?? 0.01} step={0.005} min={0.001} max={0.05}
-                    onCommit={(v: number) => update({ dca_max_risk_balance_pct: v })} />
+                {/* BUG FIX: hiển thị % thay vì fraction (giống Risk per Trade) */}
+                <Field label="Max Risk / Balance (%)">
+                  <NumInput value={((cfg.dca_max_risk_balance_pct ?? 0.01) * 100)} step={0.5} min={0.1} max={5}
+                    onCommit={(v: number) => update({ dca_max_risk_balance_pct: v / 100 })} />
                 </Field>
               </Card>
 

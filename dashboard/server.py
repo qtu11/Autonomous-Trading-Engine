@@ -59,11 +59,19 @@ import pandas as pd
 
 import numpy as np
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket
 
 from fastapi.middleware.cors import CORSMiddleware
 
 from fastapi.responses import JSONResponse, StreamingResponse
+
+# BUG FIX: rate limiting thực sự — trước đây rate_limit.py tồn tại nhưng chỉ
+
+# được nhắc trong patch_integration.py (file hướng dẫn dạng docstring, KHÔNG
+
+# import) nên backend không có giới hạn nào. Áp dụng cho endpoint đắt/nhạy cảm.
+
+from rate_limit import rate_limiter
 
 
 
@@ -193,9 +201,10 @@ VERSION = "3.0.0"
 APP_NAME = "TradeAI ATE Dashboard"
 
 DEBUG = os.getenv("DEBUG", "false").lower() == "true"# ─── EXTERNAL SERVICES CONFIG ────────────────────────────────────────────────
-# Default port: 8848 (chuẩn hoá toàn bộ project — production VPS, Docker,
-# hints checklist đều dùng giá trị này). Đổi qua env ATE_DASHBOARD_PORT.
-DEFAULT_DASHBOARD_PORT = 8848
+# Default port: 8005 (chuẩn hoá theo ENVIRONMENT_CONFIG.md — backend LUÔN chạy
+# 8005; 8848 chỉ là cổng public của nginx trên home server). Mọi môi trường
+# triển khai (VPS Docker, Cloudlocal, local) đều ghi đè qua ATE_DASHBOARD_PORT.
+DEFAULT_DASHBOARD_PORT = 8005
 DASHBOARD_PORT = int(os.getenv("ATE_DASHBOARD_PORT", str(DEFAULT_DASHBOARD_PORT)))
 BRIDGE_URL = os.getenv("BRIDGE_URL", "http://localhost:8007")  # Python MT5 Bridge
 AI_ENGINE_URL = os.getenv("AI_ENGINE_URL", "http://localhost:8006")  # AI Engine
@@ -224,27 +233,66 @@ def _enqueue_command(cmd: Dict[str, Any]) -> None:
 
     _commands.append(cmd) không bao giờ xóa lệnh cũ — EA không claim thì list
 
-    tích lũy mãi mãi, cứ 24h có thể tích hàng nghìn dict."""
+    tích lũy mãi mãi, cứ 24h có thể tích hàng nghìn dict.
+
+    BUG FIX 2: điều kiện break cũ (`len(_commands) <= _COMMANDS_MAX`) không bao
+
+    giờ đúng tại thời điểm kiểm tra (vừa append nên len luôn > MAX) → vòng lặp
+
+    luôn pop — kể cả lệnh QUEUED/PENDING/CLAIMED đang chờ EA claim. Giờ chỉ
+
+    drop các lệnh ở trạng thái TERMINAL (EXECUTED/REJECTED/FAILED/EXPIRED/FILLED)
+
+    cũ nhất; không bao giờ đánh rơi lệnh chưa xử lý."""
 
     _commands.append(cmd)
 
     if len(_commands) > _COMMANDS_MAX:
+        _TERMINAL = ("EXECUTED", "REJECTED", "FAILED", "EXPIRED", "FILLED")
+        now = datetime.now(timezone.utc)
+        try:
+            ttl_sec = float(os.getenv("ATE_DEMO_COMMAND_TTL_SECONDS", "300"))
+        except ValueError:
+            ttl_sec = 300.0
+        to_drop = len(_commands) - _COMMANDS_MAX
+        kept = []
+        dropped = 0
+        for cmd_entry in _commands:
+            stale = False
+            if cmd_entry.get("status") in ("QUEUED", "PENDING", "CLAIMED"):
+                try:
+                    ts = datetime.fromisoformat(str(cmd_entry.get("ts", "")).replace("Z", "+00:00"))
+                    stale = (now - ts).total_seconds() > ttl_sec
+                except Exception:
+                    stale = False
+            if dropped < to_drop and (cmd_entry.get("status") in _TERMINAL or stale):
+                dropped += 1
+                continue
+            kept.append(cmd_entry)
+        if dropped > 0:
+            _commands[:] = kept
 
-        # pop các lệnh TERMINAL (EXECUTED/REJECTED/FAILED/EXPIRED) cũ nhất;
 
-        # nếu tất cả đều PENDING/QUEUED/CLAIMED thì pop cũ nhất vẫn an toàn
 
-        # (các lệnh PENDING > _COMMANDS_MAX phút đã bị expire ở _ai_trade_loop).
+_demo_ticket_seq = 100000
 
-        for _ in range(len(_commands) - _COMMANDS_MAX):
 
-            oldest = _commands[0]
 
-            if oldest.get("status") in ("QUEUED", "PENDING", "CLAIMED") and len(_commands) <= _COMMANDS_MAX:
+def _next_demo_ticket() -> int:
 
-                break
+    """Sinh ticket demo tăng dần — tránh trùng ticket do random.randint
 
-            _commands.pop(0)
+    (BUG FIX: random 100000-999999 có thể trùng khi mở nhiều lệnh demo)."""
+
+    global _demo_ticket_seq
+
+    _demo_ticket_seq += 1
+
+    if _demo_ticket_seq > 99999999:
+
+        _demo_ticket_seq = 100001
+
+    return _demo_ticket_seq
 
 
 
@@ -263,6 +311,22 @@ _cache_lock = asyncio.Lock()
 _analysis_cache: Dict[str, Dict[str, Any]] = {}  # key = symbol:method:tf -> {result, ts}
 
 _ANALYSIS_TTL = 5  # seconds
+
+_ANALYSIS_CACHE_MAX = 200  # BUG FIX: chặn growth vô hạn theo symbol:method:tf
+
+_MARKET_CACHE_MAX = 100
+
+
+
+def _trim_dict_cache(cache: dict, cap: int) -> None:
+
+    """Giới hạn kích thước cache — xoá entry cũ nhất khi vượt cap (FIFO)."""
+
+    if len(cache) > cap:
+
+        for k in list(cache.keys())[:len(cache) - cap]:
+
+            cache.pop(k, None)
 
 
 
@@ -573,7 +637,23 @@ app = FastAPI(
 
 )
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+# BUG FIX (SECURITY): trước đây allow_origins=["*"] + allow_credentials=True —
+# combo này bị browser chặn (credentials vô hiệu) và mở CORS toàn bộ cho mọi origin.
+# Giờ đọc danh sách origin từ ATE_ALLOWED_ORIGINS (env, mặc định local + Vercel).
+_CORS_ORIGINS = [
+    o.strip() for o in os.getenv(
+        "ATE_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://localhost:3005,http://127.0.0.1:3000,http://127.0.0.1:3005,https://autonomous-trading-engine.vercel.app"
+    ).split(",") if o.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 
@@ -2160,6 +2240,8 @@ async def run_ai_analysis(symbol: str, method: str, tf: Optional[str] = None) ->
 
         _analysis_cache[cache_key] = {"result": empty, "ts": now}
 
+        _trim_dict_cache(_analysis_cache, _ANALYSIS_CACHE_MAX)
+
         return empty
 
 
@@ -2207,6 +2289,7 @@ async def run_ai_analysis(symbol: str, method: str, tf: Optional[str] = None) ->
     result["symbol"] = symbol
 
     _analysis_cache[cache_key] = {"result": result, "ts": datetime.now(timezone.utc).timestamp()}
+    _trim_dict_cache(_analysis_cache, _ANALYSIS_CACHE_MAX)
     return result
 
 
@@ -2661,13 +2744,19 @@ async def _ai_trade_loop():
                 # pyrefly: ignore [unsupported-operation]
                 if not has_same_direction and len(current_positions) < max_pos:
                     # Check for recent same-direction trade (avoid duplicates within 60s)
-                    recent = [
-                        c for c in _commands
-                        if c.get("action") == signal
-                        # pyrefly: ignore [bad-argument-type]
-                        and resolve_symbol(c.get("symbol")) == resolve_symbol(symbol)
-                        and (datetime.now(timezone.utc) - datetime.fromisoformat(c["ts"].replace("Z", "+00:00"))).total_seconds() < 60
-                    ]
+                    recent = []
+                    now_utc = datetime.now(timezone.utc)
+                    for c in _commands:
+                        if c.get("action") != signal:
+                            continue
+                        if resolve_symbol(c.get("symbol")) != resolve_symbol(symbol):
+                            continue
+                        try:
+                            ts = datetime.fromisoformat((c.get("ts") or "").replace("Z", "+00:00"))
+                        except Exception:
+                            continue
+                        if (now_utc - ts).total_seconds() < 60:
+                            recent.append(c)
 
                     if not recent:
                         # PHASE 1.3: Risk Manager check (9 conditions)
@@ -2729,9 +2818,13 @@ async def _ai_trade_loop():
                         # QUEUED không bao giờ được thực thi -> giả lập fill để
                         # auto-trade hoạt động thấy được. Ở chế độ LIVE thì
                         # FAIL-CLOSED: không giả lập, giữ QUEUED chờ EA claim.
+
                         if not _account.get("mt5_connected") and _is_demo_mode():
-                            ticket = random.randint(100000, 999999)
+
+                            ticket = _next_demo_ticket()
+
                             # pyrefly: ignore [bad-argument-type]
+
                             if rkey not in _positions:
                                 _positions[rkey] = []
                             _positions[rkey].append({
@@ -3278,7 +3371,7 @@ async def _dca_check(symbol: str, method: str, atr: float):
 
         if not _account.get("mt5_connected") and _is_demo_mode():
 
-            new_ticket = random.randint(100000, 999999)
+            new_ticket = _next_demo_ticket()
 
             if rkey not in _positions:
 
@@ -3398,7 +3491,25 @@ async def health():
 
 # ─── AUTHENTICATION ──────────────────────────────────────────────────────────
 
-@app.post("/api/auth/login")
+async def _rate_limited(request: Request):
+
+    """Dependency rate-limit theo IP (60 req/phút/IP). Dùng cho endpoint gọi LLM
+
+    thật hoặc nhạy cảm (login/chat/news/test) — KHÔNG áp cho /api/market hay
+
+    /api/v1/* (EA poll liên tục, sẽ bị chặn nhầm)."""
+
+    client_ip = request.client.host if request.client else "unknown"
+
+    allowed, _ = await rate_limiter.limiter.check_rate_limit(client_ip)
+
+    if not allowed:
+
+        raise HTTPException(status_code=429, detail="Too Many Requests — thử lại sau 60s")
+
+
+
+@app.post("/api/auth/login", dependencies=[Depends(_rate_limited)])
 
 async def login(req: LoginRequest):
 
@@ -3418,7 +3529,13 @@ async def login(req: LoginRequest):
 
         _add_log("INFO", "LOGIN_SUCCESS", f"User {req.login} logged in")
 
-        return {"status": "SUCCESS", "token": token, "user": {"id": "admin", "login": req.login}}
+        # BUG FIX (SYNC): frontend đọc access_token/refresh_token — trả đủ alias
+
+        # để client gọi thẳng backend login vẫn khớp contract với web login.
+
+        return {"status": "SUCCESS", "token": token, "access_token": token,
+
+                "refresh_token": token, "user": {"id": "admin", "login": req.login}}
 
     _add_log("WARNING", "LOGIN_FAILED", f"Failed login: {req.login}")
 
@@ -3625,7 +3742,7 @@ async def activate_account(req: ActivateAccountRequest):
 # ─── MARKET DATA + CHART MARKUP ────────────────────────────────────────────────
 
 @app.get("/api/market")
-async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), count: int = Query(0, ge=0, le=150000), method: Optional[str] = Query(None)):
+async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), count: int = Query(0, ge=0, le=10000), method: Optional[str] = Query(None)):
     """Market data with method-specific chart markup (SMC / ICT / Price Action / Sniper / Structure Engine / Ultra)"""
     if count == 0:
         defaults = {"M1": 500, "M5": 500, "M15": 500, "M30": 500, "H1": 500, "H4": 500, "D1": 500}
@@ -4178,7 +4295,7 @@ async def create_order(req: OrderCreateRequest, request: Request):
 
     if not _account["mt5_connected"] and _is_demo_mode():
 
-        ticket = random.randint(100000, 999999)
+        ticket = _next_demo_ticket()
 
         sym = resolve_symbol(req.symbol)
 
@@ -4294,7 +4411,7 @@ async def cancel_pending(req: CancelPendingRequest, request: Request):
 
 
 
-@app.post("/api/news/analyze")
+@app.post("/api/news/analyze", dependencies=[Depends(_rate_limited)])
 
 async def news_analyze(req: NewsAnalyzeRequest, request: Request):
 
@@ -4941,7 +5058,11 @@ async def set_trading_method(req: TradingMethodRequest):
 
 
 
-    valid_methods = ["SNIPER", "SMC", "ICT", "PRICE_ACTION", "ULTRA_CONFLUENCE", "INDICATOR"]
+    # BUG FIX: thêm STRUCTURE_ENGINE — UI ControlCenter/Settings hiện nút ISE
+
+    # nhưng backend không nhận -> bấm nút lặng lẽ đổi thành SMC.
+
+    valid_methods = ["SNIPER", "SMC", "ICT", "PRICE_ACTION", "ULTRA_CONFLUENCE", "INDICATOR", "STRUCTURE_ENGINE"]
 
     if method not in valid_methods:
 
@@ -5058,6 +5179,126 @@ def _as_bool(val, default: bool = False) -> bool:
         return bool(val)
 
     return str(val).strip().lower() in ("true", "1", "yes", "on")
+
+
+
+# ─── STRICT BRIDGE TOKEN AUTH (BUG FIX SECURITY) ───────────────────────────
+
+# Trước đây backend chỉ check `startswith("Bearer ")` — KHÔNG verify giá trị token
+
+# nên bất kỳ ai gửi header Bearer giả đều qua được auth (mở/đóng lệnh REAL).
+
+# Giờ: token phải khớp QUANTAI_BRIDGE_TOKEN / ATE_BRIDGE_TOKEN / MT5_BRIDGE_TOKEN
+
+# (env). Nếu chưa cấu hình env → fallback đúng token mặc định tài liệu hoá.
+
+
+
+def _configured_bridge_tokens() -> set:
+
+    """Tập bridge token hợp lệ. FAIL-CLOSED: KHÔNG còn fallback token mặc định
+
+    ('20022007@Tu' đã public trong git history/docs). Nếu env không set → set rỗng
+
+    → mọi endpoint /api/* (trừ whitelist) trả 401, không ai mở/đóng lệnh được."""
+
+    vals = [
+
+        (os.getenv("QUANTAI_BRIDGE_TOKEN") or "").strip(),
+
+        (os.getenv("ATE_BRIDGE_TOKEN") or "").strip(),
+
+        (os.getenv("MT5_BRIDGE_TOKEN") or "").strip(),
+
+    ]
+
+    vals = [v for v in vals if v]
+
+    if not vals:
+
+        _add_log("CRITICAL", "BRIDGE_TOKEN_MISSING",
+
+                 "KHÔNG có bridge token nào được cấu hình (QUANTAI_BRIDGE_TOKEN/ATE_BRIDGE_TOKEN/MT5_BRIDGE_TOKEN). "
+
+                 "Toàn bộ endpoint /api/* (trừ whitelist) đang bị khóa fail-closed. "
+
+                 "Set env + đổi InpBridgeToken trong EA cho khớp trước khi vận hành.")
+
+    return set(vals)
+
+
+
+def _request_bearer_token(request: Request) -> str:
+
+    auth = request.headers.get("authorization", "") or ""
+
+    if not auth.startswith("Bearer "):
+
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+
+    return auth[len("Bearer "):].strip()
+
+
+
+def _check_bearer(request: Request) -> str:
+
+    """Strict auth fail-closed: trả token nếu hợp lệ, else 401."""
+
+    token = _request_bearer_token(request)
+
+    if token not in _configured_bridge_tokens():
+
+        raise HTTPException(status_code=401, detail="Invalid bridge token")
+
+    return token
+
+
+
+# Các endpoint công khai (dữ liệu thị trường / docs) — không cần auth.
+
+# Mọi /api/* khác (kể cả /api/control-center/status lộ balance/equity/login MT5
+
+# và /api/copilot/* chứa tín hiệu AI) đều bị middleware chặn nếu thiếu/sai token.
+
+_PUBLIC_PATHS = {
+
+    "/", "/health", "/favicon.ico",
+
+    "/docs", "/redoc", "/openapi.json",
+
+    "/api/auth/login",
+
+    "/api/status", "/api/market", "/api/patterns",
+
+    "/api/economic-calendar",
+
+}
+
+
+
+@app.middleware("http")
+
+async def _bridge_auth_middleware(request: Request, call_next):
+
+    """Chặn mọi request /api/* (trừ whitelist) nếu thiếu hoặc sai bridge token.
+
+    Không áp dụng cho WebSocket (http middleware không cover WS)."""
+
+    path = request.url.path
+
+    if path in _PUBLIC_PATHS:
+
+        return await call_next(request)
+
+    try:
+
+        _check_bearer(request)
+
+    except HTTPException as exc:
+
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+    return await call_next(request)
 
 
 
@@ -5311,7 +5552,7 @@ async def mt5_diagnostics(request: Request):
 
             "title": "Token khớp nhau",
 
-            "detail": "InpBridgeToken trong EA = QUANTAI_BRIDGE_TOKEN trong backend (mặc định 20022007@Tu)."
+            "detail": "InpBridgeToken trong EA phải = QUANTAI_BRIDGE_TOKEN trong backend (env — không còn token mặc định)."
 
         },
 
@@ -5356,7 +5597,7 @@ async def mt5_diagnostics(request: Request):
     }
 
 
-@app.post("/api/ai/test")
+@app.post("/api/ai/test", dependencies=[Depends(_rate_limited)])
 async def ai_test_provider(payload: Dict[str, Any]):
     """Forward AI provider connectivity test to the configured AI engine or
     run a minimal direct round-trip if AI engine URL is unreachable.
@@ -5572,21 +5813,49 @@ async def get_brain():
 
 
 
-    # Get recent signals
+    # BUG FIX: recent_decisions trước đây là dữ liệu GIẢ — tạo uuid mới + status
 
-    recent_signals = [
+    # ACTIVE mỗi lần gọi (frontend poll 2.5s → luôn thấy tín hiệu mới). Giờ lấy
 
-        {"decision_id": str(uuid.uuid4()), "ts": datetime.now(timezone.utc).isoformat(),
+    # từ _ai_events (sự kiện TRADE/HEARTBEAT thật do AI loop ghi) — ổn định id/ts.
 
-         "action": analysis.get("signal", "WAIT"), "confidence": analysis.get("score", 50) / 100,
+    recent_signals = []
 
-         "entry": analysis.get("last_price", 0), "stop_loss": 0, "take_profit": 0,
+    for ev in list(_ai_events)[-20:]:
 
-         "volume": 0.01, "reason_codes": analysis.get("factors", []), "status": "ACTIVE",
+        if ev.get("action") not in ("BUY", "SELL"):
 
-         "order_ticket": None}
+            continue
 
-    ]
+        details = ev.get("details") or {}
+
+        score = details.get("score", 0) or 0
+
+        recent_signals.append({
+
+            "decision_id": ev.get("id", str(uuid.uuid4())),
+
+            "ts": ev.get("ts"),
+
+            "action": ev.get("action"),
+
+            "confidence": (float(score) / 100.0) if isinstance(score, (int, float)) else 0,
+
+            "entry": details.get("entry") or analysis.get("last_price", 0),
+
+            "stop_loss": details.get("sl") or 0,
+
+            "take_profit": details.get("tp") or 0,
+
+            "volume": details.get("volume") or 0.01,
+
+            "reason_codes": [str(details.get("reason", ""))] if details.get("reason") else [],
+
+            "status": "SIGNALED",
+
+            "order_ticket": None,
+
+        })
 
 
 
@@ -5609,6 +5878,20 @@ async def get_brain():
         "recent_evaluations": _trades[-10:] if _trades else []
 
     }
+
+
+
+@app.get("/api/brain/adjustments")
+
+async def get_brain_adjustments():
+
+    """Danh sách điều chỉnh chiến lược (persist sau khi AI loop ghi adjustment).
+
+    BUG FIX: trước đây frontend gọi /api/brain/adjustments → 404 (route không
+
+    tồn tại). Hiện chưa có cơ chế persist adjustment nên trả mảng rỗng ổn định."""
+
+    return []
 
 
 
@@ -6070,7 +6353,7 @@ async def _build_copilot_context(req: CopilotChatRequest) -> str:
 
 
 
-@app.post("/api/copilot/chat")
+@app.post("/api/copilot/chat", dependencies=[Depends(_rate_limited)])
 
 async def copilot_chat(req: CopilotChatRequest):
 
@@ -6225,6 +6508,66 @@ async def copilot_log(limit: int = Query(50, ge=1, le=200)):
     """Get recent AI events"""
 
     return list(_ai_events)[-limit:]
+
+
+
+# ─── WEBSOCKET REALTIME STREAM (BUG FIX: endpoint được tài liệu hoá nhưng chưa
+
+# từng tồn tại — start.ps1/CLAUDE.md/docs trỏ ws://host/ws/stream) ──────────
+
+@app.websocket("/ws/stream")
+
+async def ws_stream(websocket: WebSocket):
+
+    """Broadcast sự kiện AI + telemetry realtime (~1s).
+
+    Client nhận JSON event từ _ai_events; khi không có event mới gửi ping giữ kết
+
+    nối. Không yêu cầu auth (dữ liệu thị trường/trạng thái — giống /api/copilot/stream)."""
+
+    await websocket.accept()
+
+    last_idx = max(0, len(_ai_events) - 20)
+
+    try:
+
+        while True:
+
+            evs = list(_ai_events)
+
+            if len(evs) > last_idx:
+
+                for ev in evs[last_idx:]:
+
+                    await websocket.send_text(json.dumps(ev, default=str))
+
+                last_idx = len(evs)
+
+            else:
+
+                await websocket.send_text(json.dumps({
+
+                    "type": "ping",
+
+                    "ts": datetime.now(timezone.utc).isoformat(),
+
+                }, default=str))
+
+            await asyncio.sleep(1)
+
+    except Exception:
+
+        pass
+
+    finally:
+
+        try:
+
+            await websocket.close()
+
+        except Exception:
+
+            pass
 
 
 
@@ -7001,6 +7344,8 @@ class CandlePushRequest(BaseModel):
 
     executor_id: Optional[str] = None
 
+    account_login: Optional[int] = None  # BUG FIX: để candle push ghi đúng account
+
     symbol: str
 
     timeframe: str
@@ -7055,15 +7400,29 @@ async def bridge_candles(req: CandlePushRequest, request: Request):
 
     _market_cache[cache_key]["source"] = "EA"
 
+    _trim_dict_cache(_market_cache, _MARKET_CACHE_MAX)
+
     if candles:
 
         _bridge_data_real = True
 
-    _account["last_ea_candles_at"] = datetime.now(timezone.utc).isoformat()
+    # BUG FIX: ghi dấu thời gian vào đúng account của EA (nếu payload có
 
-    # pyrefly: ignore [bad-assignment]
+    # account_login); ngược lại fallback về account active — tránh lẫn lộn
 
-    _account["ea_symbol"] = req.symbol or _account.get("ea_symbol")
+    # last_ea_candles_at giữa nhiều EA/login.
+
+    if req.account_login:
+
+        target_acc = get_account(str(req.account_login))
+
+    else:
+
+        target_acc = _account._active()
+
+    target_acc["last_ea_candles_at"] = datetime.now(timezone.utc).isoformat()
+
+    target_acc["ea_symbol"] = req.symbol or target_acc.get("ea_symbol")
 
     
 
@@ -7913,11 +8272,13 @@ def evaluate_risk_gate(symbol: str, signal: str, entry: float, sl: float, tp: fl
 
     
 
-    # 4. Margin
+    # 4. Margin — BUG FIX: trước đây hardcode *100 (giả định XAU 100oz/lot) nên
+
+    # ước lượng margin cho forex sai lệch. Dùng hệ số quy đổi theo symbol.
 
     free_margin = _account.get("margin_free", 10000)
 
-    margin_required = abs(entry - sl) * 100 * 0.01  # Estimate for 0.01 lot
+    margin_required = abs(entry - sl) * _lot_value_multiplier(symbol) * 0.01  # Estimate for 0.01 lot
 
     margin_ok = free_margin > margin_required * 5  # 5x safety margin
 
@@ -8074,6 +8435,120 @@ async def risk_evaluate(request: Request):
 
 # ─── SETTINGS ─────────────────────────────────────────────────────────────────
 
+# Whitelist các key được phép ghi qua /api/control-center/settings. BUG FIX
+
+# (SECURITY): trước đây endpoint ghi bất kỳ key nào vào _config — client có token
+
+# có thể tự set execution_mode=LIVE, live_armed=true, kill_switch=false... bypass
+
+# mọi endpoint kiểm soát. Giờ chỉ key trong whitelist được ghi, kèm ép kiểu.
+
+_SETTINGS_ALLOWLIST = {
+
+    "trading_method", "risk_per_trade_fraction", "max_open_positions", "max_spread",
+
+    "ai_auto_loop", "demo_armed", "live_armed", "kill_switch",
+
+    "dca_enabled", "dca_max_levels", "dca_distance_atr", "dca_interval_sec",
+
+    "dca_volume_multiplier", "dca_max_risk_balance_pct",
+
+    "telegram_bot_token", "telegram_chat_id", "telegram_enabled",
+
+    "notify_on_open", "notify_on_close", "notify_on_signal",
+
+    "gateway_url", "gateway_key", "active_ai_model",
+
+    "symbol", "symbols", "timeframe", "news_window_minutes",
+
+    "mt5_login", "mt5_server",
+
+}
+
+
+
+# Secret key KHÔNG bao giờ echo ra client qua get_settings
+
+_SETTINGS_SECRET_KEYS = {
+
+    "gateway_key", "api_key", "custom_api_key", "admin_password", "mt5_password",
+
+    "jwt_secret", "jwt_refresh_secret", "operator_token", "ate_operator_token",
+
+}
+
+
+
+def _coerce_setting_value(key: str, val):
+
+    """Ép kiểu an toàn cho từng key setting (trả None nếu không hợp lệ)."""
+
+    if key == "trading_method":
+
+        raw = str(val).upper().replace(" ", "_").replace("-", "_")
+
+        mapping = {
+
+            "PA": "PRICE_ACTION", "PRICE_ACTION": "PRICE_ACTION",
+
+            "ULTRA": "ULTRA_CONFLUENCE", "ULTRA_CONFLUENCE": "ULTRA_CONFLUENCE",
+
+            "SNIPER": "SNIPER", "SMC": "SMC", "ICT": "ICT",
+
+            "INDICATOR": "INDICATOR", "STRUCTURE_ENGINE": "STRUCTURE_ENGINE",
+
+        }
+
+        return mapping.get(raw, "SMC")
+
+    if key in ("ai_auto_loop", "demo_armed", "live_armed", "kill_switch",
+
+               "telegram_enabled", "notify_on_open", "notify_on_close",
+
+               "notify_on_signal", "dca_enabled"):
+
+        return _as_bool(val, False)
+
+    if key in ("risk_per_trade_fraction", "max_spread", "dca_distance_atr",
+
+               "dca_volume_multiplier", "dca_max_risk_balance_pct"):
+
+        try:
+
+            return float(val)
+
+        except (TypeError, ValueError):
+
+            return _config.get(key)
+
+    if key in ("max_open_positions", "dca_max_levels", "dca_interval_sec",
+
+               "news_window_minutes"):
+
+        try:
+
+            return max(1, int(val))
+
+        except (TypeError, ValueError):
+
+            return _config.get(key)
+
+    if key in ("symbols",):
+
+        if isinstance(val, list):
+
+            return [str(s).strip() for s in val if str(s).strip()]
+
+        if isinstance(val, str) and val.strip():
+
+            return [s.strip() for s in val.split(",") if s.strip()]
+
+        return _config.get(key)
+
+    return val
+
+
+
 @app.get("/api/control-center/settings")
 
 async def get_settings(request: Request):
@@ -8088,11 +8563,17 @@ async def get_settings(request: Request):
 
 
 
+    # BUG FIX (SECURITY): không echo secret (gateway_key, api_key, jwt...) ra client.
+
+    safe_config = {k: v for k, v in _config.items() if k not in _SETTINGS_SECRET_KEYS}
+
+
+
     return {
 
         "status": "SUCCESS",
 
-        "runtime_config": _config,
+        "runtime_config": safe_config,
 
         "account": {**_account._active(), "ea_connected": _ea_fresh(),
 
@@ -8153,22 +8634,20 @@ async def update_settings_endpoint(request: Request):
 
 
     updated_keys = []
+    rejected_keys = []
     for key, val in body.items():
-        if key == "trading_method":
-            raw = str(val).upper().replace(" ", "_").replace("-", "_")
-            if raw in ("PA", "PRICE_ACTION"):
-                raw = "PRICE_ACTION"
-            elif raw in ("ULTRA", "ULTRA_CONFLUENCE"):
-                raw = "ULTRA_CONFLUENCE"
-            elif raw in ("SNIPER", "SMC", "ICT", "INDICATOR"):
-                pass
-            else:
-                raw = "SMC"
-            _config["trading_method"] = raw
-        else:
-            _config[key] = val
+        if key not in _SETTINGS_ALLOWLIST:
+            rejected_keys.append(key)
+            continue
+        coerced = _coerce_setting_value(key, val)
+        if coerced is None:
+            rejected_keys.append(key)
+            continue
+        _config[key] = coerced
         updated_keys.append(key)
 
+    if rejected_keys:
+        _add_log("WARNING", "SETTINGS_UPDATE", f"Ignored non-allowlisted/invalid keys: {rejected_keys}")
     _add_log("INFO", "SETTINGS_UPDATE", f"Updated settings: {updated_keys} | active_method={_config.get('trading_method')}")
     return {"status": "SUCCESS", "updated": updated_keys, "config": _config}
 
@@ -8180,12 +8659,16 @@ async def update_settings_endpoint(request: Request):
 
 # MAIN ENTRY POINT (must be at end of file so all routes are registered)
 
-# ==============================================================================
-# MAIN ENTRY POINT
-# ==============================================================================
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("ATE_DASHBOARD_PORT", os.getenv("QUANTAI_DASHBOARD_PORT", os.getenv("DASHBOARD_PORT", os.getenv("PORT", "8848")))))
+    if sys.platform == "win32":
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except Exception:
+            pass
+    # BUG FIX (PORT): default trước đây là 8848 (port nginx public) — chạy native
+    # không có nginx thì mọi API proxy (8005) đều 502. Chuẩn local = 8005.
+    port = int(os.getenv("ATE_DASHBOARD_PORT", os.getenv("QUANTAI_DASHBOARD_PORT", os.getenv("DASHBOARD_PORT", os.getenv("PORT", "8005")))))
     host = os.getenv("ATE_DASHBOARD_HOST", os.getenv("QUANTAI_DASHBOARD_HOST", "0.0.0.0"))
     print(f"[ATE] Starting FastAPI Server on {host}:{port}...")
-    uvicorn.run(app, host=host, port=port)
+    uvicorn.run(app, host=host, port=port, ws_ping_interval=None, timeout_keep_alive=30)
