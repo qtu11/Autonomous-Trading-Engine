@@ -32,7 +32,7 @@ input bool     InpChartMarkupEnabled = true;                 // Bật/Tắt vẽ
 input int      InpMarkupReRenderSec  = 5;                    // Chu kỳ vẽ lại cấu trúc AI trên biểu đồ (giây)
 input int      InpMarkupMaxObjects   = 120;                  // Số lượng đối tượng vẽ tối đa trên biểu đồ
 input int      InpCandlesIntervalSec = 30;                   // Chu kỳ đẩy dữ liệu nến thời gian thực (giây)
-input int      InpCandlesHistory    = 3000;                  // Số nến lịch sử tối đa đẩy lên (3000 nến an toàn)
+input int      InpCandlesHistory    = 500;                   // Số nến lịch sử tối đa đẩy lên (500 nến chuẩn hóa, siêu nhẹ)
 input int      InpCandlesChunkSize  = 500;                   // Số nến mỗi request (500 nến ~35KB siêu nhẹ, không nghẽn)
 input int      InpLiveCandleIntervalSec = 3;                // Chu kỳ đẩy nến ĐANG HÌNH THÀNH (real-time, close = giá hiện tại như MT5)
 
@@ -372,7 +372,7 @@ void OnTick()
 //+------------------------------------------------------------------+
 string BridgeHeaders()
 {
-   return "Content-Type: application/json\r\nAuthorization: Bearer " + InpBridgeToken + "\r\n";
+   return "Content-Type: application/json\r\nAuthorization: Bearer " + InpBridgeToken + "\r\nConnection: keep-alive\r\n";
 }
 
 //+------------------------------------------------------------------+
@@ -1268,8 +1268,8 @@ bool PushCandlesChunk(string tfLabel, int start, int end,
 //+------------------------------------------------------------------+
 void PushCandlesTimeframe(ENUM_TIMEFRAMES tf, int history, string tfLabel)
 {
-   // Safe limit: tối đa 1500 nến để tránh nghẽn hàng đợi WebRequest của MT5
-   int safeHistory = MathMin(history, 1500);
+   // Safe limit: tối đa 500 nến chuẩn hóa để tối ưu hóa hiệu năng và siêu nhẹ
+   int safeHistory = MathMin(history, 500);
    MqlRates rates[];
    ArraySetAsSeries(rates, false); // Oldest first, newest last
    int copied = CopyRates(g_symbol, tf, 0, safeHistory, rates);
@@ -1305,14 +1305,12 @@ void SendLiveCandles()
       return;
 
    // M1 base cho resample
-   PushCandlesTimeframe(PERIOD_M1, MathMin(InpCandlesHistory, 1500), "M1");
+   PushCandlesTimeframe(PERIOD_M1, MathMin(InpCandlesHistory, 500), "M1");
 
    // Đẩy thêm TF chart hiện tại nếu khác M1
    if(_Period != PERIOD_M1)
    {
-      int tfHistory = MathMin(InpCandlesHistory / 4, 1000);
-      if(tfHistory < 500) tfHistory = 500;
-      PushCandlesTimeframe(_Period, tfHistory, TimeframeLabel(_Period));
+      PushCandlesTimeframe(_Period, MathMin(InpCandlesHistory, 500), TimeframeLabel(_Period));
    }
 }
 

@@ -94,7 +94,7 @@ export function fetchControlCenterStatus() { return getJson<ControlCenterStatus>
 
 export interface MarketData { candles?: Candle[]; markup?: MarkupResponse; bid?: number; ask?: number; spread?: number; }
 export async function fetchMarket(symbol = 'XAUUSD', tf = 'M15') {
-  const data = await getJson<MarketData>(`${API_BASE}/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}`);
+  const data = await getJson<MarketData>(`${API_BASE}/api/market?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}&count=500`);
   if (!data || !Array.isArray(data.candles)) return null;
   return data;
 }

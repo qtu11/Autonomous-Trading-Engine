@@ -69,7 +69,7 @@ BSL_SSL_CLUSTER = 0.0030  # 0.3% cluster band for BSL/SSL pools
 METHOD_OBJECT_GROUPS: dict[str, set[str]] = {
     "SNIPER": {
         "EMA", "EMA_RIBBON", "VWAP", "ADX", "MACD_LINE", "MACD_SIGNAL", "RSI_LEVEL",
-        "SNIPER_SIGNAL", "SNIPER_SL", "SNIPER_TP1", "SNIPER_TP2", "SNIPER_TP3",
+        "SNIPER_SIGNAL", "SNIPER_ENTRY", "SNIPER_SL", "SNIPER_TP1", "SNIPER_TP2", "SNIPER_TP3",
         "SNIPER_TP4", "SNIPER_TP5", "SNIPER_SCORE", "SNIPER_DASH",
         "SWING", "BOS", "CHoCH", "MSS", "LIQUIDITY", "LIQUIDITY_POOL", "SFP",
         "SUPPLY_DEMAND", "TRENDLINE", "SUPPORT", "RESISTANCE", "SR",
@@ -79,7 +79,7 @@ METHOD_OBJECT_GROUPS: dict[str, set[str]] = {
         "SWING", "BOS", "CHoCH", "MSS", "OB", "BREAKER", "MITIGATION", "REJECTION",
         "FVG", "iFVG", "BSL", "SSL", "EQH", "EQL", "LIQUIDITY", "LIQUIDITY_POOL",
         "SFP", "INDUCEMENT", "SUPPLY_DEMAND", "VOLUME_IMBALANCE", "VOID",
-        "DEALING_RANGE", "DEALING_CURVE", "PD", "TRENDLINE",
+        "DEALING_RANGE", "DEALING_CURVE", "PD", "TRENDLINE", "SIGNAL", "ENTRY", "SL", "TP",
     },
     "ICT": {
         "ASIAN", "KILLZONE", "OTE", "PD", "JUDAS_SWING", "PO3", "SILVER_BULLET",
@@ -88,18 +88,19 @@ METHOD_OBJECT_GROUPS: dict[str, set[str]] = {
         "LIQUIDITY", "LIQUIDITY_POOL", "INDUCEMENT", "SUPPLY_DEMAND",
         "VOLUME_IMBALANCE", "VOID", "DEALING_RANGE", "DEALING_CURVE",
         "TURTLE_SOUP", "SMT_DIVERGENCE", "AMD", "SESSION_HL", "PDH_PDL",
-        "WEEKLY_MONTHLY_HL",
+        "WEEKLY_MONTHLY_HL", "SIGNAL", "ENTRY", "SL", "TP",
     },
     "PRICE_ACTION": {
         "CANDLE_PATTERN", "PATTERN", "CHART_PATTERN", "SUPPORT", "RESISTANCE", "SR",
         "PIVOT", "PDH", "PDL", "TRENDLINE", "TREND", "SWING", "BOS", "CHoCH",
         "CHANNEL", "RANGE", "BREAKOUT", "PULLBACK", "RETEST", "FAKE_BREAKOUT",
+        "SIGNAL", "ENTRY", "SL", "TP",
     },
     "STRUCTURE_ENGINE": {
         "BASELINE", "VOLATILITY_ENVELOPE", "BAND_LAYER", "SWING", "BOS", "CHoCH",
         "SUPPLY_DEMAND", "OB", "FVG", "LIQUIDITY", "LIQUIDITY_POOL", "SWEEP", "EQH", "EQL",
-        "CONTINUATION", "REVERSAL_REF", "TRAILING_STOP", "TP1", "TP2", "TP3", "SL",
-        "STRUCTURE_SCORE", "DASHBOARD", "DISPLACEMENT",
+        "CONTINUATION", "REVERSAL_REF", "TRAILING_STOP", "TP1", "TP2", "TP3", "SL", "ENTRY",
+        "STRUCTURE_SCORE", "DASHBOARD", "DISPLACEMENT", "ISE_SIGNAL", "SIGNAL", "ISE_DASH", "CONFLUENCE",
     },
     "ULTRA_CONFLUENCE": set(),  # empty -> include everything
 }
@@ -112,6 +113,26 @@ def _dt(ts: Any) -> str:
     if isinstance(ts, (pd.Timestamp, datetime)):
         return ts.isoformat()
     return ""
+
+
+def _to_unix_ts(val: Any) -> int:
+    if val is None or pd.isna(val):
+        return 0
+    if isinstance(val, (int, np.integer)):
+        return int(val)
+    if isinstance(val, (float, np.floating)):
+        return int(val)
+    if isinstance(val, (pd.Timestamp, datetime)):
+        return int(val.timestamp())
+    if isinstance(val, str):
+        try:
+            return int(datetime.fromisoformat(val.replace("Z", "+00:00")).timestamp())
+        except Exception:
+            try:
+                return int(pd.to_datetime(val).timestamp())
+            except Exception:
+                pass
+    return 0
 
 
 def _ema(series: pd.Series, period: int) -> pd.Series:
@@ -208,20 +229,14 @@ def compute_sniper_overlay(
     broker_utc_offset_hours: float = 2.0,
     atr_multiplier: float = 1.5,
 ) -> list[dict[str, Any]]:
-    """Returns Sniper objects: EMA ribbon + VWAP + score + (if crossover) signal + SL + 5 TP levels.
+    """Returns Sniper objects: EMA ribbon + VWAP + score + historical BUY/SELL signals + active SL + 5 TP levels.
 
-    Faithful to the TradingView Pine Script the user provided:
+    Faithful to the TradingView Pine Script (Sniper Entry/Exit with SL&TP small small):
         - EMA9 vs EMA21 crossover -> BUY / SELL trigger
         - SL = entry ± ATR14 * atr_multiplier (default 1.5)
         - TP1..5 = entry ± risk * (1..5)
-        - Score 0-100 for bull/bear based on 7 factors:
-            1. close vs VWAP
-            2. RSI > 50
-            3. MACD main > signal
-            4. EMA9 > EMA21
-            5. ADX > 25 AND close > EMA9
-            6. volume > vol MA AND close > open
-            7. RSI(14) on 5m > 50  (uses df_lower_tf if provided)
+        - 15-factor Dual Score & Metric HUD Table
+        - Multi-bar signal history scan to render all BUY/SELL labels across chart
     """
     objects: list[dict[str, Any]] = []
     if df is None or df.empty or len(df) < max(EMA_SLOW, MACD_SLOW) + 5:
@@ -345,19 +360,24 @@ def compute_sniper_overlay(
 
     objects.append({
         "type": "SNIPER_SCORE", "direction": "NEUTRAL", "label": "SNIPER_SCORE",
-        # pyrefly: ignore [unnecessary-type-conversion]
         "top": float(bull_pct), "bottom": float(bear_pct),
         "price": float(close.iloc[-1]),
         "index": 0, "time_start": _dt(last_time),
         "bull_pct": bull_pct, "bear_pct": bear_pct, "bias": bias_text,
         "factors": {
-            "price_vs_vwap": close.iloc[-1] > vwap.iloc[-1],
-            "rsi_above_50": rsi.iloc[-1] > 50,
-            "macd_bull": macd_line.iloc[-1] > macd_sig.iloc[-1],
-            "ema9_above_21": ema9.iloc[-1] > ema21.iloc[-1],
-            "adx_strong_with_trend": float(adx.iloc[-1]) > 25,
-            "volume_confirm": float(vol.iloc[-1]) > float(vol_ma.iloc[-1]) if not pd.isna(vol_ma.iloc[-1]) else False,
-            "rsi_5m_above_50": rsi_5m > 50,
+            "price_vs_vwap": "ABOVE" if close.iloc[-1] > vwap.iloc[-1] else "BELOW",
+            "rsi_val": round(float(rsi.iloc[-1]), 1),
+            "macd_trend": "BULL" if macd_line.iloc[-1] > macd_sig.iloc[-1] else "BEAR",
+            "adx_power": round(float(adx.iloc[-1]), 1),
+            "ema_cross": "BULL" if ema9.iloc[-1] > ema21.iloc[-1] else "BEAR",
+            "atr_14": round(float(atr.iloc[-1]), 2),
+            "vol_status": "HIGH" if vol.iloc[-1] > vol_ma.iloc[-1] else "LOW",
+            "rsi_5m": round(float(rsi_5m), 1),
+            "macd_main": round(float(macd_line.iloc[-1]), 2),
+            "macd_sig": round(float(macd_sig.iloc[-1]), 2),
+            "trend_str": "STRONG" if adx.iloc[-1] > 25 else "WEAK",
+            "status": "WAIT",
+            "mode": "Qtus V.02",
         },
     })
     objects.append({
@@ -367,44 +387,97 @@ def compute_sniper_overlay(
         "bull_pct": bull_pct, "bear_pct": bear_pct, "bias": bias_text,
     })
 
-    # ---- Crossover detection: last 2 candles ----
-    prev_close = close.iloc[-2]
-    prev_ema9 = ema9.iloc[-2]
-    prev_ema21 = ema21.iloc[-2]
-    if prev_ema9 <= prev_ema21 and ema9.iloc[-1] > ema21.iloc[-1]:
-        signal = "BUY"
-    elif prev_ema9 >= prev_ema21 and ema9.iloc[-1] < ema21.iloc[-1]:
-        signal = "SELL"
-    else:
-        signal = "WAIT"
+    # ---- Historical Signal Scan & Active Trade Setup (matching sniper.pine) ----
+    last_signal_state = 0
+    latest_entry = 0.0
+    latest_sl = 0.0
+    latest_tps = [0.0] * 5
+    latest_signal_dir = "WAIT"
+    latest_signal_ts = 0
+    t_hits = [False] * 5
 
-    if signal in ("BUY", "SELL"):
-        entry = float(close.iloc[-1])
-        risk = float(atr.iloc[-1]) * atr_multiplier
-        sign = 1 if signal == "BUY" else -1
-        sl = entry - sign * risk
-        tps = [entry + sign * risk * m for m in SNIPER_TP_MULTIPLIERS]
+    lookback = min(len(df) - 1, 150)
+    for idx in range(len(df) - lookback, len(df)):
+        cur_e9 = float(ema9.iloc[idx])
+        cur_e21 = float(ema21.iloc[idx])
+        prv_e9 = float(ema9.iloc[idx - 1])
+        prv_e21 = float(ema21.iloc[idx - 1])
+        cur_close = float(close.iloc[idx])
+        cur_atr = float(atr.iloc[idx]) if not np.isnan(atr.iloc[idx]) else 1.0
+        cur_time = df.iloc[idx][time_col]
+        cur_ts = _to_unix_ts(cur_time)
 
-        objects.append({
-            "type": "SNIPER_SIGNAL", "direction": "BULLISH" if signal == "BUY" else "BEARISH",
-            "label": signal,
-            "top": entry, "bottom": entry,
-            "price": entry, "index": 0,
-            "time_start": _dt(last_time), "time_end": _dt(last_time),
-        })
-        objects.append({
-            "type": "SNIPER_SL", "direction": "BULLISH" if signal == "BUY" else "BEARISH",
-            "label": "SL",
-            "top": sl, "bottom": sl, "price": sl,
-            "index": 0, "time_start": _dt(last_time),
-        })
-        for i, tp in enumerate(tps, start=1):
+        buy_cond = prv_e9 <= prv_e21 and cur_e9 > cur_e21
+        sell_cond = prv_e9 >= prv_e21 and cur_e9 < cur_e21
+
+        trigger_buy = buy_cond and last_signal_state <= 0
+        trigger_sell = sell_cond and last_signal_state >= 0
+
+        if trigger_buy or trigger_sell:
+            last_signal_state = 1 if trigger_buy else -1
+            latest_signal_dir = "BUY" if trigger_buy else "SELL"
+            latest_entry = cur_close
+            risk = cur_atr * atr_multiplier
+            sign = 1.0 if trigger_buy else -1.0
+            latest_sl = latest_entry - sign * risk
+            latest_tps = [latest_entry + sign * risk * m for m in SNIPER_TP_MULTIPLIERS]
+            latest_signal_ts = cur_ts
+            t_hits = [False] * 5
+
             objects.append({
-                "type": f"SNIPER_TP{i}", "direction": "BULLISH" if signal == "BUY" else "BEARISH",
-                "label": f"TP{i}",
-                "top": tp, "bottom": tp, "price": tp,
-                "index": 0, "time_start": _dt(last_time),
+                "type": "SNIPER_SIGNAL",
+                "direction": "BULLISH" if trigger_buy else "BEARISH",
+                "action": "BUY" if trigger_buy else "SELL",
+                "label": "BUY" if trigger_buy else "SELL",
+                "top": latest_entry,
+                "bottom": latest_entry,
+                "price": latest_entry,
+                "timestamp": cur_ts,
+                "time_start": _dt(cur_time),
+                "sl": latest_sl,
+                "t1": latest_tps[0], "t2": latest_tps[1], "t3": latest_tps[2], "t4": latest_tps[3], "t5": latest_tps[4],
             })
+        elif last_signal_state != 0:
+            cur_h = float(df["high"].iloc[idx])
+            cur_l = float(df["low"].iloc[idx])
+            for t_i, tp_val in enumerate(latest_tps):
+                if last_signal_state == 1 and cur_h >= tp_val:
+                    t_hits[t_i] = True
+                elif last_signal_state == -1 and cur_l <= tp_val:
+                    t_hits[t_i] = True
+
+    # Emit the active trade setup lines (ENTRY, SL, TP1..5)
+    if last_signal_state != 0 and latest_entry > 0:
+        objects.append({
+            "type": "SNIPER_ENTRY",
+            "direction": "BULLISH" if last_signal_state == 1 else "BEARISH",
+            "label": f"ENTRY: {latest_entry:.2f}",
+            "top": latest_entry, "bottom": latest_entry, "price": latest_entry,
+            "color": "#38bdf8",
+            "timestamp": latest_signal_ts,
+            "time_start": _dt(last_time),
+        })
+        objects.append({
+            "type": "SNIPER_SL",
+            "direction": "BULLISH" if last_signal_state == 1 else "BEARISH",
+            "label": f"SL: {latest_sl:.2f}",
+            "top": latest_sl, "bottom": latest_sl, "price": latest_sl,
+            "color": "#f43f5e",
+            "timestamp": latest_signal_ts,
+            "time_start": _dt(last_time),
+        })
+        for i, (tp, hit) in enumerate(zip(latest_tps, t_hits), start=1):
+            objects.append({
+                "type": f"SNIPER_TP{i}",
+                "direction": "BULLISH" if last_signal_state == 1 else "BEARISH",
+                "label": f"TP{i}: {tp:.2f}" + (" 🔥" if hit else ""),
+                "top": tp, "bottom": tp, "price": tp,
+                "hit": hit,
+                "color": "#40E0D0" if hit else ("#047857" if i == 5 else "#10b981" if i == 4 else "#22d3a0"),
+                "timestamp": latest_signal_ts,
+                "time_start": _dt(last_time),
+            })
+
     return objects
 
 

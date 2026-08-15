@@ -174,14 +174,21 @@ def build_chart_markup(
     """
     objects: list[dict[str, Any]] = []
     method_upper = method.upper()
-
-    include_pa = include_smc = include_ict = True
-    if method_upper == "PRICE_ACTION":
+    if method_upper in ("PA", "PRICE_ACTION"):
+        method_upper = "PRICE_ACTION"
         include_pa, include_smc, include_ict = True, False, False
+    elif method_upper in ("ISE", "STRUCTURE", "STRUCTURE_ENGINE"):
+        method_upper = "STRUCTURE_ENGINE"
+        include_pa, include_smc, include_ict = False, False, False
+    elif method_upper == "SNIPER":
+        include_pa, include_smc, include_ict = False, False, False
     elif method_upper == "SMC":
         include_pa, include_smc, include_ict = False, True, False
     elif method_upper == "ICT":
         include_pa, include_smc, include_ict = False, True, True
+    elif method_upper in ("ULTRA", "ULTRA_CONFLUENCE"):
+        method_upper = "ULTRA_CONFLUENCE"
+        include_pa = include_smc = include_ict = True
     elif method_upper == "INDICATOR":
         include_pa = include_smc = include_ict = False
 

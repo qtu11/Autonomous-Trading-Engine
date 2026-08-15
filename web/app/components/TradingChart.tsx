@@ -98,10 +98,12 @@ export default function TradingChart({
 
   const positionLinesRef = useRef<Map<string, IPriceLine[]>>(new Map());
   const pendingLinesRef = useRef<IPriceLine[]>([]);
+  const setupLinesRef = useRef<IPriceLine[]>([]);
   const markersPluginRef = useRef<any>(null);
   const isMountedRef = useRef(true);
 
   const [localTf, setLocalTf] = useState(timeframe);
+  const [showHudTable, setShowHudTable] = useState(true);
   const [candles, setCandles] = useState<Candle[]>(propCandles || []);
   const [markupData, setMarkupData] = useState<MarkupResponse | null>(
     markup || null
@@ -361,38 +363,66 @@ export default function TradingChart({
 
   // 4. Update Indicators (EMA9, EMA21, VWAP)
   useEffect(() => {
+    if (!candles.length) return;
     const aether = (markupData as any)?.aether;
     const ind = aether?.indicators;
-    if (!ind) return;
+    const activeMethod = (method || (markupData as any)?.method || 'SMC').toUpperCase();
+    const isSniper = activeMethod === 'SNIPER';
+    const isUltra = activeMethod === 'ULTRA_CONFLUENCE' || activeMethod === 'ULTRA';
+    const isPA = activeMethod === 'PRICE_ACTION' || activeMethod === 'PA';
 
-    if (ema9SeriesRef.current && ind.ema9?.length) {
-      try {
-        ema9SeriesRef.current.setData(
-          ind.ema9.map((p: any) => ({ time: p.time as Time, value: p.value }))
-        );
-      } catch {
-        /* */
+    if (ema9SeriesRef.current && ema21SeriesRef.current && vwapSeriesRef.current) {
+      if (ind?.ema9?.length && ind?.ema21?.length) {
+        try {
+          ema9SeriesRef.current.setData(
+            ind.ema9.map((p: any) => ({ time: p.time as Time, value: p.value }))
+          );
+          ema21SeriesRef.current.setData(
+            ind.ema21.map((p: any) => ({ time: p.time as Time, value: p.value }))
+          );
+          if (ind.vwap?.length) {
+            vwapSeriesRef.current.setData(
+              ind.vwap.map((p: any) => ({ time: p.time as Time, value: p.value }))
+            );
+          }
+        } catch {}
+      } else if (isSniper || isUltra || isPA) {
+        const calcEma = (period: number) => {
+          const k = 2 / (period + 1);
+          let ema = Number((candles[0] as any).c || (candles[0] as any).close);
+          return candles.map(c => {
+            const close = Number((c as any).c || (c as any).close);
+            ema = close * k + ema * (1 - k);
+            const ts = parseCandleTime((c as any).ts || (c as any).timestamp || c.t);
+            return { time: ts as Time, value: ema };
+          }).filter(d => (d.time as number) > 0 && isFinite(d.value));
+        };
+
+        let cumVol = 0;
+        let cumPv = 0;
+        const vwapData = candles.map(c => {
+          const h = Number((c as any).h || (c as any).high);
+          const l = Number((c as any).l || (c as any).low);
+          const cl = Number((c as any).c || (c as any).close);
+          const vol = Number((c as any).v || (c as any).volume || 1);
+          const hlc3 = (h + l + cl) / 3;
+          cumVol += vol;
+          cumPv += hlc3 * vol;
+          const vwapVal = cumVol > 0 ? cumPv / cumVol : cl;
+          const ts = parseCandleTime((c as any).ts || (c as any).timestamp || c.t);
+          return { time: ts as Time, value: vwapVal };
+        }).filter(d => (d.time as number) > 0 && isFinite(d.value));
+
+        ema9SeriesRef.current.setData(calcEma(9));
+        ema21SeriesRef.current.setData(calcEma(21));
+        vwapSeriesRef.current.setData(vwapData);
+      } else {
+        ema9SeriesRef.current.setData([]);
+        ema21SeriesRef.current.setData([]);
+        vwapSeriesRef.current.setData([]);
       }
     }
-    if (ema21SeriesRef.current && ind.ema21?.length) {
-      try {
-        ema21SeriesRef.current.setData(
-          ind.ema21.map((p: any) => ({ time: p.time as Time, value: p.value }))
-        );
-      } catch {
-        /* */
-      }
-    }
-    if (vwapSeriesRef.current && ind.vwap?.length) {
-      try {
-        vwapSeriesRef.current.setData(
-          ind.vwap.map((p: any) => ({ time: p.time as Time, value: p.value }))
-        );
-      } catch {
-        /* */
-      }
-    }
-  }, [markupData]);
+  }, [candles, method, markupData]);
 
   // 5. Update Live Forming Candle & BID / ASK Price Lines on Realtime Tick
   useEffect(() => {
@@ -548,84 +578,118 @@ export default function TradingChart({
     });
   }, [positions]);
 
-  // 7. Markers for Swings (HH, HL, LH, LL) & Buy/Sell Signals
+  // 7. Markers for Swings (HH, HL, LH, LL) & Buy/Sell Signals across All Methods
   useEffect(() => {
     const series = candleSeriesRef.current;
     if (!series) return;
 
     const markers: SeriesMarker<Time>[] = [];
     const aether = (markupData as any)?.aether;
+    const rawObjects = markupData?.objects || [];
+    const activeMethod = (method || (markupData as any)?.method || 'SMC').toUpperCase();
+    const isSniper = activeMethod === 'SNIPER';
+    const isISE = activeMethod === 'STRUCTURE_ENGINE' || activeMethod === 'ISE';
+    const isICT = activeMethod === 'ICT';
+    const isPA = activeMethod === 'PRICE_ACTION' || activeMethod === 'PA';
+    const isSMC = activeMethod === 'SMC';
+    const isUltra = activeMethod === 'ULTRA_CONFLUENCE' || activeMethod === 'ULTRA';
 
-    // Aether Swings
-    if (aether?.swings?.length) {
-      aether.swings.forEach((s: any) => {
-        if (!s.timestamp) return;
-        const isHigh = s.type === 'SWING_HIGH';
-        markers.push({
-          time: s.timestamp as Time,
-          position: isHigh ? 'aboveBar' : 'belowBar',
-          color: isHigh ? '#F24968' : '#14D990',
-          shape: isHigh ? 'arrowDown' : 'arrowUp',
-          text: s.label || (isHigh ? 'SH' : 'SL'),
-          size: 0.8,
+    // 1) SNIPER Signals (BUY / SELL on historical crossovers)
+    if (isSniper || isUltra) {
+      rawObjects
+        .filter((o: any) => o.type === 'SNIPER_SIGNAL' || o.type === 'SIGNAL')
+        .forEach((sig: any) => {
+          const sigTime = sig.timestamp
+            ? sig.timestamp
+            : parseCandleTime(sig.time_start || sig.time);
+          if (!sigTime) return;
+          const isBuy = String(sig.action || sig.label || '').toUpperCase().includes('BUY') || sig.direction === 'BULLISH';
+          markers.push({
+            time: sigTime as Time,
+            position: isBuy ? 'belowBar' : 'aboveBar',
+            color: isBuy ? '#14D990' : '#F24968',
+            shape: isBuy ? 'arrowUp' : 'arrowDown',
+            text: isBuy ? 'BUY' : 'SELL',
+            size: 1.3,
+          });
         });
-      });
     }
 
-    // Aether UT Bot / Momentum Signals
-    if (aether?.ut_signals?.length) {
-      aether.ut_signals.forEach((sig: any) => {
-        if (!sig.timestamp) return;
-        const isBuy = sig.action === 'BUY';
-        markers.push({
-          time: sig.timestamp as Time,
-          position: isBuy ? 'belowBar' : 'aboveBar',
-          color: isBuy ? '#00e676' : '#ff1744',
-          shape: isBuy ? 'arrowUp' : 'arrowDown',
-          text: isBuy ? 'BUY' : 'SELL',
-          size: 1.2,
+    // 2) STRUCTURE ENGINE (ISE) Signals
+    if (isISE || isUltra) {
+      rawObjects
+        .filter((o: any) => o.type === 'ISE_SIGNAL' || o.type === 'CONTINUATION' || o.type === 'DISPLACEMENT')
+        .forEach((sig: any) => {
+          const sigTime = sig.timestamp
+            ? sig.timestamp
+            : parseCandleTime(sig.time_start || sig.time);
+          if (!sigTime) return;
+          const isBuy = String(sig.action || sig.direction || '').toUpperCase().includes('BULL') || String(sig.action || '').toUpperCase().includes('BUY');
+          markers.push({
+            time: sigTime as Time,
+            position: isBuy ? 'belowBar' : 'aboveBar',
+            color: isBuy ? '#00e5ff' : '#ff4081',
+            shape: isBuy ? 'arrowUp' : 'arrowDown',
+            text: sig.label || (isBuy ? 'ISE BUY' : 'ISE SELL'),
+            size: 1.2,
+          });
         });
-      });
     }
 
-    // ICT Turtle Soup Setup Marker
-    const ts = aether?.ict?.turtle_soup;
-    if (ts && ts.entry) {
-      const isBuy = ts.direction === 'BULLISH';
-      const lastCandle = candles[candles.length - 1];
-      const tsTime = lastCandle
-        ? parseCandleTime(
-            (lastCandle as any).ts ||
-              (lastCandle as any).timestamp ||
-              lastCandle.t
-          )
-        : null;
-      if (tsTime) {
-        markers.push({
-          time: tsTime as Time,
-          position: isBuy ? 'belowBar' : 'aboveBar',
-          color: '#FFD700',
-          shape: isBuy ? 'arrowUp' : 'arrowDown',
-          text: `SOUP ${isBuy ? 'BUY' : 'SELL'}`,
-          size: 1.4,
+    // 3) Price Action Patterns
+    if (isPA || isUltra) {
+      rawObjects
+        .filter((o: any) => o.type === 'CANDLE_PATTERN' || o.type === 'PATTERN')
+        .forEach((pa: any) => {
+          const paTime = pa.timestamp ? pa.timestamp : parseCandleTime(pa.time_start || pa.time);
+          if (!paTime) return;
+          const isBull = pa.direction === 'BULLISH';
+          markers.push({
+            time: paTime as Time,
+            position: isBull ? 'belowBar' : 'aboveBar',
+            color: isBull ? '#00e5ff' : '#ffb300',
+            shape: isBull ? 'arrowUp' : 'arrowDown',
+            text: pa.label,
+            size: 0.9,
+          });
+        });
+    }
+
+    // 4) ICT Setups (Turtle Soup, Judas Swing, Silver Bullet)
+    if (isICT || isUltra) {
+      rawObjects
+        .filter((o: any) => ['TURTLE_SOUP', 'JUDAS_SWING', 'SILVER_BULLET', 'UNICORN', 'PO3'].includes(o.type))
+        .forEach((ict: any) => {
+          const ictTime = ict.timestamp ? ict.timestamp : parseCandleTime(ict.time_start || ict.time);
+          if (!ictTime) return;
+          const isBull = ict.direction === 'BULLISH';
+          markers.push({
+            time: ictTime as Time,
+            position: isBull ? 'belowBar' : 'aboveBar',
+            color: '#FFD700',
+            shape: isBull ? 'arrowUp' : 'arrowDown',
+            text: ict.label || ict.type,
+            size: 1.1,
+          });
+        });
+    }
+
+    // 5) Aether Swings & Structure (SMC, ISE, Ultra)
+    if (isSMC || isISE || isUltra) {
+      if (aether?.swings?.length) {
+        aether.swings.forEach((s: any) => {
+          if (!s.timestamp) return;
+          const isHigh = s.type === 'SWING_HIGH';
+          markers.push({
+            time: s.timestamp as Time,
+            position: isHigh ? 'aboveBar' : 'belowBar',
+            color: isHigh ? '#F24968' : '#14D990',
+            shape: isHigh ? 'arrowDown' : 'arrowUp',
+            text: s.label || (isHigh ? 'SH' : 'SL'),
+            size: 0.8,
+          });
         });
       }
-    }
-
-    // Price Action Patterns
-    if (aether?.price_action?.length) {
-      aether.price_action.forEach((pa: any) => {
-        if (!pa.timestamp) return;
-        const isBull = pa.direction === 'BULLISH';
-        markers.push({
-          time: pa.timestamp as Time,
-          position: isBull ? 'belowBar' : 'aboveBar',
-          color: isBull ? '#00e5ff' : '#ff4081',
-          shape: 'circle',
-          text: pa.label,
-          size: 0.6,
-        });
-      });
     }
 
     // Sort markers chronologically
@@ -637,10 +701,115 @@ export default function TradingChart({
       } else {
         markersPluginRef.current.setMarkers(markers);
       }
-    } catch {
-      /* */
+    } catch {}
+  }, [markupData, method]);
+
+  // 7b. Dedicated Active Trade Setup Price Lines (ENTRY, SL, TP1..TP5)
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series) return;
+
+    setupLinesRef.current.forEach(line => {
+      try { series.removePriceLine(line); } catch {}
+    });
+    setupLinesRef.current = [];
+
+    const rawObjects = markupData?.objects || [];
+    const activeMethod = (method || (markupData as any)?.method || 'SMC').toUpperCase();
+    const isSniper = activeMethod === 'SNIPER';
+    const isISE = activeMethod === 'STRUCTURE_ENGINE' || activeMethod === 'ISE';
+    const isUltra = activeMethod === 'ULTRA_CONFLUENCE' || activeMethod === 'ULTRA';
+
+    const newLines: IPriceLine[] = [];
+
+    if (isSniper || isUltra) {
+      const entryObj = rawObjects.find((o: any) => o.type === 'SNIPER_ENTRY');
+      const slObj = rawObjects.find((o: any) => o.type === 'SNIPER_SL');
+      const tpObjs = rawObjects.filter((o: any) => o.type && o.type.startsWith('SNIPER_TP'));
+
+      if (entryObj && entryObj.price) {
+        try {
+          newLines.push(series.createPriceLine({
+            price: Number(entryObj.price),
+            color: '#38bdf8',
+            lineWidth: 2,
+            lineStyle: 0,
+            axisLabelVisible: true,
+            title: entryObj.label || `ENTRY: ${Number(entryObj.price).toFixed(2)}`,
+          }));
+        } catch {}
+      }
+      if (slObj && slObj.price) {
+        try {
+          newLines.push(series.createPriceLine({
+            price: Number(slObj.price),
+            color: '#F24968',
+            lineWidth: 2,
+            lineStyle: 0,
+            axisLabelVisible: true,
+            title: slObj.label || `SL: ${Number(slObj.price).toFixed(2)}`,
+          }));
+        } catch {}
+      }
+      tpObjs.forEach((tp: any) => {
+        if (tp.price) {
+          try {
+            newLines.push(series.createPriceLine({
+              price: Number(tp.price),
+              color: tp.hit ? '#40E0D0' : '#14D990',
+              lineWidth: tp.hit ? 2 : 1,
+              lineStyle: 2,
+              axisLabelVisible: true,
+              title: tp.label || 'TP',
+            }));
+          } catch {}
+        }
+      });
+    } else if (isISE) {
+      const entryObj = rawObjects.find((o: any) => o.type === 'ENTRY');
+      const slObj = rawObjects.find((o: any) => o.type === 'SL');
+      const tpObjs = rawObjects.filter((o: any) => ['TP1', 'TP2', 'TP3'].includes(o.type));
+      if (entryObj && entryObj.price) {
+        try {
+          newLines.push(series.createPriceLine({
+            price: Number(entryObj.price),
+            color: '#38bdf8',
+            lineWidth: 2,
+            lineStyle: 0,
+            axisLabelVisible: true,
+            title: entryObj.label || `ISE ENTRY: ${Number(entryObj.price).toFixed(2)}`,
+          }));
+        } catch {}
+      }
+      if (slObj && slObj.price) {
+        try {
+          newLines.push(series.createPriceLine({
+            price: Number(slObj.price),
+            color: '#F24968',
+            lineWidth: 2,
+            lineStyle: 0,
+            axisLabelVisible: true,
+            title: slObj.label || `ISE SL: ${Number(slObj.price).toFixed(2)}`,
+          }));
+        } catch {}
+      }
+      tpObjs.forEach((tp: any) => {
+        if (tp.price) {
+          try {
+            newLines.push(series.createPriceLine({
+              price: Number(tp.price),
+              color: '#14D990',
+              lineWidth: 1,
+              lineStyle: 2,
+              axisLabelVisible: true,
+              title: tp.label || tp.type,
+            }));
+          } catch {}
+        }
+      });
     }
-  }, [markupData]);
+    setupLinesRef.current = newLines;
+  }, [markupData, method]);
 
   // 8. SVG Overlay Canvas Engine (Order Blocks, FVGs, BoS/CHoCH segments, Auto Fibs, Sniper Targets, PA Pivots, ISE)
   const updateSvgOverlay = useCallback(() => {
@@ -948,8 +1117,16 @@ export default function TradingChart({
   );
 
   const sniper = (markupData as any)?.aether?.sniper;
+  const sniperScoreObj = ((markupData?.objects || []) as any[]).find((o: any) => o.type === 'SNIPER_SCORE');
+  const sniperFactors = sniperScoreObj?.factors || {};
+  const sniperBull = Number(sniperScoreObj?.bull_pct ?? (sniper?.bull_pct ?? 50));
+  const sniperBear = Number(sniperScoreObj?.bear_pct ?? (sniper?.bear_pct ?? 50));
+  const sniperBias = String(sniperScoreObj?.bias ?? (sniper?.bias ?? 'NEUTRAL'));
+
   const confluence = (markupData as any)?.confluence;
   const activeMethod = (method || (markupData as any)?.method || 'SMC').toUpperCase();
+  const isSniper = activeMethod === 'SNIPER';
+  const isISE = activeMethod === 'STRUCTURE_ENGINE' || activeMethod === 'ISE';
   const methodBadge = activeMethod === 'PRICE_ACTION' ? 'PA' : activeMethod === 'STRUCTURE_ENGINE' ? 'ISE' : activeMethod === 'ULTRA_CONFLUENCE' ? 'ULTRA' : activeMethod;
 
   return (
@@ -1033,60 +1210,90 @@ export default function TradingChart({
         )}
       </div>
 
-      {/* Sniper 7-Factor HUD */}
-      {sniper && sniper.bull_pct !== undefined && (
+      {/* TradingView-Style Sniper HUD Table (Full 15 Factors matching TradingView) */}
+      {isSniper && showHudTable && (
         <div
           style={{
             position: 'absolute',
-            top: 10,
-            right: 120,
+            top: 52,
+            left: 10,
             zIndex: 10,
-            background: 'rgba(15, 23, 42, 0.85)',
-            padding: '6px 12px',
-            borderRadius: 6,
+            background: 'rgba(255, 249, 196, 0.95)',
+            color: '#000',
+            padding: '4px 6px',
+            borderRadius: 4,
             fontSize: 9,
             fontFamily: C.mono,
-            minWidth: 140,
-            border: `1px solid rgba(168, 85, 247, 0.3)`,
-            backdropFilter: 'blur(12px)',
+            width: 175,
+            border: '1px solid rgba(120, 120, 120, 0.5)',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
           }}
         >
-          <div
-            style={{
-              color: '#d4af83',
-              fontWeight: 800,
-              marginBottom: 4,
-              display: 'flex',
-              justifyContent: 'space-between',
-            }}
-          >
-            <span>SNIPER DUAL</span>
-            <span
-              style={{
-                color:
-                  sniper.bias?.includes('BULL')
-                    ? '#14D990'
-                    : sniper.bias?.includes('BEAR')
-                    ? '#F24968'
-                    : C.muted,
-              }}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+            <span style={{ fontSize: 8, fontWeight: 900, color: '#333' }}>SNIPER ENTRY/EXIT V.02</span>
+            <button
+              onClick={() => setShowHudTable(false)}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, color: '#666', lineHeight: 1 }}
             >
-              {sniper.bias}
-            </span>
+              ✕
+            </button>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: '#14D990' }}>BULL</span>
-            <span style={{ color: '#14D990', fontWeight: 800 }}>
-              {sniper.bull_pct}%
-            </span>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, marginBottom: 2 }}>
+            <div style={{ background: '#16a34a', color: '#fff', padding: '2px 4px', fontWeight: 800 }}>BULL SCORE</div>
+            <div style={{ background: '#16a34a', color: '#fff', padding: '2px 4px', textAlign: 'right', fontWeight: 800 }}>
+              {Math.round(sniperBull)}%
+            </div>
+            <div style={{ background: '#dc2626', color: '#fff', padding: '2px 4px', fontWeight: 800 }}>BEAR SCORE</div>
+            <div style={{ background: '#dc2626', color: '#fff', padding: '2px 4px', textAlign: 'right', fontWeight: 800 }}>
+              {Math.round(sniperBear)}%
+            </div>
+            <div style={{ background: '#0f172a', color: '#fff', padding: '2px 4px', fontWeight: 800 }}>MARKET BIAS</div>
+            <div style={{
+              background: sniperBias.includes('BULL') ? '#16a34a' : sniperBias.includes('BEAR') ? '#dc2626' : '#64748b',
+              color: '#fff', padding: '2px 4px', textAlign: 'right', fontWeight: 800
+            }}>
+              {sniperBias}
+            </div>
           </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-            <span style={{ color: '#F24968' }}>BEAR</span>
-            <span style={{ color: '#F24968', fontWeight: 800 }}>
-              {sniper.bear_pct}%
-            </span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 1, fontSize: 8.5 }}>
+            <SniperTableRow title="Price/VWAP" val={String(sniperFactors.price_vs_vwap || 'ABOVE')} color={sniperFactors.price_vs_vwap === 'ABOVE' ? '#16a34a' : '#dc2626'} />
+            <SniperTableRow title="RSI (14)" val={String(sniperFactors.rsi_val ?? '50.1')} color={Number(sniperFactors.rsi_val ?? 50) > 50 ? '#16a34a' : '#dc2626'} />
+            <SniperTableRow title="MACD Trend" val={String(sniperFactors.macd_trend || 'BULL')} color={sniperFactors.macd_trend === 'BULL' ? '#16a34a' : '#dc2626'} />
+            <SniperTableRow title="ADX Power" val={String(sniperFactors.adx_power ?? '20.4')} color={Number(sniperFactors.adx_power ?? 0) > 25 ? '#16a34a' : '#64748b'} />
+            <SniperTableRow title="EMA Cross" val={String(sniperFactors.ema_cross || 'BULL')} color={sniperFactors.ema_cross === 'BULL' ? '#16a34a' : '#dc2626'} />
+            <SniperTableRow title="ATR 14" val={String(sniperFactors.atr_14 ?? '4.32')} color="#000" />
+            <SniperTableRow title="Vol Status" val={String(sniperFactors.vol_status || 'HIGH')} color={sniperFactors.vol_status === 'HIGH' ? '#16a34a' : '#64748b'} />
+            <SniperTableRow title="5m RSI" val={String(sniperFactors.rsi_5m ?? '50.8')} color={Number(sniperFactors.rsi_5m ?? 50) > 50 ? '#16a34a' : '#dc2626'} />
+            <SniperTableRow title="MACD Main" val={String(sniperFactors.macd_main ?? '0.16')} color="#000" />
+            <SniperTableRow title="MACD Sig" val={String(sniperFactors.macd_sig ?? '0.89')} color="#000" />
+            <SniperTableRow title="Trend Str" val={String(sniperFactors.trend_str || 'WEAK')} color={sniperFactors.trend_str === 'STRONG' ? '#16a34a' : '#dc2626'} />
+            <SniperTableRow title="Status" val={String(sniperFactors.status || 'WAIT')} color="#000" />
+            <SniperTableRow title="Sniper Mode" val={String(sniperFactors.mode || 'Qtus V.02')} color="#2563eb" />
           </div>
         </div>
+      )}
+
+      {/* Button to restore HUD table if closed */}
+      {isSniper && !showHudTable && (
+        <button
+          onClick={() => setShowHudTable(true)}
+          style={{
+            position: 'absolute',
+            top: 52,
+            left: 10,
+            zIndex: 10,
+            background: 'rgba(15, 23, 42, 0.85)',
+            color: C.gold,
+            border: `1px solid ${C.border}`,
+            borderRadius: 4,
+            padding: '3px 8px',
+            fontSize: 9,
+            fontFamily: C.mono,
+            cursor: 'pointer',
+          }}
+        >
+          SHOW SNIPER DASH
+        </button>
       )}
 
       {/* Crosshair Tooltip */}
@@ -1458,6 +1665,15 @@ function LegendItem({ color, label }: { color: string; label: string }) {
       />
       <span style={{ color: C.muted }}>{label}</span>
     </span>
+  );
+}
+
+function SniperTableRow({ title, val, color }: { title: string; val: string; color: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', borderBottom: '1px solid rgba(0,0,0,0.06)', padding: '1px 2px' }}>
+      <span style={{ color: '#111' }}>{title}</span>
+      <span style={{ color, fontWeight: 700 }}>{val}</span>
+    </div>
   );
 }
 

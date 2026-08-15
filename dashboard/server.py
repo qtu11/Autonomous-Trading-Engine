@@ -2268,24 +2268,48 @@ def _any_ea_fresh() -> bool:
 
 
 def _lot_value_multiplier(sym: str) -> float:
-
     """Hệ số quy đổi giá->P&L $ cho 1 lot theo symbol.
-
     BUG FIX: trước đây hardcode *100 (giả định XAU 100oz/lot) nên P&L demo của
-
     EURUSD/GBPUSD... sai gấp 1000 lần (FX contract = 100000 base/lot)."""
-
     s = resolve_symbol(sym).upper()
-
     if "XAU" in s or s == "GOLD":
-
         return 100.0    # 100 oz / lot
-
     if "XAG" in s or s == "SILVER":
-
         return 5000.0   # 5000 oz / lot
-
     return 100000.0     # FX: 100000 base / lot
+
+
+def calculate_dynamic_lot_size(symbol: str, entry: float, sl: float, risk_pct: float = 1.0) -> float:
+    """Dynamic Position Sizing: Tự động tính lot size thông minh theo vốn (Equity/Balance).
+    
+    Formula theo SMC_Sniper_AutoTrader_v2.pine:
+      Position Size = (Equity * Risk%) / (Risk_Distance * Lot_Multiplier)
+    - Tự động tăng lot size khi vốn tăng (Compounding lãi kép).
+    - Tự động giảm lot size khi vốn giảm (Bảo vệ tài khoản).
+    """
+    acc = _accounts.get(_active_login) or _account or {}
+    equity = float(acc.get("equity") or acc.get("balance") or 10000.0)
+    if equity <= 0:
+        equity = 10000.0
+
+    risk_fraction = float(_config.get("risk_per_trade_fraction") or (risk_pct / 100.0))
+    # Cap risk percentage: tối thiểu 0.2%, tối đa 3.0% vốn mỗi lệnh
+    risk_fraction = max(0.002, min(0.03, risk_fraction))
+    risk_amount_usd = equity * risk_fraction
+
+    risk_dist = abs(entry - sl)
+    if risk_dist <= 0:
+        risk_dist = 2.0  # Fallback 2 USD cho XAUUSD
+
+    mult = _lot_value_multiplier(symbol)
+    raw_lot = risk_amount_usd / (risk_dist * mult)
+
+    # Giới hạn an toàn (Min: 0.01 lot, Max: 10.0 lot hoặc 1 lot cho mỗi $2000 vốn)
+    min_lot = 0.01
+    max_lot = min(10.0, max(0.05, equity / 1500.0))
+    lot = round(raw_lot, 2)
+    lot = max(min_lot, min(max_lot, lot))
+    return round(lot, 2)
 
 
 
@@ -2541,13 +2565,13 @@ async def _ai_trade_loop():
             aether_score = int(aether_conf.get("score", 0) or 0)
             aether_class = aether_conf.get("classification", "FILTERED")
 
-            if signal == "WAIT" and aether_sig in ("BUY", "SELL") and (aether_score >= 65 or aether_class == "QUALIFIED"):
+            if signal == "WAIT" and aether_sig in ("BUY", "SELL") and (aether_score >= 75 or aether_class == "QUALIFIED"):
                 signal = aether_sig
                 score = aether_score if aether_sig == "BUY" else -aether_score
                 reasons = [f"AETHER_{aether_class}_{aether_score}%"]
 
             # Normalize SL and TP with robust ATR structural fallback BEFORE checking trade_ok
-            sl_dist = max(5.0, atr * 1.5)
+            sl_dist = max(3.5, atr * 1.5)
             tp_dist = sl_dist * 2.0
             if signal == "BUY":
                 sl = float(sl) if (sl is not None and float(sl) < entry) else round(entry - sl_dist, 2)
@@ -2574,17 +2598,60 @@ async def _ai_trade_loop():
                 "rrr": rrr,
             })
 
-            # Dynamic execution threshold: abs(score) >= 28 or strong Aether qualification
+            # High Precision Execution Filter: Winrate Probability Score >= 75 or Qualified Aether Confluence
+            is_qualified_aether = (aether_sig == signal and (aether_score >= 80 or aether_class == "QUALIFIED"))
+            has_high_score = (abs(score) >= 75)
+
+            # Multi-Timeframe Trend Alignment (H1 Confirmation)
+            htf_trend_ok = True
+            h1_df_check = mtf_data.get("H1")
+            if h1_df_check is not None and len(h1_df_check) >= 20:
+                h1_c = float(h1_df_check["close"].iloc[-1])
+                h1_ema20 = float(h1_df_check["close"].ewm(span=20).mean().iloc[-1])
+                if signal == "BUY" and h1_c < h1_ema20 * 0.995:
+                    if abs(score) < 85 and aether_score < 88:
+                        htf_trend_ok = False
+                elif signal == "SELL" and h1_c > h1_ema20 * 1.005:
+                    if abs(score) < 85 and aether_score < 88:
+                        htf_trend_ok = False
+
             trade_ok = (
                 signal in ("BUY", "SELL")
-                and (abs(score) >= 28 or (aether_sig == signal and aether_score >= 65))
+                and (has_high_score or is_qualified_aether)
+                and htf_trend_ok
                 and sl is not None and tp is not None
-                and rrr >= 1.0
+                and rrr >= 1.2
             )
 
             if trade_ok:
                 # pyrefly: ignore [bad-argument-type]
-                current_positions = _positions.get(resolve_symbol(symbol), [])
+                rkey = resolve_symbol(symbol)
+                current_positions = _positions.get(rkey, [])
+
+                # ── CLOSE ON REVERSE (theo SMC_Sniper_AutoTrader_v2.pine): Đóng lệnh ngược chiều khi xuất hiện tín hiệu đảo chiều mạnh ──
+                opposite_dir = "SELL" if signal == "BUY" else "BUY"
+                opposite_positions = [p for p in list(current_positions) if str(p.get("type", "")).upper() == opposite_dir]
+                for opp_pos in opposite_positions:
+                    opp_ticket = opp_pos.get("ticket")
+                    if opp_ticket:
+                        close_cmd_id = str(uuid.uuid4())
+                        close_cmd = {
+                            "command_id": close_cmd_id,
+                            "ts": datetime.now(timezone.utc).isoformat(),
+                            "action": "CLOSE",
+                            "symbol": rkey,
+                            "magic": _config.get("magic", 888999),
+                            "ticket": opp_ticket,
+                            "volume": float(opp_pos.get("volume", 0.01)),
+                            "reason": f"AI Reverse Signal to {signal} ({method} score={score})",
+                            "status": "QUEUED"
+                        }
+                        _enqueue_command(close_cmd)
+                        _add_log("INFO", "REVERSE_CLOSE", f"AI Reverse Close #{opp_ticket} {opposite_dir} -> Reverse to {signal}")
+                        if not _account.get("mt5_connected") and _is_demo_mode():
+                            _record_closed_trade(symbol, opp_pos, entry, f"REVERSE_TO_{signal}")
+                            if opp_pos in current_positions:
+                                current_positions.remove(opp_pos)
 
                 # Check if we already have a position in this direction
                 has_same_direction = any(
@@ -2604,159 +2671,87 @@ async def _ai_trade_loop():
 
                     if not recent:
                         # PHASE 1.3: Risk Manager check (9 conditions)
-
                         # Estimate current spread
-
                         try:
-
                             # pyrefly: ignore [bad-argument-type]
-
                             # pyrefly: ignore [bad-argument-type]
                             bid, ask = await fetch_real_bid_ask(symbol)
-
                             current_spread = ask - bid
-
                         except Exception:
-
                             current_spread = 0.5
 
-
-
                         risk_result = evaluate_risk_gate(
-
                             # pyrefly: ignore [bad-argument-type]
-
                             # pyrefly: ignore [bad-argument-type]
                             symbol=symbol, signal=signal,
-
                             entry=entry, sl=sl, tp=tp,
-
                             spread=current_spread, atr=atr,
-
                             # pyrefly: ignore [bad-argument-type]
-
                             # pyrefly: ignore [bad-argument-type]
                             score=score, method=method
-
                         )
 
-                        
-
                         if not risk_result["approved"]:
-
                             # pyrefly: ignore [bad-argument-type]
-
                             # pyrefly: ignore [bad-argument-type]
                             _add_ai_event("WARNING", "RISK_REJECT", symbol, {
-
                                 "reason": risk_result["reason"],
-
                                 "score": score,
-
                                 "method": method
-
                             })
-
                             _add_log("WARNING", "RISK_REJECT", 
-
                                 f"AI signal {signal} {symbol} rejected by Risk Manager: {risk_result['reason']}")
-
                             await asyncio.sleep(5)
-
                             continue
 
-
+                        # Calculate Dynamic Position Size based on Capital / Equity
+                        dynamic_vol = calculate_dynamic_lot_size(symbol, entry, sl, risk_pct=1.0)
 
                         # Create command
-
                         cmd_id = str(uuid.uuid4())
-
                         cmd = {
-
                             "command_id": cmd_id,
-
                             "ts": datetime.now(timezone.utc).isoformat(),
-
                             "action": signal,
-
                             # pyrefly: ignore [bad-argument-type]
                             "symbol": resolve_symbol(symbol),
-
                             "magic": _config.get("magic", 888999),
-
-                            "volume": 0.01,
-
+                            "volume": dynamic_vol,
                             "stop_loss": round(sl, 2),
-
                             "take_profit": round(tp, 2),
-
                             "entry": round(entry, 2),
-
-                            "reason": f"AI {method} structure score={score} rrr={rrr} {' | '.join(reasons)}",
-
+                            "reason": f"AI {method} structure score={score} rrr={rrr} vol={dynamic_vol} {' | '.join(reasons)}",
                             "status": "QUEUED"
-
                         }
-
                         _enqueue_command(cmd)
 
-
-
                         # BUG FIX: Khi EA chưa kết nối ở chế độ DEMO (paper), lệnh
-
                         # QUEUED không bao giờ được thực thi -> giả lập fill để
-
                         # auto-trade hoạt động thấy được. Ở chế độ LIVE thì
-
                         # FAIL-CLOSED: không giả lập, giữ QUEUED chờ EA claim.
-
                         if not _account.get("mt5_connected") and _is_demo_mode():
-
                             ticket = random.randint(100000, 999999)
-
                             # pyrefly: ignore [bad-argument-type]
-                            rkey = resolve_symbol(symbol)
-
                             if rkey not in _positions:
-
                                 _positions[rkey] = []
-
                             _positions[rkey].append({
-
                                 "ticket": ticket,
-
                                 "symbol": rkey,
-
                                 "type": signal,
-
-                                "volume": 0.01,
-
+                                "volume": dynamic_vol,
                                 "price_open": round(entry, 2),
-
                                 "sl": round(sl, 2),
-
                                 "orig_sl": round(sl, 2),
-
                                 "tp": round(tp, 2),
-
                                 "be_applied": False,
-
                                 "profit": 0.0,
-
                                 "current_price": round(entry, 2),
-
                                 "open_time": datetime.now(timezone.utc).isoformat(),
-
-                                "source": "DEMO",  # BUG FIX: mirror ảo — BE/trailing không MODIFY ticket rác
-
+                                "source": "DEMO",
                             })
-
                             cmd["status"] = "FILLED"
-
                             cmd["ticket"] = ticket
-
-                            # pyrefly: ignore [bad-argument-type]
-                            _account["open_positions"] = len(_positions.get(resolve_symbol(symbol), []))
+                            _account["open_positions"] = len(_positions.get(rkey, []))
 
 
 
@@ -2936,70 +2931,46 @@ async def _position_manager_loop():
 
 
 
-                    # ── 1) Break-even (một lần, SL về đúng entry) ──
-
+                    # ── 1) Break-even Dương (khóa chắc chắn lời dương > 0, bù trừ spread/commission) ──
+                    pos_buffer = max(0.35, risk_dist * 0.15)
                     if not be_applied:
-
                         hit_be = (bid - entry) >= risk_dist if pos_type == "BUY" else (entry - ask) >= risk_dist
-
                         if hit_be:
-
-                            new_sl = round(entry, 2)
-
+                            new_sl = round(entry + pos_buffer if pos_type == "BUY" else entry - pos_buffer, 2)
                             pos["sl"] = new_sl
-
                             pos["be_applied"] = True
-
-                            _add_log("INFO", "BREAK_EVEN", f"SL -> BE for {pos_type} #{pos.get('ticket')} @ {new_sl}")
-
-                            _add_ai_event("TRADE", "BREAK_EVEN", symbol, {"ticket": pos.get("ticket"), "sl": new_sl})
-
-                            # BUG FIX: không gửi MODIFY cho mirror DEMO ảo (ticket random
-
-                            # không tồn tại trên MT5) khi EA đã kết nối — trước đây gửi
-
-                            # ticket rác -> EA REJECT_TICKET_NOT_FOUND lặp mỗi 2s.
-
+                            _add_log("INFO", "BREAK_EVEN_PROFIT", f"SL -> Positive BE for {pos_type} #{pos.get('ticket')} @ {new_sl} (+{pos_buffer:.2f} profit locked)")
+                            _add_ai_event("TRADE", "BREAK_EVEN_PROFIT", symbol, {"ticket": pos.get("ticket"), "sl": new_sl, "locked_profit": pos_buffer})
                             if _account.get("mt5_connected") and pos.get("source") != "DEMO":
-
                                 _queue_modify(symbol, pos, new_sl, tp)
 
-
-
-                    # ── 2) Trailing stop (sau BE, khoảng 0.5R) ──
-
-                    # Dùng giá trị LIVE từ pos (BE vừa chạy trong cùng vòng lặp phải
-
-                    # được trailing áp dụng ngay, không đợi vòng sau 2s)
-
+                    # ── 2) Trailing stop đa tầng (sau BE, khóa lời tăng dần theo R-multiples) ──
                     live_sl = float(pos.get("sl", 0))
-
                     if pos.get("be_applied") and live_sl > 0:
+                        profit_dist = (current_price - entry) if pos_type == "BUY" else (entry - current_price)
+                        r_multiple = profit_dist / risk_dist if risk_dist > 0 else 0.0
 
-                        trail = max(0.2, risk_dist * 0.5)
+                        # Trailing distance co dãn thông minh theo tiến trình lợi nhuận
+                        if r_multiple >= 3.0:
+                            trail = max(0.4, risk_dist * 0.4)
+                        elif r_multiple >= 2.0:
+                            trail = max(0.6, risk_dist * 0.5)
+                        else:
+                            trail = max(0.8, risk_dist * 0.6)
 
                         if pos_type == "BUY":
-
                             candidate = round(current_price - trail, 2)
-
-                            if candidate > live_sl + 0.01:
-
+                            if candidate > live_sl + 0.05 and candidate > entry:
                                 pos["sl"] = candidate
-
+                                _add_log("DEBUG", "TRAILING_STOP", f"Trailing SL BUY #{pos.get('ticket')} -> {candidate}")
                                 if _account.get("mt5_connected") and pos.get("source") != "DEMO":
-
                                     _queue_modify(symbol, pos, candidate, tp)
-
                         else:
-
                             candidate = round(current_price + trail, 2)
-
-                            if live_sl == 0 or candidate < live_sl - 0.01:
-
+                            if (live_sl == 0 or candidate < live_sl - 0.05) and candidate < entry:
                                 pos["sl"] = candidate
-
+                                _add_log("DEBUG", "TRAILING_STOP", f"Trailing SL SELL #{pos.get('ticket')} -> {candidate}")
                                 if _account.get("mt5_connected") and pos.get("source") != "DEMO":
-
                                     _queue_modify(symbol, pos, candidate, tp)
 
 
@@ -3654,40 +3625,21 @@ async def activate_account(req: ActivateAccountRequest):
 # ─── MARKET DATA + CHART MARKUP ────────────────────────────────────────────────
 
 @app.get("/api/market")
-
-async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), count: int = Query(0, ge=0, le=150000)):
-
-    """Market data with method-specific chart markup (SMC / ICT / Price Action / Sniper / Ultra)"""
-
+async def get_market(symbol: str = Query("XAUUSD"), tf: str = Query("M15"), count: int = Query(0, ge=0, le=150000), method: Optional[str] = Query(None)):
+    """Market data with method-specific chart markup (SMC / ICT / Price Action / Sniper / Structure Engine / Ultra)"""
     if count == 0:
-
-        # BUG FIX: M1 mặc định 40000 (EA đẩy 40000 nến M1) — trước đây 72000 > cache
-
-        # nên fetch_real_candles bỏ cache EA -> chart chỉ vài nến. Các TF khác tính
-
-        # tương đương khoảng thời gian 40000 nến M1.
-
-        defaults = {"M1": 40000, "M5": 8000, "M15": 2700, "M30": 1350, "H1": 700, "H4": 175, "D1": 365}
-
-        count = defaults.get(tf, 2700)
-
-
+        defaults = {"M1": 500, "M5": 500, "M15": 500, "M30": 500, "H1": 500, "H4": 500, "D1": 500}
+        count = defaults.get(tf, 500)
 
     # Fetch REAL candles
-
     df = await fetch_real_candles(symbol, tf, count)
-
     if df is None or df.empty:
-
         df = generate_stub_candles(count, tf, symbol)
-
     bid, ask = await fetch_real_bid_ask(symbol)
 
-
-
-    # Run method-specific analysis (naive indicator scoring, kept as reference)
-
-    method = _config.get("trading_method", "SMC")
+    # Run method-specific analysis
+    chosen_method = (method or _config.get("trading_method", "SMC")).upper()
+    method = chosen_method
 
     # pyrefly: ignore [bad-argument-type]
     analysis = await run_ai_analysis(symbol, method, tf)

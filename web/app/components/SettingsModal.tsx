@@ -230,7 +230,14 @@ export default function SettingsModal({ open, onClose, onUpdated }: SettingsModa
                 </Field>
                 <Field label="Trading Method Strategy">
                   <select value={cfg.trading_method || 'SMC'} onChange={e => update({ trading_method: e.target.value })} style={selectStyle}>
-                    {['SNIPER','SMC','ICT','PA','ULTRA'].map(m => <option key={m} value={m}>{m}</option>)}
+                    {[
+                      { id: 'SNIPER', label: 'SNIPER (Momentum & Trend Flow)' },
+                      { id: 'SMC', label: 'SMC (Smart Money Concepts)' },
+                      { id: 'ICT', label: 'ICT (Inner Circle Trader)' },
+                      { id: 'PRICE_ACTION', label: 'PRICE ACTION (PA Patterns & S/R)' },
+                      { id: 'STRUCTURE_ENGINE', label: 'STRUCTURE ENGINE (ISE Institutional)' },
+                      { id: 'ULTRA_CONFLUENCE', label: 'ULTRA CONFLUENCE (5-Layer Matrix)' },
+                    ].map(m => <option key={m.id} value={m.id}>{m.label}</option>)}
                   </select>
                 </Field>
                 <Field label="AI Auto Loop Mode">
