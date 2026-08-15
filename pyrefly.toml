@@ -2,7 +2,7 @@
 # dashboard/ modules are imported via `sys.path.insert` in tests, so expose
 # the directory as a top-level search path for the type checker.
 
-project-includes = [".", "dashboard", "tests"]
-project-excludes = ["**/.[!/.]*", "**/node_modules/**", "**/Cloudlocal/**", "**/volumes/**"]
+project-includes = ["dashboard", "tests"]
+project-excludes = ["**/.[!/.]*", "**/node_modules/**", "**/Cloudlocal/**", "**/volumes/**", "**/[working-dir]/**", "**/scratch/**", "**/web/**"]
 search-path = ["dashboard"]
 enable-fallback-search-path = true

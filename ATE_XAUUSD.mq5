@@ -1263,8 +1263,8 @@ bool PushCandlesChunk(string tfLabel, int start, int end,
 //+------------------------------------------------------------------+
 void PushCandlesTimeframe(ENUM_TIMEFRAMES tf, int history, string tfLabel)
 {
-   // Hard limit: tối đa 2500 nến để tránh nghẽn hàng đợi WebRequest của MT5
-   int safeHistory = MathMin(history, 2500);
+   // Safe limit: tối đa 1500 nến để tránh nghẽn hàng đợi WebRequest của MT5
+   int safeHistory = MathMin(history, 1500);
    MqlRates rates[];
    ArraySetAsSeries(rates, false); // Oldest first, newest last
    int copied = CopyRates(g_symbol, tf, 0, safeHistory, rates);
@@ -1286,7 +1286,7 @@ void PushCandlesTimeframe(ENUM_TIMEFRAMES tf, int history, string tfLabel)
          return; // Dừng nếu 1 chunk fail
       first = false;
       sent += (end - start);
-      Sleep(20); // Nghỉ 20ms giữa các chunk để socket MT5 giải phóng buffer an toàn
+      Sleep(10);
    }
    PrintFormat("CANDLES_PUSH_OK: pushed %d candles for %s %s", sent, g_symbol, tfLabel);
 }
@@ -1296,27 +1296,17 @@ void PushCandlesTimeframe(ENUM_TIMEFRAMES tf, int history, string tfLabel)
 //+------------------------------------------------------------------+
 void SendLiveCandles()
 {
-   // DEBUG: Always log entry so we know this function is being called
-   PrintFormat("CANDLES_DEBUG: entering SendLiveCandles() | token_len=%d url_len=%d last_push_ago=%d interval=%d",
-      StringLen(InpBridgeToken), StringLen(InpApiUrl),
-      (int)(TimeLocal() - m_last_candles_push), InpCandlesIntervalSec);
-
    if(StringLen(InpBridgeToken) == 0 || StringLen(InpApiUrl) == 0)
-   {
-      Print("CANDLES_SKIP: token or url empty");
       return;
-   }
 
-   // BUG FIX: LUÔN đẩy M1 (40000 nến) làm base — server resample M1 -> M5/M15/H1...
-   // Trước đây chỉ đẩy theo _Period (TF chart EA gắn): nếu EA gắn chart M15 thì
-   // cache M1 trống -> web xem M1 rơi vào STUB/chỉ vài nến. Giờ M1 luôn đủ lịch sử.
-   PushCandlesTimeframe(PERIOD_M1, InpCandlesHistory, "M1");
+   // M1 base cho resample
+   PushCandlesTimeframe(PERIOD_M1, MathMin(InpCandlesHistory, 1500), "M1");
 
-   // Đẩy thêm TF chart hiện tại nếu khác M1 (để có nến gốc đúng TF đang xem).
+   // Đẩy thêm TF chart hiện tại nếu khác M1
    if(_Period != PERIOD_M1)
    {
-      int tfHistory = InpCandlesHistory / 15; // ~ tương đương khoảng thời gian M1
-      if(tfHistory < 1000) tfHistory = 1000;
+      int tfHistory = MathMin(InpCandlesHistory / 4, 1000);
+      if(tfHistory < 500) tfHistory = 500;
       PushCandlesTimeframe(_Period, tfHistory, TimeframeLabel(_Period));
    }
 }

@@ -114,13 +114,14 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
   const aiLoop = status?.safeguards?.ai_auto_loop || false;
   const currentMethod = aiConfig?.trading_method || status?.safeguards?.trading_method || 'SMC';
 
-  // All trading methods supported - SNIPER, SMC, ICT, PRICE_ACTION, ULTRA_CONFLUENCE
-  const methods = ['SNIPER', 'SMC', 'ICT', 'PRICE_ACTION', 'ULTRA_CONFLUENCE'];
+  // All trading methods supported - SNIPER, SMC, ICT, PRICE_ACTION, STRUCTURE_ENGINE, ULTRA_CONFLUENCE
+  const methods = ['SNIPER', 'SMC', 'ICT', 'PRICE_ACTION', 'STRUCTURE_ENGINE', 'ULTRA_CONFLUENCE'];
   const methodLabels: Record<string, string> = {
     'SNIPER': 'SNIPER',
     'SMC': 'SMC',
     'ICT': 'ICT',
     'PRICE_ACTION': 'PA',
+    'STRUCTURE_ENGINE': 'ISE',
     'ULTRA_CONFLUENCE': 'ULTRA',
   };
 
@@ -251,6 +252,8 @@ export default function ControlCenter({ onMethodChange }: ControlCenterProps = {
             return (
               <button key={method} onClick={async () => { 
                 try { 
+                  setAiConfig((prev: any) => ({ ...prev, trading_method: method }));
+                  setStatus((prev: any) => prev ? { ...prev, safeguards: { ...(prev.safeguards || {}), trading_method: method } } : prev);
                   const result = await updateTradingMethod(method); 
                   if (result && result.status === 'SUCCESS') {
                     await loadAIConfig();

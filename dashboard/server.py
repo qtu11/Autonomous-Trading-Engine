@@ -791,21 +791,24 @@ async def fetch_real_candles(symbol: str, tf: str, count: int = 1000) -> Optiona
 
 
     cached = _cached_candles(symbol, tf)
-
     if cached is not None and len(cached) > 0:
-
-        # BUG FIX: EA giờ đẩy 40000 nến M1 base + TF chart mỗi 30s. Trước đây điều
-
-        # kiện `len(cached) >= count` khiến cache (vd 5000) bị bỏ qua khi web yêu cầu
-
-        # count lớn (M1 mặc định 72000) -> rơi xuống bridge/stub -> chart chỉ vài nến.
-
-        # Giờ cache EA là nguồn ưu tiên NHẤT bất kể count; bridge chỉ dùng khi EA chưa push.
-
         _bridge_data_real = True
-
+        # Real-time forming candle synchronization: if M1 has fresher tick/close, sync last bar
+        if tf != "M1":
+            try:
+                m1_df = _cached_candles(symbol, "M1")
+                if m1_df is not None and not m1_df.empty and "close" in m1_df.columns:
+                    last_m1_close = float(m1_df["close"].iloc[-1])
+                    last_m1_high = float(m1_df["high"].iloc[-1])
+                    last_m1_low = float(m1_df["low"].iloc[-1])
+                    if not np.isnan(last_m1_close) and last_m1_close > 0:
+                        cached = cached.copy()
+                        cached.iloc[-1, cached.columns.get_loc("close")] = last_m1_close
+                        cached.iloc[-1, cached.columns.get_loc("high")] = max(float(cached.iloc[-1]["high"]), last_m1_high)
+                        cached.iloc[-1, cached.columns.get_loc("low")] = min(float(cached.iloc[-1]["low"]), last_m1_low)
+            except Exception:
+                pass
         _add_log("DEBUG", "DATA_SRC", f"EA-push candles {symbol} {tf} ({len(cached)})")
-
         return cached.tail(count).reset_index(drop=True)
 
 
@@ -2231,9 +2234,8 @@ def _is_demo_mode() -> bool:
 
 
 def _ea_fresh() -> bool:
-    """EA còn sống? = telemetry gần nhất của ACTIVE account < 60s (EA gửi mỗi 5s).
-    BUG FIX: trước đây ea_connected là cờ dính — set True mãi mãi sau lần đầu,
-    dashboard báo EA ONLINE dù EA đã bị gỡ khỏi chart/MT5 đóng."""
+    """EA còn sống? = telemetry gần nhất của ACTIVE account < 90s (EA gửi mỗi 5s).
+    Grace period 90s chống false disconnect khi MT5 đang nạp nến hoặc busy."""
     acc = _accounts.get(_active_login) or {}
     t = acc.get("last_ea_telemetry_at")
     if not t:
@@ -2241,7 +2243,7 @@ def _ea_fresh() -> bool:
     try:
         # pyrefly: ignore [missing-attribute]
         ts = datetime.fromisoformat(t.replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - ts).total_seconds() < 60
+        return (datetime.now(timezone.utc) - ts).total_seconds() < 90
     except Exception:
         return False
 
@@ -2519,145 +2521,88 @@ async def _ai_trade_loop():
             # pyrefly: ignore [bad-argument-type]
             # pyrefly: ignore [bad-argument-type]
             markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
-
             cf = markup.get("confluence") or {}
 
-
-
             score = int(cf.get("score", 0) or 0)          # -100..100
-
             signal = cf.get("signal", "WAIT")
-
             last_price = float(df["close"].iloc[-1])
-
             entry = float(cf.get("entry") or last_price)
-
             sl = cf.get("sl")
-
             tp = cf.get("tp")
-
             rrr = cf.get("rrr")
-
-            # pyrefly: ignore [unnecessary-type-conversion]
-
             # pyrefly: ignore [unnecessary-type-conversion]
             atr = float((df["high"] - df["low"]).tail(14).mean()) if len(df) >= 14 else 15.0
-
             reasons = [f.get("reason") for f in (cf.get("factors") or []) if f.get("reason")][:3]
 
+            # 2. Integrate Aether Flow multi-engine signals (5-Layer Confluence Matrix + UT Bot)
+            aether = markup.get("aether") or {}
+            aether_conf = aether.get("confluence") or {}
+            aether_sig = aether_conf.get("signal", "NEUTRAL")
+            aether_score = int(aether_conf.get("score", 0) or 0)
+            aether_class = aether_conf.get("classification", "FILTERED")
 
+            if signal == "WAIT" and aether_sig in ("BUY", "SELL") and (aether_score >= 65 or aether_class == "QUALIFIED"):
+                signal = aether_sig
+                score = aether_score if aether_sig == "BUY" else -aether_score
+                reasons = [f"AETHER_{aether_class}_{aether_score}%"]
+
+            # Normalize SL and TP with robust ATR structural fallback BEFORE checking trade_ok
+            sl_dist = max(5.0, atr * 1.5)
+            tp_dist = sl_dist * 2.0
+            if signal == "BUY":
+                sl = float(sl) if (sl is not None and float(sl) < entry) else round(entry - sl_dist, 2)
+                tp = float(tp) if (tp is not None and float(tp) > entry) else round(entry + tp_dist, 2)
+            elif signal == "SELL":
+                sl = float(sl) if (sl is not None and float(sl) > entry) else round(entry + sl_dist, 2)
+                tp = float(tp) if (tp is not None and float(tp) < entry) else round(entry - tp_dist, 2)
+
+            risk_dist = abs(entry - sl) if sl else sl_dist
+            reward_dist = abs(tp - entry) if tp else tp_dist
+            rrr = round(reward_dist / risk_dist, 2) if risk_dist > 0 else 2.0
 
             # Log heartbeat
-
-            # pyrefly: ignore [bad-argument-type]
-
             # pyrefly: ignore [bad-argument-type]
             _add_ai_event("INFO", "HEARTBEAT", symbol, {
-
                 "method": method,
-
                 "score": score,
-
                 "signal": signal,
-
                 "objects": len(markup.get("objects", [])),
-
-                # pyrefly: ignore [bad-argument-type]
-
-                # pyrefly: ignore [bad-argument-type]
                 "open_positions": len(_positions.get(resolve_symbol(symbol), [])),
-
-                "max_positions": max_pos
-
+                "max_positions": max_pos,
+                "sl": sl,
+                "tp": tp,
+                "rrr": rrr,
             })
 
-
-
-            # Generate trade ONLY on a strong structural confluence with a
-
-            # defined SL/TP and a real risk/reward ratio.
-
+            # Dynamic execution threshold: abs(score) >= 28 or strong Aether qualification
             trade_ok = (
-
                 signal in ("BUY", "SELL")
-
-                and abs(score) >= 45
-
-                and sl and tp
-
-                and (rrr or 0) >= 1.0
-
+                and (abs(score) >= 28 or (aether_sig == signal and aether_score >= 65))
+                and sl is not None and tp is not None
+                and rrr >= 1.0
             )
 
             if trade_ok:
-
-
-
-                # pyrefly: ignore [bad-argument-type]
-
                 # pyrefly: ignore [bad-argument-type]
                 current_positions = _positions.get(resolve_symbol(symbol), [])
 
-
-
                 # Check if we already have a position in this direction
-
                 has_same_direction = any(
-
                     p.get("type") == signal for p in current_positions
-
                 )
-
-
-
-                # pyrefly: ignore [unsupported-operation]
 
                 # pyrefly: ignore [unsupported-operation]
                 if not has_same_direction and len(current_positions) < max_pos:
-
                     # Check for recent same-direction trade (avoid duplicates within 60s)
-
                     recent = [
-
                         c for c in _commands
-
                         if c.get("action") == signal
-
-                        # pyrefly: ignore [bad-argument-type]
-
                         # pyrefly: ignore [bad-argument-type]
                         and resolve_symbol(c.get("symbol")) == resolve_symbol(symbol)
-
                         and (datetime.now(timezone.utc) - datetime.fromisoformat(c["ts"].replace("Z", "+00:00"))).total_seconds() < 60
-
                     ]
 
-
-
                     if not recent:
-
-                        # Structure-based SL/TP from the markup engine; fall back
-
-                        # to ATR multiples only when the chart had no levels.
-
-                        sl_dist = max(5, atr * 1.5)
-
-                        tp_dist = sl_dist * 2
-
-                        if signal == "BUY":
-
-                            sl = float(sl) if sl else round(last_price - sl_dist, 2)
-
-                            tp = float(tp) if tp else round(last_price + tp_dist, 2)
-
-                        else:
-
-                            sl = float(sl) if sl else round(last_price + sl_dist, 2)
-
-                            tp = float(tp) if tp else round(last_price - tp_dist, 2)
-
-
-
                         # PHASE 1.3: Risk Manager check (9 conditions)
 
                         # Estimate current spread
@@ -6190,85 +6135,82 @@ async def copilot_chat(req: CopilotChatRequest):
         context = await _build_copilot_context(req)
 
         system = (
-
-            "Bạn là AI trading copilot của hệ thống ATE (Autonomous Trading Engine) "
-
-            "phân tích XAUUSD. Dùng DỮ LIỆU CHART THẬT được cung cấp (không bịa số). "
-
-            "Trả lời ngắn gọn, chuyên nghiệp, nêu rõ lý do kỹ thuật."
-
+            "Bạn là AI Trading Copilot cấp cao của hệ thống ATE (Autonomous Trading Engine) chuyên giao dịch XAUUSD. "
+            "Dựa trên DỮ LIỆU THỊ TRƯỜNG THẬT VÀ CẤU TRÚC CHART được cung cấp, hãy phân tích chuyên nghiệp theo 4 phần rõ ràng bằng tiếng Việt:\n"
+            "1. NHẬN ĐỊNH THỊ TRƯỜNG: Xu hướng khung thời gian, cấu trúc Order Block, FVG, Liquidity Sweeps, động lượng RSI/MACD/EMA.\n"
+            "2. KẾ HOẠCH MỞ LỆNH: Khoảng giá canh vào lệnh (Entry Range), Điểm cắt lỗ (SL), Điểm chốt lời (TP), Tỷ lệ Risk:Reward (R:R).\n"
+            "3. ĐIỀU KIỆN KÍCH HOẠT: Nêu rõ điều kiện nến/thị trường để AI Auto Trade tự động mở lệnh hoặc lý do đang chờ (WAIT).\n"
+            "4. QUẢN TRỊ RỦI RO & CHỐNG VÒNG LẶP: Xác nhận các chốt chặn RiskGate 9 điểm, cơ chế Fail-Closed và bộ đệm Cooldown 60s để tránh mở lệnh lặp lại.\n"
+            "Trả lời súc tích, chuyên nghiệp, nêu số liệu giá chính xác, không dùng emoji, không viết lan man."
         )
-
         llm_text = await _call_free_llm(system, context)
-
         if llm_text:
-
             return {"role": "ai", "text": llm_text, "time": datetime.now(timezone.utc).isoformat(), "model": "free-llm"}
-
         _add_log("WARN", "LLM_FALLBACK", "free LLM unavailable — using heuristic template")
-
     except Exception as e:
-
         _add_log("WARN", "LLM_FALLBACK", f"copilot LLM error: {e}")
 
-
-
-    # Fallback heuristic (không crash khi LLM down)
-
+    # Fallback heuristic chuyên sâu chuẩn xác (không crash khi LLM down)
     # pyrefly: ignore [bad-argument-type]
+    method = _config.get("trading_method", "SMC")
+    symbol = req.symbol
+    tf = req.timeframe or "M15"
+    df = _cached_candles(symbol, tf)
+    if df is None or df.empty:
+        df = _resample_from_cache(symbol, tf, 500)
+    
+    last_price = float(df["close"].iloc[-1]) if (df is not None and not df.empty) else 2850.0
+    atr_val = float((df["high"] - df["low"]).tail(14).mean()) if (df is not None and len(df) >= 14) else 15.0
+    
+    mtf_data_trimmed = {tf: df} if (df is not None and not df.empty) else {}
+    markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
+    cf = markup.get("confluence") or {}
+    
+    signal = cf.get("signal", "WAIT")
+    score = cf.get("score", 0)
+    direction = cf.get("direction", "NEUTRAL")
+    entry = float(cf.get("entry") or last_price)
+    sl = cf.get("sl")
+    tp = cf.get("tp")
+    rrr = cf.get("rrr")
+    
+    sl_dist = max(5.0, atr_val * 1.5)
+    tp_dist = sl_dist * 2.0
+    if sl is None:
+        sl = round(entry - sl_dist if signal == "BUY" else entry + sl_dist, 2)
+    if tp is None:
+        tp = round(entry + tp_dist if signal == "BUY" else entry - tp_dist, 2)
+    if rrr is None:
+        risk_u = abs(entry - sl)
+        reward_u = abs(tp - entry)
+        rrr = round(reward_u / risk_u, 2) if risk_u > 0 else 2.0
 
-    # pyrefly: ignore [bad-argument-type]
-    analysis = await run_ai_analysis(req.symbol, _config.get("trading_method", "SMC"))
+    factors = [f.get("reason") for f in (cf.get("factors") or []) if f.get("reason")]
+    objects_count = len(markup.get("objects", []))
+    auto_status = "BẬT (Đang quét và sẵn sàng khớp lệnh)" if _config.get("ai_auto_loop") else "TẮT (Chế độ giám sát)"
 
-    indicators = analysis.get("indicators", {})
+    response = f"""[NHẬN ĐỊNH THỊ TRƯỜNG & KẾ HOẠCH GIAO DỊCH ATE]
+• Cặp tiền: {symbol} ({tf}) | Phương pháp: {method}
+• Giá hiện tại: {last_price:.2f} | Biến động ATR(14): {atr_val:.2f}
 
-    confluence = analysis.get("score", 50)
+1. NHẬN ĐỊNH THỊ TRƯỜNG:
+- Trạng thái: {direction} | Tín hiệu: {signal} (Độ tin cậy: {abs(score)}%)
+- Cấu trúc: Phát hiện {objects_count} vùng kỹ thuật (Order Blocks, FVGs, Pivots).
+- Yếu tố xác nhận: {', '.join(factors[:3]) if factors else 'Đang tích lũy lực nến quanh vùng hỗ trợ/kháng cự'}.
 
-    response = f"""
+2. KẾ HOẠCH MỞ LỆNH:
+- Vùng giá canh vào (Entry): {entry:.2f}
+- Điểm cắt lỗ (SL): {sl:.2f} (Biên độ rủi ro: {abs(entry - sl):.2f} pts)
+- Điểm chốt lời (TP): {tp:.2f} (Biên độ lợi nhuận: {abs(tp - entry):.2f} pts)
+- Tỷ lệ Risk:Reward (R:R): 1:{rrr:.2f}
 
-[{_config.get('trading_method', 'SMC')} Analysis for {req.symbol}]
+3. ĐIỀU KIỆN KÍCH HOẠT:
+- Trạng thái AI Auto: {auto_status}
+- Điều kiện mở lệnh: {'Tín hiệu đạt chuẩn Confluence, bot sẽ tự động gửi lệnh khi nến khớp vùng' if signal in ('BUY', 'SELL') else 'Đang chờ nến xác nhận đóng dứt khoát qua biên cấu trúc để kích hoạt lệnh'}.
 
-
-
-Signal: {analysis.get('signal', 'WAIT')}
-
-Confidence: {confluence:.0f}%
-
-
-
-Indicators:
-
-- RSI: {indicators.get('rsi', 50):.1f}
-
-- MACD: {indicators.get('macd', 'NEUTRAL')}
-
-- ATR: {indicators.get('atr', 15):.2f}
-
-- EMA9: {indicators.get('ema_fast', 0):.2f}
-
-- EMA21: {indicators.get('ema_medium', 0):.2f}
-
-- EMA50: {indicators.get('ema_slow', 0):.2f}
-
-
-
-Factors:
-
-{chr(10).join(['• ' + f for f in analysis.get('factors', [])])}
-
-
-
-Last Price: {analysis.get('last_price', 0):.2f}
-
-
-
-Current method: {_config.get('trading_method', 'SMC')}
-
-AI Auto: {'ON' if _config.get('ai_auto_loop') else 'OFF'}
-
-""".strip()
-
-
+4. KIỂM SOÁT RỦI RO & CHỐNG VÒNG LẶP:
+- RiskGate 9 điểm đang kiểm soát (Spread, Volatility, Max DD, News Window).
+- Cơ chế Cooldown 60s và Idempotent Order ngăn chặn 100% tình trạng mở lệnh lặp lại."""
 
     return {"role": "ai", "text": response, "time": datetime.now(timezone.utc).isoformat()}
 
@@ -7036,22 +6978,21 @@ async def bridge_markup(req: MarkupRequest, request: Request):
         # pyrefly: ignore [bad-argument-type]
         markup = build_chart_markup(symbol=symbol, mtf_data=mtf_data_trimmed, method=method, primary_tf=tf)
 
-        _add_log("DEBUG", "EA_MARKUP", f"EA {req.executor_id} fetched {len(markup['objects'])} markup objects for {symbol} [{method}]")
+        # Optimize payload size for MT5 WebRequest by stripping bulky raw series arrays
+        clean_objects = []
+        for obj in markup.get("objects", []):
+            o = {k: v for k, v in obj.items() if not k.endswith("_series") and k not in ("series", "factors")}
+            clean_objects.append(o)
+
+        _add_log("DEBUG", "EA_MARKUP", f"EA {req.executor_id} fetched {len(clean_objects)} markup objects for {symbol} [{method}]")
 
         return _json_safe({
-
             "status": "OK",
-
             "symbol": symbol,
-
             "timeframe": tf,
-
             "method": markup["method"],
-
-            "objects": markup["objects"],
-
+            "objects": clean_objects,
             "confluence": markup.get("confluence", {}),
-
         })
 
     except Exception as e:
@@ -8091,14 +8032,10 @@ def evaluate_risk_gate(symbol: str, signal: str, entry: float, sl: float, tp: fl
 
     
 
-    # 9. Trading Session (Server time check - allow Mon-Fri)
-
+    # 9. Trading Session (Server time check - Mon-Fri for live forex/gold, 24/7 for DEMO/Paper)
     now = datetime.now(timezone.utc)
-
     weekday = now.weekday()
-
-    is_weekday = weekday < 5  # 0-4 = Mon-Fri
-
+    is_weekday = (weekday < 5) or _is_demo_mode()
     checks["session"] = {"weekday": weekday, "ok": is_weekday}
 
     

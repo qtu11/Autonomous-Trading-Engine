@@ -51,6 +51,7 @@ from method_overlays import (
     compute_pa_overlay,
     compute_smc_overlay,
     compute_sniper_overlay,
+    compute_structure_engine_overlay,
 )
 
 
@@ -401,6 +402,8 @@ def build_chart_markup(
         ))
     if method_upper in ("PRICE_ACTION", "ULTRA_CONFLUENCE"):
         method_specific_objects.extend(compute_pa_overlay(m15))
+    if method_upper in ("STRUCTURE_ENGINE", "ULTRA_CONFLUENCE"):
+        method_specific_objects.extend(compute_structure_engine_overlay(mtf_data, primary_tf=primary_tf))
 
     # Filter by METHOD_OBJECT_GROUPS if method-specific (so e.g. SNIPER shows
     # sniper objects + a few core SMC confluence ones, but not all ICT zones).

@@ -95,6 +95,12 @@ METHOD_OBJECT_GROUPS: dict[str, set[str]] = {
         "PIVOT", "PDH", "PDL", "TRENDLINE", "TREND", "SWING", "BOS", "CHoCH",
         "CHANNEL", "RANGE", "BREAKOUT", "PULLBACK", "RETEST", "FAKE_BREAKOUT",
     },
+    "STRUCTURE_ENGINE": {
+        "BASELINE", "VOLATILITY_ENVELOPE", "BAND_LAYER", "SWING", "BOS", "CHoCH",
+        "SUPPLY_DEMAND", "OB", "FVG", "LIQUIDITY", "LIQUIDITY_POOL", "SWEEP", "EQH", "EQL",
+        "CONTINUATION", "REVERSAL_REF", "TRAILING_STOP", "TP1", "TP2", "TP3", "SL",
+        "STRUCTURE_SCORE", "DASHBOARD", "DISPLACEMENT",
+    },
     "ULTRA_CONFLUENCE": set(),  # empty -> include everything
 }
 
@@ -963,7 +969,7 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
         factors.append({"reason": reason, "direction": direction, "weight": weight})
 
     sniper_score_obj = next((o for o in objects if o.get("type") == "SNIPER_SCORE"), None)
-    if sniper_score_obj:
+    if sniper_score_obj and method == "SNIPER":
         bull = sniper_score_obj.get("bull_pct", 0)
         bear = sniper_score_obj.get("bear_pct", 0)
         score = bull - bear
@@ -997,6 +1003,13 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
                 factors.append({"reason": "DOJI_neutral", "direction": "NEUTRAL", "weight": 0})
             elif t == "SFP":
                 vote(d, 18, f"SFP_{d}")
+            elif t == "SWEEP":
+                vote(d, 22, f"SWEEP_{d}")
+            elif t == "SUPPLY_DEMAND":
+                dir_vote = "BULLISH" if d in ("BULLISH", "DEMAND") else "BEARISH"
+                vote(dir_vote, 18, f"SD_{label}")
+            elif t == "CONTINUATION":
+                vote(d, 20, f"Trend_Tap_{d}")
             elif t == "JUDAS_SWING":
                 vote(d, 20, f"JUDAS_{d}")
             elif t == "PO3":
@@ -1004,18 +1017,12 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
             elif t == "UNICORN":
                 vote(d, 22, f"UNICORN_{d}")
             elif t == "PIVOT" and o.get("label") in ("R1", "R2", "R3"):
-                # BUG FIX: hướng PIVOT bị đảo ngược. R1/R2/R3 là kháng cự:
-                #   - Giá phá TRÊN R = breakout → BULLISH (trước đây vote BEARISH "reject")
-                #   - Giá chạm R từ DƯỚI và thất bại (còn dưới R, trong 0.5%) mới là rejection → BEARISH
                 p = o.get("price", 0) or 0
                 if p > 0 and last_close < p and last_close > p * 0.995:
                     vote("BEARISH", 5, f"PIVOT_{o.get('label')}_reject")
                 elif p > 0 and last_close >= p:
                     vote("BULLISH", 5, f"PIVOT_{o.get('label')}_break")
             elif t == "PIVOT" and o.get("label") in ("S1", "S2", "S3"):
-                # BUG FIX: S1/S2/S3 là hỗ trợ:
-                #   - Giá phá DƯỚI S = breakdown → BEARISH (trước đây vote BULLISH "bounce")
-                #   - Giá chạm S từ TRÊN và giữ vững (trên S, trong 0.5%) mới là bounce → BULLISH
                 p = o.get("price", 0) or 0
                 if p > 0 and last_close > p and last_close < p * 1.005:
                     vote("BULLISH", 5, f"PIVOT_{o.get('label')}_bounce")
@@ -1026,8 +1033,6 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
             elif t in ("PD", "OTE") and o.get("label") == "DISCOUNT" and last_close < o.get("bottom", 0):
                 vote("BULLISH", 8, "DISCOUNT_zone")
             elif t == "KILLZONE":
-                # KillZone is a timing context, not a directional bias — it must
-                # never add bullish points on its own (was a logic error before).
                 zone = "LONDON" if o.get("is_london") else "NY" if o.get("is_ny") else "ASIA"
                 factors.append({"reason": f"{zone}_KillZone", "direction": "NEUTRAL", "weight": 0})
             elif t == "CHART_PATTERN":
@@ -1067,6 +1072,8 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
                 structure_votes += 22 if d == "BULLISH" else -22
             elif t == "CHART_PATTERN":
                 structure_votes += 15 if d == "BULLISH" else -15
+            elif t == "SWEEP":
+                structure_votes += 20 if d == "BULLISH" else -20
         sniper_diff = float(sniper_score_obj.get("bull_pct", 0)) - float(sniper_score_obj.get("bear_pct", 0))
         # pyrefly: ignore [unnecessary-type-conversion]
         score = int(round(0.5 * sniper_diff + 0.5 * structure_votes))
@@ -1098,20 +1105,19 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
     # SELL -> SL = strongest structure level above entry, TP = first level below
     # This is what lets the AI read the chart (OB/FVG/OTE/S-R) and place a
     # precision entry with a real risk/reward ratio before auto-trading.
-    # BUG FIX L4: signal=WAIT mà không có sniper_sl/tp1 thì KHÔNG cố gắng tìm
-    # structure levels (tránh kéo SL/TP ngẫu nhiên cho WAIT signal). Bỏ qua block
-    # này; output sẽ là sl=None, tp=None, rrr=None — AI loop sẽ từ chối trade.
     if (sl is None or tp is None) and signal in ("BUY", "SELL"):
         levels: list[tuple[float, int]] = []
+        non_price_types = {"ADX", "RSI_LEVEL", "MACD_LINE", "MACD_SIGNAL", "SNIPER_SCORE", "SNIPER_DASH"}
         for o in objects:
+            if o.get("type") in non_price_types:
+                continue
             p = o.get("price")
             if isinstance(p, (int, float)) and p > 0:
                 levels.append((float(p), int(o.get("touches", 1) or 1)))
             elif isinstance(o.get("top"), (int, float)) and isinstance(o.get("bottom"), (int, float)) \
                     and o.get("top") != o.get("bottom"):
                 levels.append(((float(o["top"]) + float(o["bottom"])) / 2.0, int(o.get("touches", 1) or 1)))
-        # Ignore levels sitting almost exactly on entry (0.05%) so SL/TP are
-        # real structure levels, not noise — otherwise RRR degenerates.
+
         min_gap = max(entry * 0.0005, 1e-9)
         below = [(p, c) for p, c in levels if p < entry - min_gap]
         above = [(p, c) for p, c in levels if p > entry + min_gap]
@@ -1125,18 +1131,55 @@ def compute_confluence_score(objects: list[dict[str, Any]], method: str, last_cl
                 sl = min(p for p, _ in above)
             if below:
                 tp = max(p for p, _ in below)
-    risk_per_unit = abs(entry - sl) if sl else 0.0
-    reward_per_unit = abs(tp - entry) if tp else 0.0
-    rrr = (reward_per_unit / risk_per_unit) if risk_per_unit > 0 else None
+
+        # Fallback to dynamic ATR multiple if natural structure levels are missing (e.g. ATH or Sniper)
+        default_risk = max(5.0, entry * 0.004)
+        if signal == "BUY":
+            if sl is None:
+                sl = round(entry - default_risk, 2)
+            if tp is None:
+                risk_dist = max(entry - sl, default_risk)
+                tp = round(entry + risk_dist * 2.0, 2)
+        elif signal == "SELL":
+            if sl is None:
+                sl = round(entry + default_risk, 2)
+            if tp is None:
+                risk_dist = max(sl - entry, default_risk)
+                tp = round(entry - risk_dist * 2.0, 2)
+
+    if signal in ("BUY", "SELL") and sl is not None and tp is not None:
+        risk_per_unit = abs(entry - sl)
+        reward_per_unit = abs(tp - entry)
+        rrr = round(reward_per_unit / risk_per_unit, 2) if risk_per_unit > 0 else 2.0
+    else:
+        sl = None
+        tp = None
+        rrr = None
 
     return {
         "score": int(score),
         "direction": direction,
         "signal": signal,
         "factors": factors[:20],
-        "rrr": round(rrr, 2) if rrr is not None else None,
+        "rrr": rrr,
         "entry": round(entry, 2),
-        "sl": round(sl, 2) if sl else None,
-        "tp": round(tp, 2) if tp else None,
+        "sl": round(sl, 2) if sl is not None else None,
+        "tp": round(tp, 2) if tp is not None else None,
         "method": method,
     }
+
+
+def compute_structure_engine_overlay(
+    mtf_data: dict[str, pd.DataFrame],
+    primary_tf: str = "M15",
+) -> list[dict[str, Any]]:
+    """Compute Institutional Structure Engine (ISE) objects from structureengine.pine."""
+    from structure_engine import detect_institutional_structure_engine
+    m15 = mtf_data.get(primary_tf)
+    if m15 is None or m15.empty:
+        m15 = next((v for v in mtf_data.values() if v is not None and not v.empty), None)
+    if m15 is None or m15.empty:
+        return []
+    res = detect_institutional_structure_engine(m15)
+    return res.get("objects", [])
+

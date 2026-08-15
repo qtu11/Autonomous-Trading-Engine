@@ -1137,6 +1137,13 @@ def build_aether_flow_payload(
         "hma55": _to_line_points(hma55_s),
     }
 
+    # 9. Institutional Structure Engine (ISE)
+    try:
+        from structure_engine import detect_institutional_structure_engine
+        ise_payload = detect_institutional_structure_engine(df)
+    except Exception:
+        ise_payload = {}
+
     return {
         "symbol": symbol,
         "method": method,
@@ -1150,6 +1157,7 @@ def build_aether_flow_payload(
         "sniper": sniper_payload,
         "ict": ict_payload,
         "price_action": pa_patterns,
+        "structure_engine": ise_payload,
         "confluence": confluence,
         "indicators": indicators,
     }

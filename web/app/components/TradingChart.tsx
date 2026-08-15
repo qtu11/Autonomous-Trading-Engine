@@ -32,6 +32,7 @@ const TIMEFRAME_CANDLES: Record<string, number> = {
 interface TradingChartProps {
   symbol?: string;
   timeframe?: string;
+  method?: string;
   markup?: MarkupResponse | null;
   candles?: Candle[];
   positions?: any[];
@@ -79,6 +80,7 @@ interface SvgFibLevel {
 export default function TradingChart({
   symbol = 'XAUUSD',
   timeframe = 'M15',
+  method = 'SMC',
   markup,
   candles: propCandles,
   positions = [],
@@ -392,10 +394,37 @@ export default function TradingChart({
     }
   }, [markupData]);
 
-  // 5. Update BID & ASK Lines (Clean, single price line)
+  // 5. Update Live Forming Candle & BID / ASK Price Lines on Realtime Tick
   useEffect(() => {
-    if (typeof bid === 'number' && isFinite(bid)) setBidPrice(bid);
-    if (typeof ask === 'number' && isFinite(ask)) setAskPrice(ask);
+    if (typeof bid === 'number' && isFinite(bid) && bid > 0) {
+      setBidPrice(bid);
+
+      // Realtime Tick Injection: Update forming candle immediately on every tick without waiting for full candle fetch
+      const series = candleSeriesRef.current;
+      const chartData = prevChartDataRef.current;
+      if (series && chartData && chartData.length > 0) {
+        const lastIdx = chartData.length - 1;
+        const currentLast = chartData[lastIdx];
+        if (currentLast && isFinite(currentLast.close)) {
+          const updatedLast: CandlestickData<Time> = {
+            time: currentLast.time,
+            open: currentLast.open,
+            high: Math.max(currentLast.high, bid),
+            low: Math.min(currentLast.low, bid),
+            close: bid,
+          };
+          try {
+            series.update(updatedLast);
+            chartData[lastIdx] = updatedLast;
+          } catch {
+            /* */
+          }
+        }
+      }
+    }
+    if (typeof ask === 'number' && isFinite(ask) && ask > 0) {
+      setAskPrice(ask);
+    }
   }, [bid, ask]);
 
   useEffect(() => {
@@ -613,7 +642,7 @@ export default function TradingChart({
     }
   }, [markupData]);
 
-  // 8. SVG Overlay Canvas Engine (Order Blocks, FVGs, BoS/CHoCH segments, Auto Fibs)
+  // 8. SVG Overlay Canvas Engine (Order Blocks, FVGs, BoS/CHoCH segments, Auto Fibs, Sniper Targets, PA Pivots, ISE)
   const updateSvgOverlay = useCallback(() => {
     const chart = chartRef.current;
     const series = candleSeriesRef.current;
@@ -621,15 +650,24 @@ export default function TradingChart({
 
     const timeScale = chart.timeScale();
     const aether = (markupData as any)?.aether;
+    const rawObjects = markupData?.objects || [];
     const w = containerRef.current?.clientWidth || 800;
     setChartWidth(w);
+
+    const activeMethod = (method || (markupData as any)?.method || 'SMC').toUpperCase();
+    const isSniper = activeMethod === 'SNIPER';
+    const isSMC = activeMethod === 'SMC';
+    const isICT = activeMethod === 'ICT';
+    const isPA = activeMethod === 'PRICE_ACTION' || activeMethod === 'PA';
+    const isISE = activeMethod === 'STRUCTURE_ENGINE' || activeMethod === 'ISE';
+    const isUltra = activeMethod === 'ULTRA_CONFLUENCE' || activeMethod === 'ULTRA';
 
     const boxes: SvgBox[] = [];
     const segments: SvgSegment[] = [];
     const fibs: SvgFibLevel[] = [];
 
-    // A. Render Order Blocks (BigBeluga / LuxAlgo Dual Box + Dotted Ray + Volume %)
-    if (aether?.order_blocks?.length) {
+    // A. Render Order Blocks (SMC, ISE, Ultra)
+    if ((isSMC || isISE || isUltra) && aether?.order_blocks?.length) {
       aether.order_blocks.forEach((ob: any, idx: number) => {
         const x1 = timeScale.timeToCoordinate(ob.ts_start as any);
         const x2 = ob.ts_end
@@ -645,7 +683,7 @@ export default function TradingChart({
           const boxW = Math.max(20, Math.abs(endX - startX));
           const top = Math.min(yTop, yBottom);
           const boxH = Math.max(4, Math.abs(yBottom - yTop));
-          const isBull = ob.direction === 'BULLISH';
+          const isBull = ob.direction === 'BULLISH' || ob.direction === 'DEMAND';
           const originW = Math.min(40, Math.max(14, boxW * 0.25));
 
           boxes.push({
@@ -656,8 +694,8 @@ export default function TradingChart({
             height: boxH,
             fill: isBull ? 'rgba(20, 217, 144, 0.12)' : 'rgba(242, 73, 104, 0.12)',
             stroke: isBull ? '#14D990' : '#F24968',
-            label: isBull ? 'OB Demand' : 'OB Supply',
-            direction: ob.direction,
+            label: isISE ? (isBull ? 'Demand (Grade A)' : 'Supply (Grade A)') : (isBull ? 'OB Demand' : 'OB Supply'),
+            direction: isBull ? 'BULLISH' : 'BEARISH',
             originWidth: originW,
             originFill: isBull ? 'rgba(20, 217, 144, 0.42)' : 'rgba(242, 73, 104, 0.42)',
             volumeLabel: ob.volume_label || (ob.volume ? `${(ob.volume / 1000).toFixed(1)}K` : undefined),
@@ -667,8 +705,8 @@ export default function TradingChart({
       });
     }
 
-    // B. Render Fair Value Gaps (LuxAlgo FVGs)
-    if (aether?.fvgs?.length) {
+    // B. Render Fair Value Gaps (SMC, ICT, ISE, Ultra)
+    if ((isSMC || isICT || isISE || isUltra) && aether?.fvgs?.length) {
       aether.fvgs.forEach((fvg: any, idx: number) => {
         const x1 = timeScale.timeToCoordinate(fvg.ts_start as any);
         const x2 = fvg.ts_end
@@ -701,8 +739,8 @@ export default function TradingChart({
       });
     }
 
-    // C. Render BoS / CHoCH Break Segments (TradingView Dotted Line + Badge)
-    if (aether?.segments?.length) {
+    // C. Render BoS / CHoCH Break Segments (SMC, ISE, Ultra)
+    if ((isSMC || isISE || isUltra) && aether?.segments?.length) {
       aether.segments.forEach((seg: any, idx: number) => {
         const x1 = timeScale.timeToCoordinate(seg.ts1 as any);
         const x2 = timeScale.timeToCoordinate(seg.ts2 as any);
@@ -723,8 +761,8 @@ export default function TradingChart({
       });
     }
 
-    // D. Render ICT OTE Fibonacci Retracement & Auto Fibs
-    if (aether?.auto_fibs?.levels?.length) {
+    // D. Render ICT OTE Fibonacci Retracement & Auto Fibs (ICT, Ultra)
+    if ((isICT || isUltra) && aether?.auto_fibs?.levels?.length) {
       aether.auto_fibs.levels.forEach((lvl: any, idx: number) => {
         const y = series.priceToCoordinate(lvl.price);
         if (y !== null && y > 0 && y < 2000) {
@@ -739,9 +777,9 @@ export default function TradingChart({
       });
     }
 
-    // E. Render ICT OTE Box Zone (0.618 - 0.786 Sweet Spot)
+    // E. Render ICT OTE Box Zone (0.618 - 0.786 Sweet Spot) (ICT, Ultra)
     const ote = aether?.ict?.ote;
-    if (ote && ote.ote_top && ote.ote_bottom) {
+    if ((isICT || isUltra) && ote && ote.ote_top && ote.ote_bottom) {
       const yTop = series.priceToCoordinate(ote.ote_top);
       const yBottom = series.priceToCoordinate(ote.ote_bottom);
       if (yTop !== null && yBottom !== null) {
@@ -759,10 +797,82 @@ export default function TradingChart({
       }
     }
 
+    // F. SNIPER Targets TP1-TP5 and SL (SNIPER, Ultra)
+    if (isSniper || isUltra) {
+      const sniperTps = rawObjects.filter(o => o.type && o.type.startsWith('SNIPER_TP'));
+      const sniperSl = rawObjects.find(o => o.type === 'SNIPER_SL');
+      sniperTps.forEach((tpObj, idx) => {
+        if (tpObj.price) {
+          const y = series.priceToCoordinate(tpObj.price);
+          if (y !== null && y > 0) {
+            fibs.push({
+              id: `sniper-tp-${idx}`,
+              y,
+              color: '#14D990',
+              label: tpObj.label || `TP${idx + 1}`,
+              price: tpObj.price,
+            });
+          }
+        }
+      });
+      if (sniperSl && sniperSl.price) {
+        const y = series.priceToCoordinate(sniperSl.price);
+        if (y !== null && y > 0) {
+          fibs.push({
+            id: 'sniper-sl',
+            y,
+            color: '#F24968',
+            label: sniperSl.label || 'SNIPER SL',
+            price: sniperSl.price,
+          });
+        }
+      }
+    }
+
+    // G. Price Action Pivots & S/R Levels (PA, Ultra)
+    if (isPA || isUltra) {
+      const paLevels = rawObjects.filter(o => ['SUPPORT', 'RESISTANCE', 'PIVOT', 'PDH', 'PDL', 'SR'].includes(o.type));
+      paLevels.forEach((lvl, idx) => {
+        if (lvl.price) {
+          const y = series.priceToCoordinate(lvl.price);
+          if (y !== null && y > 0) {
+            const isRes = lvl.type === 'RESISTANCE' || lvl.type === 'PDH';
+            fibs.push({
+              id: `pa-lvl-${idx}`,
+              y,
+              color: isRes ? '#F24968' : '#14D990',
+              label: lvl.label || lvl.type,
+              price: lvl.price,
+            });
+          }
+        }
+      });
+    }
+
+    // H. Structure Engine (ISE) Trailing Targets & Equal Highs/Lows
+    if (isISE) {
+      const iseTargets = rawObjects.filter(o => ['TP1', 'TP2', 'TP3', 'SL', 'EQH', 'EQL'].includes(o.type));
+      iseTargets.forEach((tgt, idx) => {
+        if (tgt.price) {
+          const y = series.priceToCoordinate(tgt.price);
+          if (y !== null && y > 0) {
+            const isSl = tgt.type === 'SL' || tgt.type === 'EQH';
+            fibs.push({
+              id: `ise-tgt-${idx}`,
+              y,
+              color: isSl ? '#F24968' : '#00e5ff',
+              label: tgt.label || tgt.type,
+              price: tgt.price,
+            });
+          }
+        }
+      });
+    }
+
     setSvgBoxes(boxes);
     setSvgSegments(segments);
     setSvgFibs(fibs);
-  }, [markupData]);
+  }, [markupData, method]);
 
   // Subscribe chart pan/zoom/scroll to update SVG overlay coordinates dynamically
   useEffect(() => {
@@ -839,6 +949,8 @@ export default function TradingChart({
 
   const sniper = (markupData as any)?.aether?.sniper;
   const confluence = (markupData as any)?.confluence;
+  const activeMethod = (method || (markupData as any)?.method || 'SMC').toUpperCase();
+  const methodBadge = activeMethod === 'PRICE_ACTION' ? 'PA' : activeMethod === 'STRUCTURE_ENGINE' ? 'ISE' : activeMethod === 'ULTRA_CONFLUENCE' ? 'ULTRA' : activeMethod;
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
@@ -867,7 +979,7 @@ export default function TradingChart({
         <span style={{ color: 'rgba(255,255,255,0.2)' }}>|</span>
         <span style={{ color: C.muted }}>{localTf}</span>
         <span style={{ color: 'rgba(255,255,255,0.2)' }}>|</span>
-        <span style={{ color: '#00e5ff' }}>AETHER SMC</span>
+        <span style={{ color: '#00e5ff', fontWeight: 800 }}>AETHER {methodBadge}</span>
         <span style={{ color: 'rgba(255,255,255,0.2)' }}>|</span>
         <span style={{ color: C.muted }}>{candles.length} bars</span>
         {bidPrice !== null && (
@@ -1272,7 +1384,7 @@ export default function TradingChart({
           left: 10,
           zIndex: 10,
           display: 'flex',
-          gap: 12,
+          gap: 10,
           flexWrap: 'wrap',
           background: 'rgba(15, 23, 42, 0.85)',
           padding: '4px 10px',
@@ -1283,14 +1395,56 @@ export default function TradingChart({
           backdropFilter: 'blur(8px)',
         }}
       >
-        <LegendItem color="rgba(20, 217, 144, 0.7)" label="OB Bull" />
-        <LegendItem color="rgba(242, 73, 104, 0.7)" label="OB Bear" />
-        <LegendItem color="rgba(0, 188, 212, 0.7)" label="FVG Bull" />
-        <LegendItem color="rgba(233, 30, 99, 0.7)" label="FVG Bear" />
-        <LegendItem color="#14D990" label="BoS" />
-        <LegendItem color="#F24968" label="CHoCH" />
-        <LegendItem color="#00e5ff" label="EMA 9/21 Ribbon" />
-        <LegendItem color="#ffb300" label="Auto Fibs" />
+        {activeMethod === 'SNIPER' ? (
+          <>
+            <LegendItem color="#14D990" label="EMA 9 Fast" />
+            <LegendItem color="#F24968" label="EMA 21 Slow" />
+            <LegendItem color="#00bcd4" label="VWAP Ribbon" />
+            <LegendItem color="#14D990" label="Targets TP1-5" />
+            <LegendItem color="#F24968" label="Dynamic SL" />
+          </>
+        ) : activeMethod === 'PRICE_ACTION' || activeMethod === 'PA' ? (
+          <>
+            <LegendItem color="#14D990" label="Support S1-S3" />
+            <LegendItem color="#F24968" label="Resistance R1-R3" />
+            <LegendItem color="#00e5ff" label="Pivot P / PDH / PDL" />
+            <LegendItem color="#ffb300" label="Trendlines & Patterns" />
+          </>
+        ) : activeMethod === 'ICT' ? (
+          <>
+            <LegendItem color="#FFA500" label="ICT OTE Zone" />
+            <LegendItem color="#ffb300" label="Auto Fibs" />
+            <LegendItem color="#00bcd4" label="Killzones (London/NY)" />
+            <LegendItem color="#FFD700" label="Turtle Soup Grab" />
+          </>
+        ) : activeMethod === 'STRUCTURE_ENGINE' || activeMethod === 'ISE' ? (
+          <>
+            <LegendItem color="#14D990" label="Demand (Grade A-C)" />
+            <LegendItem color="#F24968" label="Supply (Grade A-C)" />
+            <LegendItem color="#00e5ff" label="Volatility Envelopes" />
+            <LegendItem color="#ffb300" label="Trailing TP1-TP3 / SL" />
+            <LegendItem color="#14D990" label="Trend Tap Re-entry" />
+          </>
+        ) : activeMethod === 'SMC' ? (
+          <>
+            <LegendItem color="rgba(20, 217, 144, 0.7)" label="OB Demand" />
+            <LegendItem color="rgba(242, 73, 104, 0.7)" label="OB Supply" />
+            <LegendItem color="rgba(0, 188, 212, 0.7)" label="FVG Bull" />
+            <LegendItem color="rgba(233, 30, 99, 0.7)" label="FVG Bear" />
+            <LegendItem color="#14D990" label="BoS" />
+            <LegendItem color="#F24968" label="CHoCH" />
+          </>
+        ) : (
+          <>
+            <LegendItem color="rgba(20, 217, 144, 0.7)" label="OB Demand" />
+            <LegendItem color="rgba(242, 73, 104, 0.7)" label="OB Supply" />
+            <LegendItem color="rgba(0, 188, 212, 0.7)" label="FVG" />
+            <LegendItem color="#14D990" label="BoS" />
+            <LegendItem color="#F24968" label="CHoCH" />
+            <LegendItem color="#00e5ff" label="EMA Ribbon" />
+            <LegendItem color="#ffb300" label="Auto Fibs" />
+          </>
+        )}
       </div>
     </div>
   );

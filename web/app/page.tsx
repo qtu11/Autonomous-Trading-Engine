@@ -157,44 +157,43 @@ export default function DashboardPage() {
     setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), timeout);
   }, []);
 
-  // PHASE 1.2: Use useFetchInterval to prevent memory leak + cancel in-flight
+  // Dedicated fast market stream for ultra-responsive candles (1000ms)
+  useFetchInterval(
+    async () => fetchMarket(selectedSymbol, chartTf).catch(() => null),
+    1000,
+    [isAuthenticated, authChecked, selectedSymbol, chartTf, ccStatus?.safeguards?.trading_method],
+    (m) => {
+      if (m) setMarket(m);
+    },
+    isAuthenticated && authChecked
+  );
+
+  // Background account & system metadata interval (2500ms)
   useFetchInterval(
     async () => {
-      const [s, ps, m, h, po, l, b, cc] = await Promise.all([
+      const [s, ps, h, po, l, b, cc] = await Promise.all([
         fetchStatus().catch(() => null),
         fetchPositions().catch(() => []),
-        fetchMarket(selectedSymbol, chartTf).catch(() => null),
         fetchHistory().catch(() => []),
         fetchPendingOrders().catch(() => []),
         fetchLogs({}).catch(() => []),
         fetchBrain().catch(() => null),
         fetchControlCenterStatus().catch(() => null),
       ]);
-      return { s, ps, m, h, po, l, b, cc };
+      return { s, ps, h, po, l, b, cc };
     },
-    2000,
-    [isAuthenticated, authChecked, selectedSymbol, chartTf],
+    2500,
+    [isAuthenticated, authChecked],
     (data) => {
       if (!data) return;
       setStatus(data.s);
       setPositions(data.ps || []);
-      if (data.m) setMarket(data.m);
       setHistory(data.h || []);
       setPendingOrders(data.po || []);
       setLogs(data.l || []);
       setBrain(data.b);
       setCcStatus(data.cc);
     },
-    isAuthenticated && authChecked
-  );
-
-  // Re-fetch market IMMEDIATELY when trading method changes
-  const tradingMethod = ccStatus?.safeguards?.trading_method;
-  useFetchInterval(
-    async () => fetchMarket(selectedSymbol, chartTf),
-    5000,
-    [isAuthenticated, authChecked, tradingMethod, selectedSymbol, chartTf],
-    (m) => { if (m) setMarket(m); },
     isAuthenticated && authChecked
   );
 
@@ -300,20 +299,27 @@ export default function DashboardPage() {
     };
   }, [isAuthenticated]);
 
-  // Copilot chat
-  const handleCopilot = async () => {
-    if (!copilotInput.trim() || copilotTyping) return;
-    const userMsg: ChatMessage = { role: 'user', content: copilotInput, timestamp: new Date().toISOString() };
+  // Copilot chat helper
+  const askCopilotPrompt = useCallback(async (promptText: string) => {
+    if (!promptText.trim() || copilotTyping) return;
+    const userMsg: ChatMessage = { role: 'user', content: promptText, timestamp: new Date().toISOString() };
     setChatHistory(prev => [...prev, userMsg]);
-    const query = copilotInput;
-    setCopilotInput('');
     setCopilotTyping(true);
     try {
-      const res = await sendCopilotChat(query);
-      setChatHistory(prev => [...prev, { role: 'ai', content: res?.text || 'Da xu ly.', timestamp: new Date().toISOString() }]);
+      const res = await sendCopilotChat(promptText, selectedSymbol, chartTf);
+      setChatHistory(prev => [...prev, { role: 'ai', content: res?.text || 'Đã phân tích.', timestamp: new Date().toISOString() }]);
     } catch {
-      setChatHistory(prev => [...prev, { role: 'ai', content: 'Loi. Thu lai.', timestamp: new Date().toISOString() }]);
-    } finally { setCopilotTyping(false); }
+      setChatHistory(prev => [...prev, { role: 'ai', content: 'Lỗi kết nối AI. Vui lòng thử lại.', timestamp: new Date().toISOString() }]);
+    } finally {
+      setCopilotTyping(false);
+    }
+  }, [copilotTyping, selectedSymbol, chartTf]);
+
+  const handleCopilot = async () => {
+    if (!copilotInput.trim() || copilotTyping) return;
+    const query = copilotInput;
+    setCopilotInput('');
+    await askCopilotPrompt(query);
   };
 
   // Derived metrics
@@ -609,7 +615,6 @@ export default function DashboardPage() {
             <div style={{ flex: 1, overflow: 'auto' }}>
               <ControlCenter onMethodChange={async (method) => {
                 addNotif(`Trading Method updated to ${method}`, 'info');
-                setMarket(null);
                 const mk = await fetchMarket(selectedSymbol, chartTf);
                 if (mk) setMarket(mk);
               }} />
@@ -629,7 +634,7 @@ export default function DashboardPage() {
           {showChart && (
             <div style={{ flex: showCompact ? 1 : '0 1 auto', minHeight: 0 }}>
               <Panel title={`${selectedSymbol} ${chartTf}`} live style={{ height: '100%', position: 'relative' }}>
-                <TradingChart symbol={selectedSymbol} timeframe={chartTf} candles={market?.candles} markup={market?.markup} positions={positions as any} pendingOrders={pendingOrders as any} bid={market?.bid} ask={market?.ask} />
+                <TradingChart symbol={selectedSymbol} timeframe={chartTf} method={ccStatus?.safeguards?.trading_method || 'SMC'} candles={market?.candles} markup={market?.markup} positions={positions as any} pendingOrders={pendingOrders as any} bid={market?.bid} ask={market?.ask} />
               </Panel>
             </div>
 
@@ -770,16 +775,60 @@ export default function DashboardPage() {
                 </div>
                 {copilotTab === 'chat' ? (
                   <>
-                    <div ref={chatRef} style={{ flex: 1, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
-                      {chatHistory.length === 0 && (
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.muted, fontSize: 8, fontFamily: C.mono, textAlign: 'center' }}>
-                          AI Copilot san sang ho tro
-                        </div>
-                      )}
+                    <div ref={chatRef} style={{ flex: 1, overflow: 'auto', padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {chatHistory.length === 0 && (() => {
+                        const cf = market?.markup?.confluence;
+                        const lastCandleClose = market?.candles && market.candles.length > 0 ? market.candles[market.candles.length - 1].c : undefined;
+                        return (
+                          <div style={{ padding: '8px 10px', background: 'rgba(0,0,0,0.35)', border: `1px solid ${C.border}`, borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                              <span style={{ fontSize: 9, fontFamily: C.mono, fontWeight: 700, color: C.gold }}>
+                                {ccStatus?.safeguards?.trading_method || 'SMC'} · {selectedSymbol} ({chartTf})
+                              </span>
+                              <span style={{
+                                fontSize: 8, fontFamily: C.mono, fontWeight: 700, padding: '2px 6px', borderRadius: 3,
+                                background: cf?.signal === 'BUY' ? C.green + '20' : cf?.signal === 'SELL' ? C.red + '20' : 'rgba(255,255,255,0.05)',
+                                color: cf?.signal === 'BUY' ? C.green : cf?.signal === 'SELL' ? C.red : C.muted,
+                                border: `1px solid ${cf?.signal === 'BUY' ? C.green : cf?.signal === 'SELL' ? C.red : C.border}`
+                              }}>
+                                {cf?.signal || 'WAIT'} ({Math.abs(cf?.score || 0)}%)
+                              </span>
+                            </div>
+
+                            <div style={{ fontSize: 8.5, color: C.dim, lineHeight: 1.4, fontFamily: C.mono }}>
+                              {cf?.signal === 'BUY' ? (
+                                <span>Đang canh BUY tại <b style={{ color: C.green }}>{cf?.entry}</b> (SL: {cf?.sl} | TP: {cf?.tp} | R:R: 1:{cf?.rrr || 2.0})</span>
+                              ) : cf?.signal === 'SELL' ? (
+                                <span>Đang canh SELL tại <b style={{ color: C.red }}>{cf?.entry}</b> (SL: {cf?.sl} | TP: {cf?.tp} | R:R: 1:{cf?.rrr || 2.0})</span>
+                              ) : (
+                                <span>Đang quét cấu trúc {ccStatus?.safeguards?.trading_method || 'SMC'} quanh <b style={{ color: C.text }}>{lastCandleClose || 'XAUUSD'}</b>. Chờ nến xác nhận để vào lệnh.</span>
+                              )}
+                            </div>
+
+                            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
+                              <button
+                                onClick={() => askCopilotPrompt('Nhận định thị trường hiện tại và xu hướng?')}
+                                style={{ padding: '3px 6px', background: C.goldDim, border: `1px solid ${C.gold}`, borderRadius: 3, color: C.gold, fontSize: 7.5, fontFamily: C.mono, cursor: 'pointer' }}>
+                                ⚡ Nhận định thị trường
+                              </button>
+                              <button
+                                onClick={() => askCopilotPrompt('Kế hoạch mở lệnh: khoảng giá vào, SL, TP?')}
+                                style={{ padding: '3px 6px', background: C.cyan + '15', border: `1px solid ${C.cyan}`, borderRadius: 3, color: C.cyan, fontSize: 7.5, fontFamily: C.mono, cursor: 'pointer' }}>
+                                🎯 Kế hoạch vào lệnh
+                              </button>
+                              <button
+                                onClick={() => askCopilotPrompt('Kiểm tra trạng thái RiskGate và chống vòng lặp?')}
+                                style={{ padding: '3px 6px', background: 'rgba(255,255,255,0.05)', border: `1px solid ${C.border}`, borderRadius: 3, color: C.dim, fontSize: 7.5, fontFamily: C.mono, cursor: 'pointer' }}>
+                                🛡️ RiskGate & An toàn
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
                       {chatHistory.map((msg, idx) => (
-                        <div key={idx} style={{ padding: '6px 8px', borderRadius: 6, background: msg.role === 'user' ? C.goldDim : 'rgba(0,0,0,0.4)', border: msg.role === 'user' ? `1px solid ${C.gold}` : `1px solid ${C.border}`, maxWidth: '85%', alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                          <div style={{ fontSize: 7, fontFamily: C.mono, fontWeight: 700, color: msg.role === 'user' ? C.gold : C.cyan, marginBottom: 2 }}>{msg.role === 'user' ? 'YOU' : 'AI'}</div>
-                          <div style={{ fontSize: 9, color: C.dim }}>{msg.content}</div>
+                        <div key={idx} style={{ padding: '6px 8px', borderRadius: 6, background: msg.role === 'user' ? C.goldDim : 'rgba(0,0,0,0.4)', border: msg.role === 'user' ? `1px solid ${C.gold}` : `1px solid ${C.border}`, maxWidth: '92%', alignSelf: msg.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                          <div style={{ fontSize: 7, fontFamily: C.mono, fontWeight: 700, color: msg.role === 'user' ? C.gold : C.cyan, marginBottom: 2 }}>{msg.role === 'user' ? 'YOU' : 'AI COPILOT'}</div>
+                          <div style={{ fontSize: 8.5, color: C.text, whiteSpace: 'pre-line', lineHeight: 1.45, fontFamily: C.mono }}>{msg.content}</div>
                         </div>
                       ))}
                       {copilotTyping && (
