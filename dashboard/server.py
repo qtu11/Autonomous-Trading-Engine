@@ -8227,6 +8227,7 @@ async def update_settings_endpoint(request: Request):
 # ==============================================================================
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("DASHBOARD_PORT", os.getenv("PORT", "8848")))
-    print(f"[ATE] Starting FastAPI Server on 0.0.0.0:{port}...")
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    port = int(os.getenv("ATE_DASHBOARD_PORT", os.getenv("QUANTAI_DASHBOARD_PORT", os.getenv("DASHBOARD_PORT", os.getenv("PORT", "8848")))))
+    host = os.getenv("ATE_DASHBOARD_HOST", os.getenv("QUANTAI_DASHBOARD_HOST", "0.0.0.0"))
+    print(f"[ATE] Starting FastAPI Server on {host}:{port}...")
+    uvicorn.run(app, host=host, port=port)

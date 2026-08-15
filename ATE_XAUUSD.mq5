@@ -11,7 +11,7 @@
 #include <Trade\Trade.mqh>
 
 //--- Input Parameters
-input string   InpApiUrl           = "http://127.0.0.1:8848/api/v1"; // URL Server AI Engine (FastAPI Local/Cloud Bridge)
+input string   InpApiUrl           = "http://192.168.1.12:8848/api/v1"; // URL Server AI Engine (hoặc https://autonomous-trading-engine.vercel.app/api/v1)
 input ulong    InpMagicNumber      = 888999;                 // Mã nhận diện EA (Magic Number)
 // InpSymbol removed — EA ALWAYS auto-detects chart symbol via Symbol() in OnInit
 input int      InpPollIntervalSec  = 1;                      // Tần suất truy vấn AI Protocol (giây)
@@ -144,6 +144,11 @@ int OnInit()
 
    // Register symbol with backend immediately so dashboard Watchlist updates instantly
    RegisterSymbolOnInit();
+
+   if(StringFind(InpApiUrl, "127.0.0.1") >= 0 || StringFind(InpApiUrl, "localhost") >= 0)
+   {
+      Print("CHU Y QUAN TRONG: MT5 WebRequest chan dia chi 127.0.0.1/localhost (Loi 5203). Vui long doi InpApiUrl sang http://192.168.1.12:8848/api/v1 hoac https://autonomous-trading-engine.vercel.app/api/v1 va them URL vao MT5 Tools -> Options -> Expert Advisors!");
+   }
 
    ATELog(StringFormat("INIT_BEGIN url=%s token_len=%d exec=%s verify=%s poll=%ds", InpApiUrl, StringLen(InpBridgeToken), InpExecutionEnabled ? "true" : "false", InpVerifyAccount ? "true" : "false", InpPollIntervalSec));
 
