@@ -372,7 +372,7 @@ void OnTick()
 //+------------------------------------------------------------------+
 string BridgeHeaders()
 {
-   return "Content-Type: application/json\r\nAuthorization: Bearer " + InpBridgeToken + "\r\nConnection: keep-alive\r\n";
+   return "Content-Type: application/json\r\nAuthorization: Bearer " + InpBridgeToken + "\r\nConnection: close\r\n";
 }
 
 //+------------------------------------------------------------------+
