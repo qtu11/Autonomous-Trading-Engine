@@ -76,7 +76,19 @@ export async function authedProxy(
       init.body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
     }
 
-    const response = await fetch(url.toString(), init);
+    let response: Response;
+    try {
+      response = await fetch(url.toString(), init);
+    } catch (fetchErr: any) {
+      // Automatic Fallback: If WAN/DNS failed and target was not 127.0.0.1:8848, fallback to local loopback
+      if (!url.hostname.includes('127.0.0.1') && !url.hostname.includes('localhost')) {
+        const fallbackUrl = new URL(`http://127.0.0.1:8848${targetPath}`);
+        url.searchParams.forEach((val, k) => fallbackUrl.searchParams.append(k, val));
+        response = await fetch(fallbackUrl.toString(), init);
+      } else {
+        throw fetchErr;
+      }
+    }
     clearTimeout(timeoutId);
 
     const setCookie = response.headers.get('set-cookie');

@@ -12,6 +12,7 @@
  * Local dev: fallback localhost:8848 (chuẩn mới, khớp VPS + Docker).
  */
 
+const isLocalDev = process.env.NODE_ENV === 'development' || !process.env.VERCEL;
 const envBackend = (process.env.ATE_BACKEND_URL || '').trim();
 
 /**
@@ -20,7 +21,8 @@ const envBackend = (process.env.ATE_BACKEND_URL || '').trim();
  */
 const publicOrigin = (process.env.NEXT_PUBLIC_ATE_API_ORIGIN || '').trim();
 
-export const BACKEND_URL = (envBackend || 'http://localhost:8848').replace(/\/+$/, '');
+// In local development, prefer 127.0.0.1:8848 to avoid NAT loopback / WAN ETIMEDOUT
+export const BACKEND_URL = (isLocalDev ? (process.env.LOCAL_BACKEND_URL || 'http://127.0.0.1:8848') : (envBackend || 'http://127.0.0.1:8848')).replace(/\/+$/, '');
 
 /**
  * Browser-facing base URL. When empty, all fetches go to relative /api/*
